@@ -41,5 +41,27 @@ class _Notification:
     async def send_async(self, message):
         await self.bot.send_message(chat_id=self.channel_id, text=message)
 
+    def test(self, message="TWB test notification - your Telegram setup works!"):
+        """Send a one-off message using the *current* config, ignoring 'enabled'.
+
+        Re-reads config.json each call (so a freshly entered token/channel is used)
+        and builds its own bot/loop, independent of the startup singleton state.
+        Returns (ok, error) so the dashboard's "Send test message" button can verify
+        a Telegram setup without restarting the bot. Never raises.
+        """
+        self.get_config()
+        if not self.token or not self.channel_id:
+            return False, "Missing bot token or channel id"
+        try:
+            bot = telegram.Bot(token=self.token)
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(bot.send_message(chat_id=self.channel_id, text=message))
+            finally:
+                loop.close()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
 
 Notification = _Notification()

@@ -3,20 +3,28 @@ help_file = {
     'server.server': 'The server endpoint to use (the world)',
     'server.endpoint': 'Endpoint server to use (the full url)',
     'server.server_on_twstats': 'Is the server listed on twstats.com?',
-    'reporting': 'Enable advanced reporting features',
-    'reporting.enabled': 'Enable the reporting feature',
-    'reporting.connection_string': 'Could be of type file://filename or mysql://user:password@host:port/database_name',
+    'reporting': 'Action log / export of the bot\'s OWN activity to a file or database. This is NOT the in-game battle reports - those are shown on the Status page.',
+    'reporting.enabled': 'Write a log of the actions the bot takes to the connection string below. An audit/export log, not in-game reports.',
+    'reporting.connection_string': 'Where to write the action log: file://filename for a local file, or mysql://user:password@host:port/database_name for a database.',
+    'notifications': 'Telegram push notifications for important events (e.g. incoming attacks). Requires a Telegram bot token and a channel id - see core/notification.py.',
+    'notifications.enabled': 'Send push notifications to Telegram.',
+    'notifications.channel_id': 'The Telegram chat/channel id the bot posts to.',
+    'notifications.token': 'The Telegram bot API token, obtained from @BotFather.',
     'bot': 'Set global bot configuration variables',
     'bot.active_hours': 'The hours when the bot should use active_delay (this does not impact attack timings)',
-    'bot.delay_factor': 'Delay factor to use 5-7seconds * delay factor (very low factors will probably cause ban)',
+    'bot.delay_factor': 'Multiplier on the base 5-7 second action delay. Higher is slower and safer; very low values will probably cause a ban.',
     'bot.active_delay': 'Delay in seconds to use in bot active times',
     'bot.inactive_delay': 'Delay in seconds to use in bot inactive times',
-    'bot.inactive_still_active': 'Inactive to stop the bot from running during inactive times',
+    'bot.inactive_still_active': 'During inactive hours: when ON the bot waits inactive_delay between runs (slower, more human). When OFF it keeps running at the normal short interval even during inactive hours.',
     'bot.add_new_villages': 'Automatically add the default village config to newly conquered villages',
     'bot.village_name_template': 'Template to use for new villages, use {num} to set the config index as name',
     'bot.village_name_number_length': 'The number length, lower will be prefixed with zeroes',
     'bot.auto_set_village_names': 'Automatically set villages names',
+    'bot.check_update': 'Check GitHub for a newer version of the bot on startup.',
     'bot.user_agent': 'Set this to the browser agent your session is using (otherwise could cause ban)',
+    'bot.incoming_check': 'Run a background poller that tracks incoming attacks (origin, arrival, walking times, tagging) on its own schedule',
+    'bot.incoming_check_min': 'Minimum seconds between incoming-attack checks (e.g. 300 = 5 min). Lower = more accurate tags but more requests',
+    'bot.incoming_check_max': 'Maximum seconds between incoming-attack checks (e.g. 570 = 9.5 min)',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
     'building.default': 'The default template to use, village configs override this variable',
@@ -41,14 +49,19 @@ help_file = {
     'farms.low_loot_away_time': 'Away time for villages with low resource gain',
     'farms.max_farms': 'The amount of nearby villages to check',
     'farms.attack_higher_points': 'If enabled villages with higher points than the current one will automatically be ignored',
-    'farms.force_scout_if_available': 'Will only attack villages that have either been attacked before or it will automatically scout them',
-    'farms.farm_scout_amount': 'Sets the amount of spies used to determine if a village is safe to farm',
+    'farms.forced_peace_times': 'Time windows (e.g. night bonus / forced peace) during which the bot will not send farm attacks.',
+    'farms.template_id_scout': 'In-game Farm Assistant template id used to scout a target (find this by clicking the template\'s send button once in-game and checking the network request)',
+    'farms.template_id_minimal': 'In-game Farm Assistant template id used as a minimal fallback attack when a fresh report has no loot info',
+    'farms.template_minimal_troops': 'Troops the in-game minimal (B) template actually sends, e.g. {"light": 5, "spy": 1} - mirror this from the in-game template, there is no way to read it back automatically',
+    'farms.minimal_loss_tolerance': 'Skip the minimal (B) or report (C) farm if the target\'s last known wall level is expected to cost us this many troops or more on average (real combat luck still varies per attack)',
+    'farms.report_freshness_hours': 'A scout report this fresh or fresher is trusted for an exact loot-based attack (C); older but still valid reports fall back to the minimal template (B)',
+    'farms.report_max_age_hours': 'A scout report older than this (or missing) is no longer trusted at all; the village is re-scouted (A) instead of attacked',
     'market': 'Automatic management of market trading',
     'market.auto_trade': 'Enable automated trading',
     'market.max_trade_duration': 'Max duration of trades (hours)',
     'market.auto_remove': 'Automatically removes existing or expired trades',
     'market.trade_multiplier': 'Set to true if the world supports uneven trade ratios',
-    'market.trade_multiplier_value': 'Multiplier value (lower is more gain)',
+    'market.trade_multiplier_value': 'Trade ratio bias, only used when uneven ratios (trade_multiplier) are enabled. Lower values give you more resources per trade (1.0 = even).',
     'market.trade_max_per_hour': 'The amount of trades the bot can do in 1 hour',
     'world.knight_enabled': 'The world has knights enabled',
     'world.flags_enabled': 'Allows automatic management of flags (upgrading and defence)',
@@ -56,6 +69,7 @@ help_file = {
     'world.trade_for_premium': 'World has the premium market enabled (doing this too much could result in ban)',
     'world.archers_enabled': 'Are archers / marchers enabled on the world',
     'world.building_destruction_enabled': 'Are rams / catpults enabled on the world',
+    'world.boosters_enabled': 'The world has resource/recruitment boosters (item boosts) enabled.',
     'village_template': 'The default template for villages to use',
     'village.building': 'Override build template',
     'village.units': 'Override recruitment / farm template',
@@ -67,6 +81,7 @@ help_file = {
     'village.trade_for_premium': 'Trade left-over resources for premium points (requires the global option to be enabled)',
     'village.gather_enabled': 'Uses left-over units to gather additional resources if the option is enabled on the world',
     'village.gather_selection': 'The gather operation to preform (they have to be unlocked first)',
+    'village.advanced_gather': 'Use a smarter scavenging split across the unlocked runs to maximise yield (only applies when gathering is enabled).',
     'village.snobs': 'The amount of snobs to create in the current village',
     'village.evacuate_fragile_units_on_attack': 'Automatically evacuate fragile units (axe, snob) to nearby safe villages in case of an attack',
     'village.support_others': 'Allows the sending of automatic support',
@@ -76,3 +91,113 @@ help_file = {
 }
 buildings = ["main", "barracks", "stable", "watchtower", "smith", "garage", "place", "statue", "market", "wood",
              "stone", "iron", "farm", "hide", "wall", "snob", "church"]
+
+# Maps each recruitable unit to the building it is produced from. Mirrors
+# game/troopmanager.py:unit_building - used by the unit-template editor to group a
+# stage's recruit amounts into the build={building: {unit: amount}} structure.
+unit_building = {
+    "spear": "barracks",
+    "sword": "barracks",
+    "axe": "barracks",
+    "archer": "barracks",
+    "spy": "stable",
+    "light": "stable",
+    "marcher": "stable",
+    "heavy": "stable",
+    "ram": "garage",
+    "catapult": "garage",
+}
+unit_list = list(unit_building.keys())
+
+# Friendlier display names for the config tabs. The raw section key (used as the
+# tab anchor) stays the same; only the label shown to the user changes.
+section_labels = {
+    'server': 'Server / World',
+    'reporting': 'Action log (export)',
+    'notifications': 'Notifications (Telegram)',
+    'bot': 'Bot',
+    'building': 'Building',
+    'units': 'Units',
+    'farms': 'Farms',
+    'market': 'Market',
+    'world': 'World',
+    'village_template': 'Default village template',
+}
+
+# Rich, multi-step setup guidance shown at the top of a config tab (rendered as
+# raw HTML in config.html). Use for sections that need more than the one-line
+# section help - e.g. wiring up an external service. Keys are section names.
+section_setup = {
+    'notifications': """
+<div class="card config-card border-info">
+  <div class="card-header bg-info text-white">Set up Telegram notifications</div>
+  <div class="card-body">
+    <p class="mb-2 small">The bot pushes important alerts (incoming attacks, session
+       logged out) to a Telegram chat. One-time setup:</p>
+    <ol class="small mb-2">
+      <li>In Telegram, open <b>@BotFather</b>, send <code>/newbot</code>, follow the
+          prompts, and copy the <b>API token</b> it gives you into
+          <b>token</b> below.</li>
+      <li>Create a channel or group (or just message your new bot directly), and
+          <b>add the bot to it</b>. For a channel, make the bot an admin.</li>
+      <li>Get the <b>chat id</b>: message <b>@userinfobot</b> (for your personal id) or
+          <b>@getidsbot</b> in the target chat/channel, and copy the id into
+          <b>channel_id</b> below. Channel ids usually start with <code>-100</code>.</li>
+      <li>Set <b>enabled</b> to on, click <b>Save</b>, then use the test button below.</li>
+    </ol>
+    <button class="btn btn-sm btn-info" type="button" onclick="send_test_notification()">
+      Send test message</button>
+    <span id="notif_test_status" class="small ml-2"></span>
+    <small class="d-block text-muted mt-1">The test uses the currently saved token /
+      channel id, so Save first if you just changed them.</small>
+  </div>
+</div>
+""",
+}
+
+# Group the settings inside a tab into labelled cards instead of one flat list.
+# Each entry is a list of (group title, [parameter names]). Parameters not listed
+# for a section fall into an automatic "Other" group at the bottom, so missing or
+# newly added keys are never dropped.
+config_groups = {
+    'bot': [
+        ('Timing & activity', ['active_hours', 'delay_factor', 'active_delay',
+                               'inactive_delay', 'inactive_still_active']),
+        ('New villages', ['add_new_villages', 'village_name_template',
+                          'village_name_number_length', 'auto_set_village_names']),
+        ('Incoming attacks', ['incoming_check', 'incoming_check_min', 'incoming_check_max']),
+        ('Identity & updates', ['user_agent', 'check_update']),
+    ],
+    'units': [
+        ('Recruitment', ['recruit', 'default', 'batch_size', 'randomize_unit_queue',
+                         'remove_manual_queued']),
+        ('Upgrades & defence', ['upgrade', 'manage_defence']),
+    ],
+    'farms': [
+        ('Master switch', ['farm']),
+        ('Target selection', ['min_points', 'max_points', 'find_player_owned',
+                             'search_radius', 'max_farms', 'attack_higher_points']),
+        ('Timing', ['default_away_time', 'full_loot_away_time', 'low_loot_away_time',
+                   'forced_peace_times']),
+        ('In-game templates (A scout / B minimal)', ['template_id_scout',
+                                                    'template_id_minimal',
+                                                    'template_minimal_troops']),
+        ('Risk & report freshness', ['minimal_loss_tolerance', 'report_freshness_hours',
+                                    'report_max_age_hours']),
+    ],
+    'market': [
+        ('Trading', ['auto_trade', 'auto_remove', 'max_trade_duration', 'trade_max_per_hour']),
+        ('Uneven ratios', ['trade_multiplier', 'trade_multiplier_value']),
+    ],
+    'village_template': [
+        ('Templates', ['building', 'units']),
+        ('Management', ['managed', 'scout_first', 'prioritize_building',
+                       'prioritize_snob', 'snobs']),
+        ('Farming', ['additional_farms']),
+        ('Scavenging', ['gather_enabled', 'gather_selection', 'advanced_gather']),
+        ('Defence & support', ['evacuate_fragile_units_on_attack', 'support_others',
+                              'support_others_factor', 'support_others_max_villages',
+                              'request_support_on_attack']),
+        ('Premium', ['trade_for_premium']),
+    ],
+}

@@ -1,11 +1,26 @@
 {% extends "main.html" %}
 
 {% block content %}
+<style>
+	.config-card { margin-bottom: 1rem; }
+	.config-card .card-header { font-weight: 600; padding: .5rem .9rem; }
+	.config-card .card-body { padding: .25rem .9rem; }
+	.config-row { display: flex; align-items: center; justify-content: space-between;
+		gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--border); }
+	.config-row:last-child { border-bottom: 0; }
+	.config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 60%; }
+	.config-row-name { font-weight: 500; }
+	.config-row-control { flex: 0 0 38%; max-width: 38%; }
+	.config-help { display: inline-flex; align-items: center; justify-content: center;
+		width: 18px; height: 18px; border-radius: 50%; background: var(--muted);
+		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
+	.config-section-help { display: block; margin-bottom: .75rem; }
+</style>
 <div class="row">
 	<ul class="nav nav-tabs">
 		{% for section in config %}
 		  <li class="nav-item">
-			<a class="nav-link" role="tab" data-toggle="tab" href="#{{section}}">{{section}}</a>
+			<a class="nav-link" role="tab" data-toggle="tab" href="#{{section}}">{{ section_labels.get(section, section) }}</a>
 		  </li>
 		{% endfor %}
 	</ul>
@@ -16,9 +31,12 @@
 	<div class="tab-content">
 		{% for section in config %}
 		<div role="tabpanel" class="tab-pane container fade" id="{{section}}">
-			<h4>{{section}}</h4>
+			<h4>{{ section_labels.get(section, section) }}</h4>
 			{% if section in helpfile %}
-				<i>{{helpfile[section]}}</i>
+				<i class="config-section-help text-muted">{{helpfile[section]}}</i>
+			{% endif %}
+			{% if section_setup and section in section_setup %}
+				{{ section_setup[section]|safe }}
 			{% endif %}
 
 			<div class="form-vertical">
@@ -33,6 +51,20 @@
 {% block scripts %}
 <script>
     var set_values = {};
+	function send_test_notification() {
+		var status = $('#notif_test_status');
+		status.removeClass('text-success text-danger').text('Sending...');
+		$.ajax({type: 'POST', url: '/app/notification/test', dataType: 'json'})
+		 .done(function(data){
+			if (data.ok) {
+				status.addClass('text-success').text('Sent ✓ check your Telegram chat');
+			} else {
+				status.addClass('text-danger').text('Failed: ' + (data.error || 'unknown error'));
+			}
+		 })
+		 .fail(function(){ status.addClass('text-danger').text('Request failed'); });
+	}
+
 	function set_config(parameter, value) {
 		$.getJSON("/app/config/set?parameter="+encodeURIComponent(parameter)+"&value="+encodeURIComponent(value), function(data){
 			console.log("Set values", parameter, value);
@@ -107,6 +139,8 @@
 		  });
 		  setTimeout(function(){location.reload()}, 500);
 		});
+
+		$('[data-toggle="tooltip"]').tooltip();
 	});
 </script>
 
