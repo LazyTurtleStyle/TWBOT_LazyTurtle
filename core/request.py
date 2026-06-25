@@ -166,14 +166,7 @@ class WebWrapper:
             print("Loaded cookies from cache/cookies.txt")
         else:
             cinp = input("Enter browser cookie string> ")
-        cookies = {}
-        cinp = cinp.strip().replace('\n', '').replace('\r', '')
-        for itt in cinp.split(';'):
-            itt = itt.strip()
-            kvs = itt.split("=")
-            k = kvs[0]
-            v = '='.join(kvs[1:])
-            cookies[k] = v
+        cookies = self._parse_cookie_string(cinp)
         self.web.cookies.update(cookies)
         self.logger.info("Game Endpoint: %s", self.endpoint)
 
@@ -187,6 +180,53 @@ class WebWrapper:
         }, "cache/session.json")
         self._last_persisted_cookies = dict(cookies)
         self.is_session_owner = True
+
+    @staticmethod
+    def _parse_cookie_string(cinp):
+        """Turn a 'k=v; k2=v2' browser cookie string into a dict."""
+        cookies = {}
+        cinp = (cinp or "").strip().replace('\n', '').replace('\r', '')
+        for itt in cinp.split(';'):
+            itt = itt.strip()
+            if not itt or '=' not in itt:
+                continue
+            kvs = itt.split("=")
+            key = kvs[0]
+            value = '='.join(kvs[1:])
+            if key:
+                cookies[key] = value
+        return cookies
+
+    def reauth(self):
+        """Re-establish the session from cache/cookies.txt without prompting.
+
+        The main loop calls this when the overview comes back logged out, so a
+        fresh cookie string dropped into cache/cookies.txt recovers the bot
+        automatically - no restart, and no blocking input() like start() uses on
+        first run. Returns True when a valid game session is active afterwards.
+        """
+        cookie_file = "cache/cookies.txt"
+        if not os.path.exists(cookie_file):
+            return False
+        with open(cookie_file, 'r') as f:
+            cookies = self._parse_cookie_string(f.read())
+        if not cookies:
+            return False
+        self.web.cookies.clear()
+        self.web.cookies.update(cookies)
+        # Don't persist the new cookies until we've confirmed they actually work,
+        # so a stale cookies.txt can't overwrite session.json with dead cookies.
+        was_owner = self.is_session_owner
+        self.is_session_owner = False
+        test = self.get_url("game.php?screen=overview")
+        self.is_session_owner = was_owner
+        if test and "game.php" in test.url:
+            self.logger.info("Session re-authenticated from cache/cookies.txt")
+            self.is_session_owner = True
+            self.persist_session()
+            return True
+        self.logger.warning("Re-auth from cache/cookies.txt failed (cookie still invalid)")
+        return False
 
     def get_action(self, village_id, action):
         """

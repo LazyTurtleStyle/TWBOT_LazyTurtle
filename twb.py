@@ -27,6 +27,7 @@ import os
 import random
 import sys
 import signal
+import threading
 import time
 import traceback
 import coloredlogs
@@ -37,6 +38,7 @@ from core.updater import check_update
 from core.filemanager import FileManager
 from core.request import WebWrapper
 from game.village import Village
+from game.incomings import IncomingManager
 from manager import VillageManager
 from pages.overview import OverviewPage
 from core.exceptions import UnsupportedPythonVersion
@@ -75,6 +77,9 @@ class TWB:
     should_run = True
     runs = 0
     found_villages = []
+    # Set by get_overview when the overview comes back as a login page; the run
+    # loop skips the cycle instead of treating every village as unavailable.
+    session_logged_out = False
 
     @staticmethod
     def internet_online():
@@ -82,7 +87,8 @@ class TWB:
         Checks whether the bot has internet access
         """
         try:
-            requests.get("https://github.com/stefan2200/TWB", timeout=(10, 60))
+            # Neutral connectivity probe; intentionally not the upstream repo.
+            requests.get("https://www.google.com", timeout=(10, 60))
             return True
         except requests.Timeout:
             return False
@@ -212,7 +218,44 @@ class TWB:
         Gets the overview page to automatically detect world options and owned villages
         """
         overview_page = OverviewPage(self.wrapper)
-        self.found_villages = Extractor.village_ids_from_overview(overview_page.result_get.text)
+        logged_in = bool(Extractor.game_state(overview_page.result_get))
+        if not logged_in:
+            # The session/cookie expired: the overview is a login page with no
+            # villages. Try a non-blocking re-auth from cache/cookies.txt (picks up
+            # a freshly dropped cookie automatically), then re-fetch once.
+            if self.wrapper.reauth():
+                overview_page = OverviewPage(self.wrapper)
+                logged_in = bool(Extractor.game_state(overview_page.result_get))
+
+        was_logged_out = self.session_logged_out
+        self.session_logged_out = not logged_in
+
+        if not logged_in:
+            # Do NOT wipe found_villages here: the villages are not gone, the bot is
+            # just logged out. Keeping the previous list (and the session_logged_out
+            # flag) stops the false "village is not available anymore" and lets the
+            # run loop skip the cycle instead of acting on a dead session.
+            print(
+                "Overview could not be read: the session looks logged out (cookie "
+                "expired). Villages are NOT lost - refresh the cookie "
+                "(cache/cookies.txt)."
+            )
+            if not was_logged_out:  # notify once per logout, not every cycle
+                Notification.send(
+                    "TWB: main bot session is logged out (cookie expired). "
+                    "Villages are not lost; refresh the cookie to resume."
+                )
+            return overview_page, config
+
+        if was_logged_out:
+            print("Session restored - resuming normal operation")
+
+        # Prefer the already-parsed villages_data (BS4-based, position-stable).
+        # Fall back to the regex extractor if the table parse returned nothing.
+        if overview_page.villages_data:
+            self.found_villages = list(overview_page.villages_data.keys())
+        else:
+            self.found_villages = Extractor.village_ids_from_overview(overview_page.result_get.text)
         if config["bot"].get("add_new_villages", False):
             for found_vid in self.found_villages:
                 if found_vid not in config["villages"]:
@@ -276,6 +319,57 @@ class TWB:
         get_h = time.localtime().tm_hour
         return get_h in range(active_h[0], active_h[1])
 
+    def _make_poller_wrapper(self, config):
+        """A separate, GET-only web session for the incoming-attack poller.
+
+        It runs in its own thread, so it gets its own WebWrapper (and requests
+        session) to avoid racing the main loop's per-request state. Cookies are
+        reloaded from the cached session each cycle, so a refreshed login is
+        picked up without restarting the bot.
+        """
+        poller = WebWrapper(
+            config["server"]["endpoint"],
+            server=config["server"]["server"],
+            endpoint=config["server"]["endpoint"],
+        )
+        poller.block_on_captcha = False  # never input() from a background thread
+        if config["bot"].get("user_agent"):
+            poller.headers["user-agent"] = config["bot"]["user_agent"]
+        return poller
+
+    def incoming_poller(self, config):
+        """Background loop: track incoming attacks on their own short cadence.
+
+        Detection accuracy of the auto-tag depends on how soon after an attack
+        is sent we first see it (for adjacent villages ram vs. noble is only a
+        few minutes apart), so this polls far more often than the main run loop
+        and independently of it.
+        """
+        logger = logging.getLogger("Incomings")
+        poller = self._make_poller_wrapper(config)
+        low = int(config["bot"].get("incoming_check_min", 300))
+        high = int(config["bot"].get("incoming_check_max", 570))
+        while self.should_run:
+            time.sleep(random.randint(low, high))
+            if not self.should_run:
+                break
+            # Mirror the main loop's activity window so we don't poll all night
+            # on an otherwise dormant account.
+            if not self.is_active_hours(config=config) and not config["bot"].get(
+                    "inactive_still_active", False
+            ):
+                continue
+            try:
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    poller.web.cookies.update(session["cookies"])
+                target = next(iter(config["villages"]), None)
+                if not target:
+                    continue
+                IncomingManager(village_id=target, wrapper=poller).run()
+            except Exception as exc:
+                logger.warning("Incoming poll failed: %s", exc)
+
     def run(self):
         """
         Run the bot
@@ -324,6 +418,15 @@ class TWB:
         # setup additional builder
         rm = None
         defense_states = {}
+        if config["bot"].get("incoming_check", True):
+            poller_thread = threading.Thread(
+                target=self.incoming_poller, args=(config,), daemon=True
+            )
+            poller_thread.start()
+            print("Incoming-attack poller started (every %d-%ds)" % (
+                int(config["bot"].get("incoming_check_min", 300)),
+                int(config["bot"].get("incoming_check_max", 570)),
+            ))
         while self.should_run:
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
@@ -344,12 +447,37 @@ class TWB:
             else:
                 config = self.config()
                 overview_page, config = self.get_overview(config)
+                if self.session_logged_out:
+                    # Logged out: don't run villages on a dead session. Wait a
+                    # normal cycle and retry (a refreshed cookie auto-recovers via
+                    # reauth() in get_overview).
+                    sleep = (
+                        config["bot"]["active_delay"]
+                        if self.is_active_hours(config=config)
+                        else config["bot"]["inactive_delay"]
+                    )
+                    sleep += random.randint(20, 120)
+                    dt_next = datetime.datetime.now() + datetime.timedelta(0, sleep)
+                    print(
+                        "Session logged out - waiting %.1f min before retrying "
+                        "(next run at: %s)" % (sleep / 60, dt_next.time())
+                    )
+                    time.sleep(sleep)
+                    continue
                 has_changed, new_cf = self.get_world_options(overview_page, config)
                 if has_changed:
                     print("Updated world options")
                     config = self.merge_configs(config, new_cf)
                     FileManager.save_json_file(config, "config.json")
                     print("Deployed new configuration file")
+
+                known_village_ids = [v.village_id for v in self.villages]
+                for vid in config["villages"]:
+                    if vid not in known_village_ids:
+                        print("Village %s was newly added, registering it for management" % vid)
+                        v = Village(wrapper=self.wrapper, village_id=vid)
+                        self.villages.append(copy.deepcopy(v))
+
                 village_number = 1
                 for village in self.villages:
                     if village.village_id not in self.found_villages:
@@ -427,7 +555,8 @@ class TWB:
             "cache/world",
             "cache/logs",
             "cache/managed",
-            "cache/hunter"
+            "cache/hunter",
+            "cache/incomings"
         ]
         FileManager.create_directories(directories)
 
@@ -444,6 +573,7 @@ def main():
         try:
             t.start()
         except Exception as e:
+            t.should_run = False  # signal this instance's background poller to stop
             t.wrapper.reporter.report(0, "TWB_EXCEPTION", str(e))
             print("I crashed :(   %s" % str(e))
             Notification.send("TWB crashed: %s" % str(e))
