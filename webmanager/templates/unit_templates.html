@@ -1,0 +1,180 @@
+{% extends "shell.html" %}
+{% block title %}Unit templates{% endblock %}
+
+{% block content %}
+<div class="row">
+  {% if not selected %}
+  <div class="col-lg-12">
+    <h4 class="mt-3">Unit (troop) templates</h4>
+    <p class="text-muted">A template is an ordered list of <strong>stages</strong>. A stage's
+      recruit targets apply once its gating building reaches the given level. Click a template to edit it.</p>
+    <table class="table table-striped">
+      <thead><tr><th>Template</th><th>Stages</th></tr></thead>
+      <tbody>
+        {% for template in templates %}
+        <tr><td><a href="?t={{template}}">{{template}}</a></td><td>{{ templates[template] | count }}</td></tr>
+        {% endfor %}
+        <tr class="table-primary">
+          <form method="post">
+            <td><input type="text" class="form-control" name="new" placeholder="New template (should end with .txt)"></td>
+            <td><input type="submit" class="btn btn-info btn-inline" name="add" value="Add new"></td>
+          </form>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="col-lg-12">
+    <div class="d-flex align-items-center mt-3 mb-2">
+      <h4 class="mb-0">Editing <code>{{ selected }}</code></h4>
+      <a href="/unit_templates" class="btn btn-sm btn-outline-secondary ml-3">&larr; All templates</a>
+      <button id="save_tpl" class="btn btn-sm btn-success ml-2">Save</button>
+      <button id="del_tpl" class="btn btn-sm btn-outline-danger ml-auto">Delete template</button>
+    </div>
+    <p class="text-muted">Each stage unlocks when its gating <strong>building</strong> reaches the given
+      <strong>level</strong>. Set the total troop counts the bot should aim for, and optionally smith
+      upgrade levels. Saving takes effect on the next bot cycle.</p>
+
+    <div id="stages"></div>
+    <button id="add_stage" type="button" class="btn btn-outline-success btn-sm mb-3">+ Add stage</button>
+    <div id="tpl-saved" class="alert alert-success py-1 px-3" style="display:none;">Saved — applies next bot cycle</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if selected %}
+<script>
+  var SELECTED = {{ selected|tojson }};
+  var BUILDINGS = {{ buildings|tojson }};
+  var UNITS = {{ units|tojson }};
+  var STAGES = {{ stages|tojson }};
+  var MANAGED = ["building", "level", "build", "upgrades"];
+
+  function opts(list, sel) {
+    return list.map(function (v) { return '<option' + (v === sel ? ' selected' : '') + '>' + v + '</option>'; }).join('');
+  }
+
+  // Flatten on-disk build={building:{unit:amt}} into a flat {unit: amount} map.
+  function flattenBuild(build) {
+    var units = {};
+    Object.keys(build || {}).forEach(function (b) {
+      var inner = build[b] || {};
+      Object.keys(inner).forEach(function (u) { units[u] = inner[u]; });
+    });
+    return units;
+  }
+
+  function kvRow(cls, unitSel, value, valAttrs) {
+    return '<tr class="' + cls + '">'
+      + '<td><select class="form-control form-control-sm kv-unit">' + opts(UNITS, unitSel) + '</select></td>'
+      + '<td><input type="number" ' + valAttrs + ' class="form-control form-control-sm kv-val" value="' + value + '"></td>'
+      + '<td><button class="btn btn-sm btn-danger kv-del" type="button">&times;</button></td>'
+      + '</tr>';
+  }
+
+  function stageCard(stage) {
+    var units = flattenBuild(stage.build);
+    var upgrades = stage.upgrades || {};
+    var extra = {};
+    Object.keys(stage).forEach(function (k) { if (MANAGED.indexOf(k) === -1) extra[k] = stage[k]; });
+    var extraKeys = Object.keys(extra);
+
+    var unitRows = Object.keys(units).map(function (u) { return kvRow('unit-row', u, units[u], 'min="1"'); }).join('');
+    var upRows = Object.keys(upgrades).map(function (u) { return kvRow('upg-row', u, upgrades[u], 'min="1" max="20"'); }).join('');
+
+    return '<div class="card mb-3 stage-card" data-extra=\'' + JSON.stringify(extra).replace(/'/g, "&#39;") + '\'>'
+      + '<div class="card-header d-flex align-items-center" style="gap:.5rem">'
+      + '<span class="font-weight-bold">When</span>'
+      + '<select class="form-control form-control-sm stage-building" style="width:auto">' + opts(BUILDINGS, stage.building) + '</select>'
+      + '<span>reaches level</span>'
+      + '<input type="number" min="1" class="form-control form-control-sm stage-level" style="width:90px" value="' + (stage.level || 1) + '">'
+      + '<button class="btn btn-sm btn-light stage-up ml-auto" type="button" title="Move up">&uarr;</button>'
+      + '<button class="btn btn-sm btn-light stage-down" type="button" title="Move down">&darr;</button>'
+      + '<button class="btn btn-sm btn-outline-danger stage-del" type="button">Remove stage</button>'
+      + '</div>'
+      + '<div class="card-body">'
+      + '<div class="row"><div class="col-md-6">'
+      + '<h6>Recruit (total troops to keep)</h6>'
+      + '<table class="table table-sm mb-1"><tbody class="unit-body">' + unitRows + '</tbody></table>'
+      + '<button class="btn btn-sm btn-outline-success add-unit" type="button">+ Unit</button>'
+      + '</div><div class="col-md-6">'
+      + '<h6>Smith upgrades <span class="text-muted">(optional)</span></h6>'
+      + '<table class="table table-sm mb-1"><tbody class="upg-body">' + upRows + '</tbody></table>'
+      + '<button class="btn btn-sm btn-outline-success add-upg" type="button">+ Upgrade</button>'
+      + (extraKeys.length ? '<p class="text-muted small mt-2 mb-0">Other fields preserved on save: <code>' + extraKeys.join('</code>, <code>') + '</code></p>' : '')
+      + '</div></div>'
+      + '</div></div>';
+  }
+
+  function flashSaved() {
+    var el = $('#tpl-saved');
+    el.stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
+  }
+
+  $(document).ready(function () {
+    var container = $('#stages');
+    STAGES.forEach(function (s) { container.append(stageCard(s)); });
+
+    $('#add_stage').click(function () {
+      container.append(stageCard({ building: 'barracks', level: 1, build: {} }));
+    });
+
+    // Delegated controls
+    container.on('click', '.stage-del', function () { $(this).closest('.stage-card').remove(); });
+    container.on('click', '.stage-up', function () {
+      var c = $(this).closest('.stage-card'); c.prev('.stage-card').before(c);
+    });
+    container.on('click', '.stage-down', function () {
+      var c = $(this).closest('.stage-card'); c.next('.stage-card').after(c);
+    });
+    container.on('click', '.add-unit', function () {
+      $(this).closest('.col-md-6').find('.unit-body').append(kvRow('unit-row', UNITS[0], 1, 'min="1"'));
+    });
+    container.on('click', '.add-upg', function () {
+      $(this).closest('.col-md-6').find('.upg-body').append(kvRow('upg-row', UNITS[0], 1, 'min="1" max="20"'));
+    });
+    container.on('click', '.kv-del', function () { $(this).closest('tr').remove(); });
+
+    function collect(tbody) {
+      var out = {};
+      tbody.find('tr').each(function () {
+        var u = $(this).find('.kv-unit').val();
+        var v = parseInt($(this).find('.kv-val').val(), 10);
+        if (u && v >= 1) out[u] = v;
+      });
+      return out;
+    }
+
+    $('#save_tpl').click(function () {
+      var stages = [];
+      container.find('.stage-card').each(function () {
+        var card = $(this);
+        var extra = {};
+        try { extra = JSON.parse(card.attr('data-extra') || '{}'); } catch (e) { extra = {}; }
+        stages.push({
+          building: card.find('.stage-building').val(),
+          level: parseInt(card.find('.stage-level').val(), 10),
+          units: collect(card.find('.unit-body')),
+          upgrades: collect(card.find('.upg-body')),
+          extra: extra
+        });
+      });
+      $.ajax({
+        url: '/app/template/unit/save', method: 'POST', contentType: 'application/json',
+        data: JSON.stringify({ name: SELECTED, stages: stages })
+      }).done(function () { flashSaved(); });
+    });
+
+    $('#del_tpl').click(function () {
+      if (!confirm('Delete template ' + SELECTED + '? This cannot be undone.')) return;
+      $.ajax({
+        url: '/app/template/unit/delete', method: 'POST', contentType: 'application/json',
+        data: JSON.stringify({ name: SELECTED })
+      }).done(function () { window.location = '/unit_templates'; });
+    });
+  });
+</script>
+{% endif %}
+{% endblock %}

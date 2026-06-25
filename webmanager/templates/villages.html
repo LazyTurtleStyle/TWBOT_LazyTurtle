@@ -1,6 +1,12 @@
-{% extends "main.html" %}
+{% extends "shell.html" %}
+{% block title %}Villages{% endblock %}
 
 {% block content %}
+<div class="d-flex align-items-center mt-3 mb-2">
+	<h4 class="mb-0">Villages</h4>
+	<button id="apply_all_default" class="btn btn-sm btn-outline-secondary ml-3"
+		title="Overwrite every village's settings with the default village template">Reset all to default template</button>
+</div>
 <div class="row">
 	<table class="table table-striped">
 		<thead>
@@ -29,6 +35,10 @@
 					<td>
 						<a href="map?center={{village_id}}" class="btn btn-success btn-sm">Map</a>
 						<a href="village?id={{village_id}}" class="btn btn-success btn-sm">Config</a>
+						{% if village_id in data.config.villages %}
+						<button class="btn btn-outline-secondary btn-sm apply-default" data-village-id="{{village_id}}"
+							title="Overwrite this village's settings with the default village template">Default</button>
+						{% endif %}
 					</td>
 				</tr>
 				<tr>
@@ -47,4 +57,24 @@
 	</table>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+	function applyDefault(vid) {
+		var url = '/app/village/apply_template' + (vid ? ('?village_id=' + encodeURIComponent(vid)) : '');
+		$.ajax({ url: url, method: 'POST' }).done(function () { location.reload(); });
+	}
+	$(document).ready(function () {
+		$('.apply-default').click(function () {
+			var vid = $(this).attr('data-village-id');
+			if (!confirm('Reset this village to the default village template? Its current settings will be overwritten.')) return;
+			applyDefault(vid);
+		});
+		$('#apply_all_default').click(function () {
+			if (!confirm('Reset ALL villages to the default village template? Every village\'s settings will be overwritten.')) return;
+			applyDefault(null);
+		});
+	});
+</script>
 {% endblock %}

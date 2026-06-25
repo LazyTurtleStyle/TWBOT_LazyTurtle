@@ -1,4 +1,5 @@
-{% extends "main.html" %}
+{% extends "shell.html" %}
+{% block title %}Attack{% endblock %}
 
 {% block content %}
 <style>
@@ -6,11 +7,8 @@
 	.coord { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="d-flex align-items-center mb-1" style="gap:.5rem">
-	<h3 class="mb-0">Attack</h3>
+<p class="text-muted small mt-1">
 	<span class="badge badge-warning">alpha</span>
-</div>
-<p class="text-muted small">
 	Plan travel/arrival times between your villages and a target, and review the targets the
 	bot is already tracking. Times use this world's unit speeds
 	(speed {{ plan.world_speed }}, unit speed {{ plan.unit_speed }}).

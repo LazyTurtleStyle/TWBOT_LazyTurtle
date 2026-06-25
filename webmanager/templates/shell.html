@@ -4,6 +4,7 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>{% block title %}TWB{% endblock %} · TWB</title>
+	<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" crossorigin="anonymous">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -32,6 +33,12 @@
 		--display: "Barlow Condensed", system-ui, sans-serif;
 		--body: "IBM Plex Sans", system-ui, sans-serif;
 		--mono: "IBM Plex Mono", ui-monospace, monospace;
+		/* legacy aliases so older page <style> blocks render in the dark palette */
+		--fg: var(--ink); --border: var(--line); --muted: var(--ink-dim);
+		--card-bg: var(--surface); --card-header-bg: var(--surface-2);
+		--stripe: rgba(255,255,255,.03);
+		--input-bg: var(--bg); --input-fg: var(--ink); --input-border: var(--line);
+		--accent: var(--ember);
 	}
 
 	* { box-sizing: border-box; }
@@ -249,6 +256,97 @@
 		.sidebar { position: static; height: auto; flex-direction: row; overflow-x: auto; }
 		.nav { display: flex; }
 	}
+
+	/* ============================================================
+	   Bootstrap re-skin — themes the components older pages still
+	   use (grid/tabs/tooltips come from Bootstrap itself) into the
+	   war-room palette so every page is cohesive after an extends swap.
+	   ============================================================ */
+	body { font-family: var(--body); }
+	h1,h2,h3,h4,h5,h6,.h1,.h2,.h3,.h4,.h5 { font-family: var(--display); color: var(--ink); }
+	.text-muted { color: var(--ink-dim) !important; }
+	.text-success { color: var(--moss) !important; }
+	.text-danger { color: #ef6e62 !important; }
+	.text-white { color: var(--ink) !important; }
+	hr { border-top-color: var(--line); }
+	small, .small { color: inherit; }
+
+	.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); box-shadow: var(--shadow); }
+	.card-header { background: var(--surface-2); border-bottom: 1px solid var(--line); color: var(--ink); font-family: var(--display); letter-spacing: .02em; }
+	.card-body { color: var(--ink); }
+	.border, .border-top, .border-bottom, .border-left, .border-right { border-color: var(--line) !important; }
+	.border-danger { border-color: rgba(210,75,62,.5) !important; }
+	.border-warning { border-color: rgba(224,123,44,.5) !important; }
+	.border-info { border-color: rgba(91,122,153,.5) !important; }
+
+	.table { color: var(--ink); }
+	.table th, .table td, .table thead th { border-color: var(--line-soft); }
+	.table thead th { font-family: var(--display); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: var(--ink-faint); border-bottom-color: var(--line); }
+	.table-striped tbody tr:nth-of-type(odd) { background: rgba(255,255,255,.025); }
+	.table-hover tbody tr:hover { background: rgba(255,255,255,.04); }
+	.table-danger, .table-danger > td, .table-danger > th { background: rgba(210,75,62,.1) !important; }
+
+	.form-control, .custom-select { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
+	.form-control:focus, .custom-select:focus { background: var(--bg); color: var(--ink); border-color: var(--ember-dim); box-shadow: 0 0 0 .15rem rgba(224,123,44,.2); }
+	.form-control::placeholder { color: var(--ink-faint); }
+	select.form-control option { background: var(--surface-2); color: var(--ink); }
+	.input-group-text { background: var(--surface-2); border-color: var(--line); color: var(--ink-dim); }
+
+	/* buttons */
+	.btn { font-family: var(--body); }
+	.btn-success { background: var(--ember); border-color: var(--ember); color: #1a0e04; }
+	.btn-success:hover { background: #f0934a; border-color: #f0934a; color: #1a0e04; }
+	.btn-primary { background: var(--ember); border-color: var(--ember); color: #1a0e04; }
+	.btn-primary:hover { background: #f0934a; border-color: #f0934a; }
+	.btn-danger { background: var(--blood); border-color: var(--blood); color: #fff; }
+	.btn-secondary { background: var(--surface-2); border-color: var(--line); color: var(--ink); }
+	.btn-secondary:hover { background: #2c281f; border-color: var(--ink-faint); color: var(--ink); }
+	.btn-info { background: #5b7a99; border-color: #5b7a99; color: #fff; }
+	.btn-outline-secondary { color: var(--ink-dim); border-color: var(--line); }
+	.btn-outline-secondary:hover { background: var(--surface-2); color: var(--ink); border-color: var(--ink-faint); }
+	.btn-outline-primary { color: var(--ember); border-color: var(--ember-dim); }
+	.btn-outline-primary:hover { background: rgba(224,123,44,.14); color: #f0934a; }
+	.btn-outline-light { color: var(--ink-dim); border-color: var(--line); }
+	.btn-outline-light:hover { background: var(--surface-2); color: var(--ink); }
+
+	/* badges */
+	.badge-primary { background: var(--ember); color: #1a0e04; }
+	.badge-secondary { background: var(--surface-2); color: var(--ink-dim); border: 1px solid var(--line); }
+	.badge-success { background: rgba(147,165,106,.18); color: #a9bd80; }
+	.badge-danger { background: rgba(210,75,62,.2); color: #ef6e62; }
+	.badge-warning { background: rgba(224,123,44,.18); color: var(--ember); }
+	.badge-info { background: rgba(91,122,153,.22); color: #8fb0d0; }
+	.badge-dark { background: #100e0a; color: var(--ink-dim); border: 1px solid var(--line); }
+	.badge-light { background: var(--surface-2); color: var(--ink-dim); }
+
+	/* nav tabs (config / village pages) */
+	.nav-tabs { border-bottom-color: var(--line); }
+	.nav-tabs .nav-link { color: var(--ink-dim); border: 1px solid transparent; font-family: var(--display); letter-spacing: .03em; }
+	.nav-tabs .nav-link:hover { border-color: var(--line-soft); color: var(--ink); }
+	.nav-tabs .nav-link.active { color: var(--ember); background: var(--surface); border-color: var(--line) var(--line) var(--surface); }
+
+	/* list groups */
+	.list-group-item { background: var(--surface); border-color: var(--line-soft); color: var(--ink); }
+	.list-group-item-warning { background: rgba(224,123,44,.14); color: var(--ember); }
+	.list-group-item-danger { background: rgba(210,75,62,.14); color: #ef6e62; }
+	.list-group-item-success { background: rgba(147,165,106,.14); color: #a9bd80; }
+
+	/* alerts */
+	.alert-secondary { background: var(--surface-2); border-color: var(--line); color: var(--ink-dim); }
+	.alert-info { background: rgba(91,122,153,.12); border-color: rgba(91,122,153,.4); color: #9cbada; }
+	.alert-warning { background: rgba(224,123,44,.12); border-color: rgba(224,123,44,.4); color: var(--ember); }
+	.alert-danger { background: rgba(210,75,62,.12); border-color: rgba(210,75,62,.4); color: #ef6e62; }
+
+	.bg-dark { background: #100e0a !important; }
+	.bg-danger { background: var(--blood) !important; }
+	.bg-warning { background: var(--ember) !important; color: #1a0e04 !important; }
+	.bg-info { background: #5b7a99 !important; }
+	.bg-light { background: var(--surface-2) !important; color: var(--ink) !important; }
+	.text-dark { color: var(--ink) !important; }
+	.tooltip-inner { background: #0d0b08; color: var(--ink); border: 1px solid var(--line); font-family: var(--body); }
+	.modal-content { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+	.close { color: var(--ink); text-shadow: none; }
+	.config-help { background: var(--ink-faint) !important; color: var(--bg) !important; }
 	</style>
 	{% block head %}{% endblock %}
 </head>
@@ -314,11 +412,21 @@
 </div>
 
 <script src="https://code.jquery.com/jquery-3.3.1.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" crossorigin="anonymous"></script>
 <script>
 	function botControl(url){ fetch(url).then(()=>setTimeout(()=>location.reload(), 600)); }
 	document.addEventListener('click', function(e){
 		var ws = document.getElementById('worldSwitch');
 		if (ws && !ws.contains(e.target)) ws.classList.remove('open');
+	});
+	$(function(){
+		$('[data-toggle="tooltip"]').tooltip();
+		// Sidebar "Automation" links deep-link to /config#<section>; open that tab.
+		if (location.pathname === '/config' && location.hash) {
+			var tab = $('.nav-tabs a[href="' + location.hash + '"]');
+			if (tab.length) tab.tab('show');
+		}
 	});
 </script>
 {% block scripts %}{% endblock %}

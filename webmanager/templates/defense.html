@@ -1,4 +1,5 @@
-{% extends "main.html" %}
+{% extends "shell.html" %}
+{% block title %}Defense{% endblock %}
 
 {% block content %}
 <style>
@@ -7,8 +8,7 @@
 	.unit-chip { display: inline-block; font-size: .78rem; margin-right: .35rem; white-space: nowrap; }
 </style>
 
-<h3 class="mb-1">Defense overview</h3>
-<p class="text-muted small">Who is under attack right now (from the live incoming-attack poller),
+<p class="text-muted small mt-1">Who is under attack right now (from the live incoming-attack poller),
 	and the defensive troops sitting in each village.</p>
 
 <!-- Summary -->

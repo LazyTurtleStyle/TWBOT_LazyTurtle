@@ -1,0 +1,229 @@
+{% extends "shell.html" %}
+{% block title %}Farms &amp; scavenging{% endblock %}
+
+{% set f = farms.farms %}
+{% set sc = farms.scavenge %}
+
+{% macro row(label, control, help) %}
+<div class="fs-setting">
+  <div class="config-row">
+    <div class="config-row-label"><span class="config-row-name">{{ label }}</span></div>
+    <div class="config-row-control">{{ control|safe }}</div>
+  </div>
+  {% if help %}<div class="fs-help text-muted">{{ help|safe }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro toggle(scope, param, on) %}
+<button class="btn btn-sm btn-block fs-toggle {{ 'btn-success' if on else 'btn-danger' }}"
+        data-scope="{{ scope }}" data-param="{{ param }}">{{ 'Enabled' if on else 'Disabled' }}</button>
+{% endmacro %}
+
+{% macro num(scope, param, value, step, placeholder) %}
+<input type="number" class="form-control form-control-sm" step="{{ step }}"
+       data-scope="{{ scope }}" data-param="{{ param }}"
+       value="{{ '' if value is none else value }}" placeholder="{{ placeholder }}" />
+{% endmacro %}
+
+{% macro text(scope, param, value, placeholder) %}
+<input type="text" class="form-control form-control-sm"
+       data-scope="{{ scope }}" data-param="{{ param }}"
+       value="{{ '' if value is none else value }}" placeholder="{{ placeholder }}" />
+{% endmacro %}
+
+{% block content %}
+<style>
+  .config-card { margin-bottom: 1rem; }
+  .config-card .card-header { font-weight: 600; padding: .5rem .9rem; }
+  .config-card .card-body { padding: .25rem .9rem; }
+  .config-row { display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: .5rem 0 .15rem; }
+  .config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 60%; }
+  .config-row-name { font-weight: 500; }
+  .config-row-control { flex: 0 0 38%; max-width: 38%; }
+  .fs-setting { border-bottom: 1px solid var(--border); padding-bottom: .4rem; }
+  .fs-setting:last-child { border-bottom: 0; }
+  .fs-help { font-size: .85rem; padding-bottom: .35rem; }
+  .fs-help code { background: var(--stripe); padding: 0 .2rem; border-radius: 3px; }
+  .fs-intro { font-size: .9rem; }
+  #fs-saved { position: fixed; bottom: 1rem; right: 1rem; z-index: 1050; display: none; }
+</style>
+
+<div class="d-flex align-items-center mt-3 mb-2">
+  <h3 class="mb-0">Farms &amp; scavenging</h3>
+  <span class="ml-3" style="min-width:120px">{{ toggle('farm', 'farm', f.farm) }}</span>
+  <span class="ml-2 text-muted">Master switch — turns farming on/off account-wide.</span>
+</div>
+
+<div class="alert alert-secondary fs-intro" role="alert">
+  This page mirrors <code>readme/farm_checklist.md</code>. The bot picks an attack per target
+  by report freshness: <strong>A</strong> = re-scout (no/old report), <strong>B</strong> =
+  minimal in-game template (stale report), <strong>C</strong> = exact loot attack from a fresh
+  report. A &amp; B run from <em>in-game Farm Assistant templates</em> you create in TribalWars;
+  paste their ids below. Changes take effect on the next bot cycle.
+</div>
+
+<div class="row">
+  <div class="col-lg-6">
+    <div class="card config-card">
+      <div class="card-header">In-game Farm Assistant templates (A / B)</div>
+      <div class="card-body">
+        {{ row('A — scout template id (template_id_scout)',
+               num('farm', 'template_id_scout', f.template_id_scout, '1', 'e.g. 1234'),
+               'The id of your in-game <strong>A (scout)</strong> Farm Assistant template. Find it by
+                clicking that template\'s send button once in-game and reading <code>template_id</code>
+                from the network request.') }}
+        {{ row('B — minimal template id (template_id_minimal)',
+               num('farm', 'template_id_minimal', f.template_id_minimal, '1', 'e.g. 1235'),
+               'The id of your in-game <strong>B (minimal)</strong> fallback template, found the same way.') }}
+        {{ row('B template troops (template_minimal_troops)',
+               text('farm', 'template_minimal_troops', f.template_minimal_troops, '{"light": 5, "spy": 1}'),
+               'Exactly what the B template sends, as JSON e.g. <code>{"light": 5, "spy": 1}</code>.
+                There is no API to read this back — if it is wrong the wall-risk check silently does nothing.') }}
+      </div>
+    </div>
+
+    <div class="card config-card">
+      <div class="card-header">Risk &amp; report freshness (A / B / C decision)</div>
+      <div class="card-body">
+        {{ row('Minimal loss tolerance (minimal_loss_tolerance)',
+               num('farm', 'minimal_loss_tolerance', f.minimal_loss_tolerance, '0.05', '0.5'),
+               'Skip a B or C farm if the target\'s last known wall is expected to cost this fraction
+                of troops or more on average. Lower is more cautious. Assumes a pure light-cavalry farm army.') }}
+        {{ row('Report freshness hours (report_freshness_hours)',
+               num('farm', 'report_freshness_hours', f.report_freshness_hours, '1', '6'),
+               'A scout report this fresh (or fresher) is trusted for an exact loot attack (C). Older but
+                still valid reports fall back to the minimal template (B).') }}
+        {{ row('Report max age hours (report_max_age_hours)',
+               num('farm', 'report_max_age_hours', f.report_max_age_hours, '1', '24'),
+               'A report older than this (or missing) is no longer trusted — the village is re-scouted (A).') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card config-card">
+      <div class="card-header">Target selection</div>
+      <div class="card-body">
+        {{ row('Min points (min_points)',
+               num('farm', 'min_points', f.min_points, '1', ''),
+               'Smallest village (by points) to farm.') }}
+        {{ row('Max points (max_points)',
+               num('farm', 'max_points', f.max_points, '1', ''),
+               'Largest village (by points) to farm.') }}
+        {{ row('Search radius (search_radius)',
+               num('farm', 'search_radius', f.search_radius, '1', ''),
+               'Max distance in fields from the village to look for farms.') }}
+        {{ row('Max farms (max_farms)',
+               num('farm', 'max_farms', f.max_farms, '1', ''),
+               'How many nearby villages to check per run.') }}
+        {{ row('Farm player-owned (find_player_owned)',
+               toggle('farm', 'find_player_owned', f.find_player_owned),
+               'Off by default. Only enable to farm player villages (skipped 23:00–08:00 either way) — dangerous.') }}
+        {{ row('Ignore higher-point targets (attack_higher_points)',
+               toggle('farm', 'attack_higher_points', f.attack_higher_points),
+               'When on, villages with more points than the farming village are skipped.') }}
+      </div>
+    </div>
+
+    <div class="card config-card">
+      <div class="card-header">Away times</div>
+      <div class="card-body">
+        {{ row('Default away time (default_away_time)',
+               num('farm', 'default_away_time', f.default_away_time, '1', ''),
+               'Seconds to wait before farming the same village again.') }}
+        {{ row('Full-loot away time (full_loot_away_time)',
+               num('farm', 'full_loot_away_time', f.full_loot_away_time, '1', ''),
+               'Away time for villages that came back with a full haul (visit them sooner).') }}
+        {{ row('Low-loot away time (low_loot_away_time)',
+               num('farm', 'low_loot_away_time', f.low_loot_away_time, '1', ''),
+               'Away time for villages with little loot (visit them less often).') }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<h4 class="mt-2">Scavenging</h4>
+<p class="text-muted fs-intro">Uses left-over troops to gather resources. These controls write to
+  <strong>every village</strong> and the default template at once. Per-village values below show the
+  current state; edit a single village from its <a href="/villages">village config</a>.</p>
+
+<div class="row">
+  <div class="col-lg-5">
+    <div class="card config-card">
+      <div class="card-header">Account-wide scavenging</div>
+      <div class="card-body">
+        {{ row('Scavenging enabled (gather_enabled)',
+               toggle('scavenge', 'gather_enabled', sc.gather_enabled),
+               'Send idle troops on scavenging runs (world must have scavenging unlocked).') }}
+        {{ row('Runs used (gather_selection)',
+               '<select class="form-control form-control-sm" data-scope="scavenge" data-param="gather_selection">'
+               ~ '<option value="1"' ~ (' selected' if sc.gather_selection|string == '1' else '') ~ '>1 — highest only</option>'
+               ~ '<option value="2"' ~ (' selected' if sc.gather_selection|string == '2' else '') ~ '>2</option>'
+               ~ '<option value="3"' ~ (' selected' if sc.gather_selection|string == '3' else '') ~ '>3</option>'
+               ~ '<option value="4"' ~ (' selected' if sc.gather_selection|string == '4' else '') ~ '>4 — all unlocked</option>'
+               ~ '</select>',
+               'How many of the scavenging options to use (they must be unlocked in-game first).') }}
+        {{ row('Advanced split (advanced_gather)',
+               toggle('scavenge', 'advanced_gather', sc.advanced_gather),
+               'Split troops across runs so they finish at roughly the same time for a better total yield.') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card config-card">
+      <div class="card-header">Per-village scavenging</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-striped mb-0">
+          <thead><tr><th>Village</th><th>Enabled</th><th>Runs</th><th>Advanced</th></tr></thead>
+          <tbody>
+            {% for v in farms.villages %}
+            <tr>
+              <td><a href="/village?id={{ v.id }}">{{ v.name }}</a></td>
+              <td>{% if v.gather_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</td>
+              <td>{{ v.gather_selection }}</td>
+              <td>{% if v.advanced_gather %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-muted">No villages yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="fs-saved" class="alert alert-success py-1 px-3">Saved — applies next bot cycle</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function flashSaved() {
+    var el = $('#fs-saved');
+    el.stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
+  }
+  function persist(scope, param, value) {
+    var url = scope === 'farm'
+      ? '/app/config/set?parameter=farms.' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value)
+      : '/app/scavenge/set?parameter=' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
+    $.getJSON(url, function () { flashSaved(); });
+  }
+
+  $(document).ready(function () {
+    $('.fs-toggle').click(function () {
+      var t = $(this);
+      var on = t.hasClass('btn-success');
+      var next = !on;
+      t.toggleClass('btn-success', next).toggleClass('btn-danger', !next).text(next ? 'Enabled' : 'Disabled');
+      persist(t.attr('data-scope'), t.attr('data-param'), next);
+    });
+
+    $('input[data-param], select[data-param]').change(function () {
+      var t = $(this);
+      persist(t.attr('data-scope'), t.attr('data-param'), t.val());
+    });
+  });
+</script>
+{% endblock %}
