@@ -195,6 +195,35 @@ into a "Setup / World" area, ideally a first-run wizard.
   `game/village.py` gates premium trading on the Market switch + the per-village toggle. Live
   config migrated so the old world value is preserved.
 
+## Multi-world
+
+- [x] **Run several worlds from one source tree + dashboard.** `twb.py --world <name>` runs a
+  world out of `worlds/<name>/` (own config.json + cache/ + session; templates shared). One web
+  server serves all worlds via a navbar **World** switcher (per-request thread-local selection;
+  `BotManager` tracks/starts/stops each world's process by its `--world` cmdline). No `--world`
+  = project root, unchanged. Foundation: `FileManager` data-dir + `DataReader.data_path`.
+  `start.sh` takes world names (`./start.sh nl99 nl98`). See README "Running multiple worlds".
+  - [ ] Future nicety: a "create new world" button in the UI that scaffolds `worlds/<name>/`
+    and walks the Setup steps, instead of bootstrapping the world from the CLI first.
+
+## Attack planner (alpha)
+
+- [x] **Working `/attacks` page** (replaced the disabled navbar stub). A **travel-time planner**
+  (pick one of your villages as origin, enter a target X/Y or hit "Plan" on a tracked target →
+  per-unit travel time, arrival-if-sent-now, and an optional "send by" time to land at a chosen
+  moment, computed client-side from the world's real unit speeds) plus a **tracked-targets
+  overview** (cache/attacks enriched from the village DB: coords, kind, points, owner, last hit).
+  Backend: `AttackPlanner.build` + world-aware `DataReader.world_speeds()`.
+- [ ] **Inline ETAs in the target list** — show the fastest-unit travel time from a chosen
+  origin per target row, so reach is visible at a glance.
+- [ ] **Snipe / coordination helper** — given a target arrival time, compute send-by for several
+  origins at once (land-together planning).
+- [ ] **Troop check** — show the selected origin's available troops next to the plan and flag
+  when you can't field the attack.
+- [ ] **Map integration** — click a village on `/map` to set it as the planner target.
+- [ ] **(Bigger / riskier) Send from the UI** — a backend route into `AttackManager.attack`,
+  gated behind explicit confirmation since it's a real in-game action.
+
 ---
 
 ## Notes / definitions (so we stop second-guessing these)
