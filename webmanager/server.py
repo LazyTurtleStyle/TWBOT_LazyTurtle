@@ -143,7 +143,39 @@ def pre_process_list(key, value, village_id=None):
     ', '.join(value), key)
 
 
+# TribalWars flag type ids (stable across worlds) for the per-village flag_type
+# dropdown. 0 = never assign a flag (only manage upgrades, if enabled).
+FLAG_TYPE_OPTIONS = [
+    (0, "Off (no flag assigned)"),
+    (1, "Resource production"),
+    (2, "Recruitment speed"),
+    (3, "Attack strength"),
+    (4, "Defense strength"),
+    (5, "Luck"),
+    (6, "Population"),
+    (7, "Reduce coin cost"),
+    (8, "Haul capacity"),
+]
+FIXED_SELECTS = {
+    'village_template.flag_type': FLAG_TYPE_OPTIONS,
+    'village.flag_type': FLAG_TYPE_OPTIONS,
+}
+
+
+def preprocess_fixed_select(key, value, options, village_id=None):
+    """A <select> with a fixed (value, label) option list, e.g. flag_type."""
+    vattr = (' data-village-id="%s"' % village_id) if village_id else ''
+    out = '<select data-type-option="%s"%s data-type="select" class="form-control">' % (key, vattr)
+    for val, label in options:
+        out += '<option value="%s"%s>%s</option>' % (
+            val, ' selected' if val == value else '', label)
+    out += '</select>'
+    return out
+
+
 def control_for(key, value, village_id=None):
+    if key in FIXED_SELECTS:
+        return preprocess_fixed_select(key, value, FIXED_SELECTS[key], village_id)
     # bool is a subclass of int, so it must be checked first.
     if isinstance(value, bool):
         return pre_process_bool(key, value, village_id)

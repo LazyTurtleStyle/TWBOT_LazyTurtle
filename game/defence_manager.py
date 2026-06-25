@@ -30,6 +30,13 @@ class DefenceManager:
     runs = 0
     logger = None
     manage_flags_enabled = True
+    # Only combine 3-of-a-kind flags into a higher level when explicitly enabled,
+    # so the bot never consumes the user's flags without being asked.
+    auto_upgrade_flags = False
+    # Which flag type to keep assigned on this village (TribalWars flag type id:
+    # 1 resource, 2 recruitment, 3 attack, 4 defense, 5 luck, 6 population,
+    # 7 coin cost, 8 haul). 0 = manage upgrades only, never assign a flag.
+    flag_type = 1
     support_factor = 0.25
     support_max_villages = 2
 
@@ -37,11 +44,6 @@ class DefenceManager:
     current_flag = []
 
     _can_change_flag = False
-
-    # increased production
-    set_flag_not_under_attack = 1
-    # increased defence
-    set_flag_under_attack = 4
 
     _sf_logged = False
 
@@ -68,18 +70,42 @@ class DefenceManager:
         )
         return self.support(requesting_village, troops=send_support)
 
+    @staticmethod
+    def detect_incoming(main):
+        """
+        Detect whether the village is under attack.
+
+        Primary signal: the account-wide incoming-attack count exposed in the
+        page's game data (player.incomings). This is robust against asset
+        renames (e.g. command/attack.png -> .webp). For single-village accounts
+        this maps directly to "this village is under attack".
+
+        Fallback: the legacy command/attack icon string, in case the game data
+        is unavailable for some reason.
+        """
+        game_data = Extractor.game_state(main)
+        if game_data:
+            incomings = game_data.get("player", {}).get("incomings")
+            if incomings is not None:
+                try:
+                    return int(incomings) > 0
+                except (TypeError, ValueError):
+                    pass
+        return "command/attack.png" in main or "command/attack.webp" in main
+
     def update(self, main, with_defence=False):
         ok = True
         self.manage_flags()
         self.runs += 1
-        if "command/attack.png" in main:
+        # Keep the village's configured flag assigned regardless of attack state
+        # (no attack-time override - a manual defence action will live elsewhere).
+        self.flag_logic(self.flag_type)
+        if self.detect_incoming(main):
             self.under_attack = True
             ok = False
-            self.flag_logic(self.set_flag_under_attack)
             if self.auto_evacuate and with_defence:
                 self.evacuate()
         else:
-            self.flag_logic(self.set_flag_not_under_attack)
             if not with_defence:
                 self.under_attack = False
                 return False
@@ -133,6 +159,8 @@ class DefenceManager:
     def flag_logic(self, set_flag):
         if not self.manage_flags_enabled:
             return
+        if not set_flag or set_flag <= 0:
+            return  # flag_type 0 -> never assign a flag (upgrades only)
 
         highest_flag_possible = self.get_highest_flag_possible(flag_id=set_flag)
         if not highest_flag_possible:
@@ -224,7 +252,7 @@ class DefenceManager:
         for flag_type in raw_flags:
             for level in raw_flags[flag_type]:
                 for amount in raw_flags[flag_type][level]:
-                    if int(amount) >= 3:
+                    if self.auto_upgrade_flags and int(amount) >= 3:
                         self.flag_upgrade(flag=flag_type, level=level)
                         self.logger.info("Upgraded flag %s", flag_type)
                         upgraded += 1

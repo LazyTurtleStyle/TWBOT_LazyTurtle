@@ -64,12 +64,16 @@ help_file = {
     'market.trade_multiplier_value': 'Trade ratio bias, only used when uneven ratios (trade_multiplier) are enabled. Lower values give you more resources per trade (1.0 = even).',
     'market.trade_max_per_hour': 'The amount of trades the bot can do in 1 hour',
     'world.knight_enabled': 'The world has knights enabled',
-    'world.flags_enabled': 'Allows automatic management of flags (upgrading and defence)',
+    'world.flags_enabled': 'Capability marker only: does this world have flags? It no longer drives any behaviour - actual flag management lives on the Flags tab.',
     'world.quests_enabled': 'World has quests enabled (bot will automatically finish them)',
     'world.trade_for_premium': 'World has the premium market enabled (doing this too much could result in ban)',
     'world.archers_enabled': 'Are archers / marchers enabled on the world',
     'world.building_destruction_enabled': 'Are rams / catpults enabled on the world',
     'world.boosters_enabled': 'The world has resource/recruitment boosters (item boosts) enabled.',
+    'flags': 'Manage village flags. Independent of the world capability marker - turn this on to let the bot keep a chosen flag assigned per village.',
+    'flags.manage': 'Master switch for flag management. When ON the bot keeps each village\'s chosen flag (see the per-village flag_type) assigned, picking the highest level you own.',
+    'flags.auto_upgrade': 'When ON, combine 3 flags of the same type/level into one of the next level. OFF by default so the bot never consumes your flags unless you ask.',
+    'village.flag_type': 'Which flag to keep on this village: 1 Resource, 2 Recruitment, 3 Attack, 4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul. Off = never assign a flag. Needs flag management enabled on the Flags tab.',
     'village_template': 'The default template for villages to use',
     'village.building': 'Override build template',
     'village.units': 'Override recruitment / farm template',
@@ -121,6 +125,7 @@ section_labels = {
     'farms': 'Farms',
     'market': 'Market',
     'world': 'World',
+    'flags': 'Flags',
     'village_template': 'Default village template',
 }
 
@@ -150,6 +155,36 @@ section_setup = {
     <span id="notif_test_status" class="small ml-2"></span>
     <small class="d-block text-muted mt-1">The test uses the currently saved token /
       channel id, so Save first if you just changed them.</small>
+  </div>
+</div>
+""",
+    'flags': """
+<div class="card config-card border-info">
+  <div class="card-header bg-info text-white">How flag management works</div>
+  <div class="card-body">
+    <p class="mb-2 small">Turn on <b>manage</b> to let the bot keep a flag assigned to each
+       village. The flag is chosen <b>per village</b> (set <b>flag_type</b> on the Default
+       village template tab and on each village's own page). The bot always assigns the
+       highest level of that flag type you own.</p>
+    <p class="mb-1 small"><b>Flag types</b> (match the order shown on the in-game flags
+       screen):</p>
+    <div class="row small">
+      <div class="col-6"><ul class="mb-0">
+        <li>1 &mdash; Resource production</li>
+        <li>2 &mdash; Recruitment speed</li>
+        <li>3 &mdash; Attack strength</li>
+        <li>4 &mdash; Defense strength</li>
+      </ul></div>
+      <div class="col-6"><ul class="mb-0">
+        <li>5 &mdash; Luck</li>
+        <li>6 &mdash; Population</li>
+        <li>7 &mdash; Reduce coin cost</li>
+        <li>8 &mdash; Haul capacity</li>
+      </ul></div>
+    </div>
+    <small class="d-block text-muted mt-2"><b>auto_upgrade</b> is off by default, so the bot
+      won't combine your flags into higher levels unless you enable it. Whether the world has
+      flags at all is a separate marker on the World tab.</small>
   </div>
 </div>
 """,
@@ -198,6 +233,10 @@ config_groups = {
         ('Defence & support', ['evacuate_fragile_units_on_attack', 'support_others',
                               'support_others_factor', 'support_others_max_villages',
                               'request_support_on_attack']),
+        ('Flags', ['flag_type']),
         ('Premium', ['trade_for_premium']),
+    ],
+    'flags': [
+        ('Flag management', ['manage', 'auto_upgrade']),
     ],
 }

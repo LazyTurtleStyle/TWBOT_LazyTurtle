@@ -162,8 +162,18 @@ class Village:
         """
         Set-up the defence manager
         """
+        # Flag management is now its own feature, independent of world.flags_enabled
+        # (which is just a "this world has flags" capability marker). The flags
+        # section drives whether we manage flags at all and whether we auto-upgrade;
+        # the flag to keep assigned is chosen per village.
         self.def_man.manage_flags_enabled = self.get_config(
-            section="world", parameter="flags_enabled", default=False
+            section="flags", parameter="manage", default=False
+        )
+        self.def_man.auto_upgrade_flags = self.get_config(
+            section="flags", parameter="auto_upgrade", default=False
+        )
+        self.def_man.flag_type = self.get_village_config(
+            self.village_id, parameter="flag_type", default=1
         )
         self.def_man.support_factor = self.get_village_config(
             self.village_id, "support_others_factor", default=0.25
@@ -443,11 +453,25 @@ class Village:
         self.attack.farm_low_prio_wait = self.get_config(
             section="farms", parameter="low_loot_away_time", default=7200
         )
-        self.attack.scout_farm_amount = self.get_config(
-            section="farms", parameter="farm_scout_amount", default=5
+        self.attack.template_id_scout = self.get_config(
+            section="farms", parameter="template_id_scout", default=None
         )
-        if self.current_unit_entry:
-            self.attack.template = self.current_unit_entry["farm"]
+        self.attack.template_id_minimal = self.get_config(
+            section="farms", parameter="template_id_minimal", default=None
+        )
+        self.attack.template_minimal_troops = self.get_config(
+            section="farms", parameter="template_minimal_troops", default={}
+        )
+        self.attack.check_farm_unit_composition()
+        self.attack.minimal_loss_tolerance = self.get_config(
+            section="farms", parameter="minimal_loss_tolerance", default=0.5
+        )
+        self.attack.report_freshness_hours = self.get_config(
+            section="farms", parameter="report_freshness_hours", default=6
+        )
+        self.attack.report_max_age_hours = self.get_config(
+            section="farms", parameter="report_max_age_hours", default=24
+        )
 
     def run_farming(self):
         """
@@ -458,9 +482,6 @@ class Village:
                 self.area = Map(wrapper=self.wrapper, village_id=self.village_id)
             self.area.get_map()
             if self.area.villages:
-                self.units.can_scout = self.get_config(
-                    section="farms", parameter="force_scout_if_available", default=True
-                )
                 self.logger.info(
                     "%d villages from map cache, (your location: %s)",
                         len(self.area.villages),

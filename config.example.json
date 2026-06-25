@@ -1,7 +1,7 @@
 {
   "build": {
     "name": "tw_bot",
-    "version": "2.1",
+    "version": "2.2",
     "author": "stefan2200"
   },
   "server": {
@@ -29,7 +29,10 @@
     "village_name_number_length": 3,
     "auto_set_village_names": false,
     "user_agent": null,
-    "check_update": true
+    "check_update": false,
+    "incoming_check": true,
+    "incoming_check_min": 300,
+    "incoming_check_max": 570
   },
   "building": {
     "manage_buildings": true,
@@ -63,7 +66,8 @@
     "support_others": false,
     "support_others_factor": 0.25,
     "support_others_max_villages": 2,
-    "request_support_on_attack": false
+    "request_support_on_attack": false,
+    "flag_type": 1
   },
   "farms": {
     "farm": true,
@@ -76,9 +80,13 @@
     "low_loot_away_time": 7200,
     "max_farms": 25,
     "attack_higher_points": false,
-    "force_scout_if_available": true,
     "forced_peace_times": [],
-    "farm_scout_amount": 5
+    "template_id_scout": null,
+    "template_id_minimal": null,
+    "template_minimal_troops": {},
+    "minimal_loss_tolerance": 0.5,
+    "report_freshness_hours": 6,
+    "report_max_age_hours": 24
   },
   "market": {
     "auto_trade": true,
@@ -96,6 +104,10 @@
     "archers_enabled": true,
     "building_destruction_enabled": true,
     "boosters_enabled": null
+  },
+  "flags": {
+    "manage": false,
+    "auto_upgrade": false
   },
   "villages": {
 

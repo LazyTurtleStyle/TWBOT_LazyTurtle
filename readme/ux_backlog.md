@@ -155,18 +155,26 @@ into a "Setup / World" area, ideally a first-run wizard.
   `helpfile.section_setup` (rendered in `config.html`), `POST /app/notification/test`, and
   `Notification.test()` which sends a one-off message with the currently saved token/channel
   (ignores the `enabled` flag, no bot restart needed) and reports success/error inline.
-- [ ] **World tab: `flags_enabled` should just declare "this is a flag world."** Right now
-  enabling it also drives flag *upgrading*, which isn't always wanted. On the world tab it
-  should be a pure capability toggle and do nothing else.
+- [x] **World tab: `flags_enabled` is now a pure capability marker.** It no longer drives any
+  behaviour (help text updated to say so); all flag behaviour moved to the new Flags tab and
+  `game/village.py` reads `flags.manage` instead of `world.flags_enabled`.
 
 ## Flag management (new feature — separate from the toggle above)
 
-- [ ] **Dedicated flag-management options.** When flags exist, let the user choose behavior
-  rather than always upgrading:
-  - Toggle flag management on/off independently of `world.flags_enabled`.
-  - Choose which flag to apply per village role, e.g. **resource (Grondstof) flags** for
-    farm/resource villages, **recruitment flags** for troop-producing villages.
-  - Don't auto-upgrade flags unless explicitly enabled.
+- [x] **Dedicated flag-management options.** New top-level `flags` config section (its own
+  **Flags** config tab with a "How flag management works" reference card):
+  - `flags.manage` — master switch, independent of `world.flags_enabled`.
+  - Per-village `flag_type` (on the Default village template tab and each village's page) as a
+    labelled dropdown of the 8 TribalWars flag types (1 Resource, 2 Recruitment, 3 Attack,
+    4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul; or Off). IDs read from the live
+    flags screen so the labels are correct.
+  - `flags.auto_upgrade` — opt-in, OFF by default, so the bot never combines your flags
+    unless asked.
+  - No attack-time override: the configured flag stays put even under attack (per request).
+  Backend: `DefenceManager.flag_type` / `auto_upgrade_flags`, `flag_logic` honours the
+  per-village type, `manage_flags` only upgrades when opted in.
+  - [ ] Future: a defence overview page with a manual "switch this village to the defense
+    flag now" button (instead of an automatic attack-time override).
 
 ## Market
 
