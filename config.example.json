@@ -94,7 +94,8 @@
     "auto_remove": true,
     "trade_multiplier": true,
     "trade_multiplier_value": 1.0,
-    "trade_max_per_hour": 1
+    "trade_max_per_hour": 1,
+    "trade_for_premium": false
   },
   "world": {
     "knight_enabled": null,

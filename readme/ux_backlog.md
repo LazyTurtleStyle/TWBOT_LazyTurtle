@@ -183,9 +183,11 @@ into a "Setup / World" area, ideally a first-run wizard.
 
 ## Market
 
-- [ ] **Move `trade_for_premium` controls to the Market tab.** Keep only a capability flag
-  on the World tab ("world has premium market"); the actual on/off behavior options belong
-  with the other market settings.
+- [x] **Move `trade_for_premium` controls to the Market tab.** The account-wide on/off switch
+  is now `market.trade_for_premium` (Market tab, Premium group). `world.trade_for_premium` is a
+  pure capability marker ("world has a premium market") and no longer gates behaviour;
+  `game/village.py` gates premium trading on the Market switch + the per-village toggle. Live
+  config migrated so the old world value is preserved.
 
 ---
 

@@ -558,8 +558,11 @@ class Village:
         res = self.wrapper.get_action(village_id=self.village_id, action="overview")
         self.game_data = Extractor.game_state(res)
         self.resman.update(self.game_data)
+        # Premium trading is gated by the account-wide Market toggle (the behaviour
+        # switch) AND the per-village toggle (which villages do it). world.
+        # trade_for_premium is now just a capability marker and no longer gates this.
         if self.get_config(
-                section="world", parameter="trade_for_premium", default=False
+                section="market", parameter="trade_for_premium", default=False
         ) and self.get_village_config(
             self.village_id, parameter="trade_for_premium", default=False
         ):
