@@ -363,6 +363,10 @@
                                 <span class="badge badge-info">scout</span>
                             {% endif %}
                             <small>{{ a.origin }} &rarr; {{ a.dest }}</small>
+                            {% if a.wall is not none %}
+                                <span class="badge {% if a.wall >= 5 %}badge-warning{% else %}badge-secondary{% endif %}"
+                                      title="Target wall level from the last scout">wall {{ a.wall }}</span>
+                            {% endif %}
                         </span>
                         <small class="text-muted" title="{{ a.when|ts }}">{{ a.when|ago }}</small>
                     </div>

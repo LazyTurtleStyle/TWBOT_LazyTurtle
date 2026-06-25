@@ -577,6 +577,15 @@ class OverviewBuilder:
             session_state = incoming_session_state()
             incoming_logged_out = bool(session_state and session_state.get("logged_out"))
 
+        # The live incoming cache is authoritative only when the poller is active
+        # and logged in. Otherwise (poller disabled, or logged out and blind) we
+        # fall back to the village's coarse under_attack flag.
+        try:
+            poller_enabled = bool(DataReader.config_grab().get("bot", {}).get("incoming_check", True))
+        except Exception:
+            poller_enabled = True
+        trust_live_incomings = poller_enabled and not incoming_logged_out
+
         villages = []
         totals = {"wood": 0, "stone": 0, "iron": 0, "pop": 0}
         total_troops = {}  # all troops owned (incl. away or in training)
@@ -604,11 +613,12 @@ class OverviewBuilder:
             # Drive the "under attack now" card off the live, pruned incoming cache
             # (refreshed every few minutes by the poller) rather than the village's
             # under_attack flag, which only updates on a full village run and so
-            # stays stuck "true" after the attacks have already landed. Fall back to
-            # the flag only when no incoming has ever been tracked (poller disabled).
+            # stays stuck "true" after the attacks have already landed. Only fall
+            # back to that flag when the live cache isn't trustworthy (poller
+            # disabled or logged out); when it is, zero incomings means zero.
             cmds = incomings_by_target.get(str(vid), [])
             future = [c for c in cmds if (c.get("eta") or 0) > 0]
-            if future or (vdata.get("under_attack") and not incomings_by_target):
+            if future or (vdata.get("under_attack") and not trust_live_incomings):
                 active_incoming.append({
                     "id": vid,
                     "name": name,
@@ -649,6 +659,11 @@ class OverviewBuilder:
                 continue
             extra = report.get("extra", {}) or {}
             loot = extra.get("loot", {}) or {}
+            # Target wall level from a scouted buildings snapshot. A buildings dict
+            # with no "wall" key means it was scouted and there is no wall (level 0);
+            # no buildings dict at all means we never saw it (unknown -> None).
+            buildings = extra.get("buildings") or {}
+            wall = cls._to_int(buildings.get("wall", 0)) if buildings else None
             activity.append({
                 "id": rid,
                 "type": rtype,
@@ -657,6 +672,7 @@ class OverviewBuilder:
                 "when": extra.get("when", 0),
                 "loot_total": sum(cls._to_int(v) for v in loot.values()),
                 "loot": loot,
+                "wall": wall,
                 "units_sent": extra.get("units_sent", {}) or {},
                 "losses": extra.get("units_losses", {}) or {},
                 # Incoming = someone acting on us (a known origin that isn't ours)
