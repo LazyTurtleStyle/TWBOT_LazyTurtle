@@ -1,0 +1,142 @@
+/* ============================================================
+   TWB — "war-room command console" design system
+   Shared tokens + components for the Claude Design library.
+   Each *.html preview links this file.
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+	--bg:        #14120E;  /* cooled iron */
+	--bg-grid:   #1b1813;
+	--surface:   #1C1915;  /* panel */
+	--surface-2: #232019;  /* raised */
+	--line:      #34302A;  /* hairline */
+	--line-soft: #2a2722;
+	--ink:       #E9E1D0;  /* parchment */
+	--ink-dim:   #9E9587;  /* faded parchment */
+	--ink-faint: #6f685c;
+	--ember:     #E07B2C;  /* forge accent */
+	--ember-dim: #b9631f;
+	--blood:     #D24B3E;  /* under attack */
+	--moss:      #93A56A;  /* clear / loot */
+	--gold:      #C9A24B;  /* points / value */
+	--radius: 6px;
+	--shadow: 0 1px 0 rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+	--display: "Barlow Condensed", system-ui, sans-serif;
+	--body: "IBM Plex Sans", system-ui, sans-serif;
+	--mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+body {
+	margin: 0; padding: 28px;
+	background-color: var(--bg);
+	background-image:
+		linear-gradient(var(--bg-grid) 1px, transparent 1px),
+		linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+	background-size: 44px 44px;
+	color: var(--ink); font-family: var(--body); font-size: 14px; line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+h1,h2,h3,h4 { font-family: var(--display); font-weight: 600; margin: 0; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.coord { font-family: var(--mono); font-size: .85em; color: var(--ink-dim); }
+.eyebrow { font-family: var(--display); font-weight: 600; text-transform: uppercase;
+	letter-spacing: .18em; font-size: 11px; color: var(--ink-faint); }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- Buttons ---------- */
+.btn { font-family: var(--body); font-weight: 600; font-size: 13px; border-radius: var(--radius);
+	padding: 6px 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.btn:hover { border-color: var(--ink-faint); }
+.btn-ember { background: var(--ember); border-color: var(--ember); color: #1a0e04; }
+.btn-ember:hover { background: #f0934a; border-color: #f0934a; }
+.btn-danger { background: transparent; border-color: var(--blood); color: var(--blood); }
+.btn-danger:hover { background: rgba(210,75,62,.12); }
+.btn-sm { padding: 3px 9px; font-size: 12px; }
+
+/* ---------- Badges ---------- */
+.badge { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 500;
+	padding: 2px 7px; border-radius: 4px; border: 1px solid transparent; white-space: nowrap; }
+.badge.ember { color: var(--ember); border-color: rgba(224,123,44,.4); background: rgba(224,123,44,.1); }
+.badge.blood { color: #ef6e62; border-color: rgba(210,75,62,.45); background: rgba(210,75,62,.12); }
+.badge.moss  { color: #a9bd80; border-color: rgba(147,165,106,.4); background: rgba(147,165,106,.1); }
+.badge.gold  { color: var(--gold); border-color: rgba(201,162,75,.4); background: rgba(201,162,75,.1); }
+.badge.dim   { color: var(--ink-dim); border-color: var(--line); background: var(--surface-2); }
+
+/* ---------- Panels ---------- */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel-head { display: flex; align-items: center; justify-content: space-between;
+	padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.panel-head h3 { font-size: 16px; }
+.panel-body { padding: 14px 16px; }
+
+/* ---------- Stat tiles ---------- */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.stat .v { font-family: var(--mono); font-size: 26px; font-weight: 500; line-height: 1; color: var(--ink); }
+.stat .v.gold { color: var(--gold); }
+.stat .k { margin-top: 6px; }
+.stat .sub { color: var(--ink-faint); font-size: 11px; }
+
+/* ---------- Tables ---------- */
+table.tw { width: 100%; border-collapse: collapse; }
+table.tw th { text-align: left; font-family: var(--display); text-transform: uppercase;
+	letter-spacing: .1em; font-size: 11px; color: var(--ink-faint); font-weight: 600;
+	padding: 8px 12px; border-bottom: 1px solid var(--line); }
+table.tw td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+table.tw tbody tr:hover { background: rgba(255,255,255,.02); }
+table.tw tr.alert { background: rgba(210,75,62,.07); }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---------- Situation bar (signature) ---------- */
+.situation { position: relative; overflow: hidden; border-radius: var(--radius);
+	border: 1px solid var(--line); background: var(--surface);
+	padding: 18px 20px 18px 24px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.situation::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+.situation.clear::before { background: var(--moss); }
+.situation.alert::before { background: var(--blood); animation: bar 1.4s ease-in-out infinite; }
+.situation.warn::before  { background: var(--ember); }
+@keyframes bar { 50% { opacity: .35; } }
+.situation.alert { background: linear-gradient(90deg, rgba(210,75,62,.14), var(--surface) 60%); border-color: rgba(210,75,62,.4); }
+.situation.warn  { background: linear-gradient(90deg, rgba(224,123,44,.12), var(--surface) 60%); border-color: rgba(224,123,44,.35); }
+.situation .sit-state { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: .03em; line-height: 1; }
+.situation.clear .sit-state { color: var(--moss); }
+.situation.alert .sit-state { color: #ef6e62; }
+.situation.warn  .sit-state { color: var(--ember); }
+.situation .sit-sub { color: var(--ink-dim); font-size: 13px; margin-top: 4px; }
+.situation .sit-spacer { flex: 1; }
+.threat { display: flex; gap: 18px; flex-wrap: wrap; }
+.threat .t { text-align: right; }
+.threat .t .v { font-family: var(--mono); font-size: 22px; }
+.threat .t .v.blood { color: #ef6e62; }
+.threat .t .k { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .12em; }
+
+/* ---------- Form fields ---------- */
+input.field, textarea.field, select.field {
+	background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+	border-radius: var(--radius); padding: 7px 10px; font-family: var(--body); width: 100%; }
+input.field:focus, textarea.field:focus, select.field:focus { outline: none; border-color: var(--ember-dim); }
+
+/* ---------- Sidebar nav (shell) ---------- */
+.nav-demo { width: 224px; background: linear-gradient(180deg, #1a1712, #131009);
+	border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 0; }
+.nav-group { padding: 12px 18px 4px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 18px;
+	color: var(--ink-dim); font-weight: 500; border-left: 2px solid transparent; }
+.nav-item:hover { background: rgba(255,255,255,.03); color: var(--ink); }
+.nav-item.active { color: var(--ink); border-left-color: var(--ember);
+	background: linear-gradient(90deg, rgba(224,123,44,.14), transparent 70%); }
+.nav-item .ico { width: 16px; text-align: center; opacity: .8; font-size: 13px; }
+.bot-status { margin: 8px 14px; padding: 10px 12px; border: 1px solid var(--line);
+	border-radius: var(--radius); background: var(--surface); display: flex; align-items: center; gap: 10px; }
+.pulse { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.pulse.on  { background: var(--moss); box-shadow: 0 0 0 0 rgba(147,165,106,.7); animation: pulse 2.4s infinite; }
+.pulse.off { background: var(--ink-faint); }
+@keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(147,165,106,0); } 100% { box-shadow: 0 0 0 0 rgba(147,165,106,0); } }
+.bot-status .label { font-size: 12px; line-height: 1.25; }
+.bot-status .label b { font-family: var(--display); letter-spacing: .03em; }
+.faint { color: var(--ink-faint); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
