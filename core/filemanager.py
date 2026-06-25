@@ -60,8 +60,13 @@ class FileManager:
 
     @staticmethod
     def path_exists(path):
-        """Returns True if the path exists, False otherwise."""
-        return os.path.exists(path)
+        """Returns True if the path exists, False otherwise.
+
+        Resolves relative paths against the code/data root like the other
+        methods (absolute paths pass through unchanged), so an existence check
+        and the matching read/write always agree on which file they mean.
+        """
+        return os.path.exists(FileManager._resolve(path))
 
     @staticmethod
     def create_directory(directory):
