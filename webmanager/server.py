@@ -244,6 +244,21 @@ def pre_process_config():
     return sections
 
 
+# The configure-once-per-world sections, in the order a first-run wizard walks
+# them. Grouped here so they're out of the day-to-day Bot tab.
+SETUP_SECTIONS = ['server', 'world', 'notifications', 'reporting']
+
+
+def pre_process_setup():
+    """Render the set-once sections as (section, html) steps for the setup page."""
+    config = sync()['config']
+    steps = []
+    for section in SETUP_SECTIONS:
+        if section in config and isinstance(config[section], dict):
+            steps.append((section, render_grouped(section, section, config[section])))
+    return steps
+
+
 def pre_process_village_config(village_id):
     config = sync()['config']['villages']
     if village_id in config:
@@ -297,6 +312,13 @@ def stop_bot():
 @app.route('/config', methods=['GET'])
 def get_config():
     return render_template('config.html', data=sync(), config=pre_process_config(),
+                           helpfile=help_file, section_labels=section_labels,
+                           section_setup=section_setup)
+
+
+@app.route('/setup', methods=['GET'])
+def setup_page():
+    return render_template('setup.html', data=sync(), steps=pre_process_setup(),
                            helpfile=help_file, section_labels=section_labels,
                            section_setup=section_setup)
 

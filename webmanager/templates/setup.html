@@ -1,0 +1,149 @@
+{% extends "main.html" %}
+
+{% block content %}
+<style>
+	.config-card { margin-bottom: 1rem; }
+	.config-card .card-header { font-weight: 600; padding: .5rem .9rem; }
+	.config-card .card-body { padding: .25rem .9rem; }
+	.config-row { display: flex; align-items: center; justify-content: space-between;
+		gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--border); }
+	.config-row:last-child { border-bottom: 0; }
+	.config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 60%; }
+	.config-row-name { font-weight: 500; }
+	.config-row-control { flex: 0 0 38%; max-width: 38%; }
+	.config-help { display: inline-flex; align-items: center; justify-content: center;
+		width: 18px; height: 18px; border-radius: 50%; background: var(--muted);
+		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
+	.config-section-help { display: block; margin-bottom: .75rem; }
+	.setup-step { margin-bottom: 1.5rem; }
+	.setup-step-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+	.setup-step-num { display: inline-flex; align-items: center; justify-content: center;
+		width: 28px; height: 28px; border-radius: 50%; background: var(--accent, #17a2b8);
+		color: #fff; font-weight: 700; flex: none; }
+</style>
+
+<div class="row align-items-center mb-2">
+	<div class="col">
+		<h3 class="mb-0">First-run setup</h3>
+		<small class="text-muted">One-time, per-world settings. Configure these once;
+			they're kept out of the day-to-day Bot tab so they don't get in your way.</small>
+	</div>
+	<div class="col-auto">
+		<a id="save_config" class="btn btn-success disabled">Save</a>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-lg-9">
+		{% for section, body in steps %}
+		<div class="setup-step">
+			<div class="setup-step-head">
+				<span class="setup-step-num">{{ loop.index }}</span>
+				<h4 class="mb-0">{{ section_labels.get(section, section) }}</h4>
+			</div>
+			{% if section in helpfile %}
+				<i class="config-section-help text-muted">{{ helpfile[section] }}</i>
+			{% endif %}
+			{% if section_setup and section in section_setup %}
+				{{ section_setup[section]|safe }}
+			{% endif %}
+			<div class="form-vertical">
+				{{ body|safe }}
+			</div>
+		</div>
+		{% endfor %}
+
+		<div class="alert alert-secondary small" role="alert">
+			Changes take effect the next time the bot starts. Looking to play another world?
+			That needs a separate config &mdash; tracked as a future enhancement.
+		</div>
+	</div>
+	<div class="col-lg-3 d-none d-lg-block">
+		<div class="card" style="position: sticky; top: 1rem;">
+			<div class="card-header py-2"><strong>Setup steps</strong></div>
+			<ul class="list-group list-group-flush">
+				{% for section, body in steps %}
+				<li class="list-group-item py-2">{{ loop.index }}. {{ section_labels.get(section, section) }}</li>
+				{% endfor %}
+			</ul>
+		</div>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+	var set_values = {};
+	function send_test_notification() {
+		var status = $('#notif_test_status');
+		status.removeClass('text-success text-danger').text('Sending...');
+		$.ajax({type: 'POST', url: '/app/notification/test', dataType: 'json'})
+		 .done(function(data){
+			if (data.ok) {
+				status.addClass('text-success').text('Sent ✓ check your Telegram chat');
+			} else {
+				status.addClass('text-danger').text('Failed: ' + (data.error || 'unknown error'));
+			}
+		 })
+		 .fail(function(){ status.addClass('text-danger').text('Request failed'); });
+	}
+
+	function set_config(parameter, value) {
+		$.getJSON("/app/config/set?parameter="+encodeURIComponent(parameter)+"&value="+encodeURIComponent(value), function(data){
+			console.log("Set values", parameter, value);
+		});
+	}
+
+	function set_toggle_value(target, value) {
+		if(!value) {
+			target.removeClass("btn-success"); target.addClass("btn-danger"); target.text("Disabled");
+		} else {
+			target.addClass("btn-success"); target.removeClass("btn-danger"); target.text("Enabled");
+		}
+	}
+
+	function toggle_event(event) {
+		var target = $(event.target);
+		var name = target.attr("data-type-option");
+		if(name == undefined) alert("Error setting target");
+		var next_value = !target.hasClass("btn-success");
+		set_config(name, next_value);
+		set_toggle_value(target, next_value);
+	}
+
+	function select_event(event) {
+		var target = $(event.target);
+		var name = target.attr("data-type-option");
+		if(name == undefined) alert("Error setting target");
+		set_config(name, target.val());
+	}
+
+	function num_event() {
+		var target = $(event.target);
+		var name = target.attr("data-type-option");
+		if(name == undefined) alert("Error setting target");
+		set_values[name] = parseInt(target.val());
+		$('#save_config').removeClass('disabled');
+	}
+
+	function text_event() {
+		var target = $(event.target);
+		var name = target.attr("data-type-option");
+		if(name == undefined) alert("Error setting target");
+		set_values[name] = target.val();
+		$('#save_config').removeClass('disabled');
+	}
+
+	$( document ).ready(function() {
+		$( "[data-type=toggle]" ).click(function(e) { toggle_event(e); });
+		$( "[data-type=select]" ).change(function(e) { select_event(e); });
+		$( "[data-type=number]" ).change(function(e) { num_event(e); });
+		$( "[data-type=text]" ).change(function(e) { text_event(e); });
+		$('#save_config').click(function(){
+			$.each(set_values, function(set_key, set_value){ set_config(set_key, set_value); });
+			setTimeout(function(){location.reload()}, 500);
+		});
+		$('[data-toggle="tooltip"]').tooltip();
+	});
+</script>
+{% endblock %}

@@ -6,6 +6,44 @@
 
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
 
+    <!-- Apply saved theme before paint to avoid a flash of the default theme -->
+    <script>(function(){var t=localStorage.getItem('twb-theme')||'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+
+    <style>
+      /* Theme palettes. Light is the default; dark and tw override the variables. */
+      :root {
+        --bg: #ffffff; --fg: #212529; --card-bg: #ffffff; --card-header-bg: rgba(0,0,0,.03);
+        --border: rgba(0,0,0,.125); --muted: #6c757d; --stripe: rgba(0,0,0,.04);
+        --input-bg: #ffffff; --input-fg: #495057; --input-border: #ced4da;
+      }
+      [data-theme="dark"] {
+        --bg: #1b1d20; --fg: #e6e6e6; --card-bg: #26292d; --card-header-bg: #2f3338;
+        --border: #3a3f44; --muted: #9aa0a6; --stripe: rgba(255,255,255,.04);
+        --input-bg: #2f3338; --input-fg: #e6e6e6; --input-border: #4a4f55;
+      }
+      [data-theme="tw"] {
+        --bg: #ECD7AC; --fg: #3b2a16; --card-bg: #f5e8cd; --card-header-bg: #e3c896;
+        --border: #b89461; --muted: #806a44; --stripe: rgba(120,80,30,.06);
+        --input-bg: #fbf3e1; --input-fg: #3b2a16; --input-border: #b89461;
+      }
+      body { background-color: var(--bg); color: var(--fg); }
+      .card { background-color: var(--card-bg); border-color: var(--border); color: var(--fg); }
+      .card-header { background-color: var(--card-header-bg); border-color: var(--border); }
+      .table { color: var(--fg); }
+      .table td, .table th, .table thead th { border-color: var(--border); }
+      .table-striped tbody tr:nth-of-type(odd) { background-color: var(--stripe); }
+      /* Plain list items follow the theme; semantic variants (danger/warning) keep their colour */
+      .list-group-item:not([class*="list-group-item-"]) {
+        background-color: var(--card-bg); color: var(--fg); border-color: var(--border);
+      }
+      .form-control { background-color: var(--input-bg); color: var(--input-fg); border-color: var(--input-border); }
+      .form-control:focus { background-color: var(--input-bg); color: var(--input-fg); }
+      .border { border-color: var(--border) !important; }
+      .text-muted { color: var(--muted) !important; }
+      hr { border-top-color: var(--border); }
+      #theme-switch .btn.active { font-weight: 600; }
+    </style>
+
     <title>TWB - Management Interface</title>
   </head>
   <body>
@@ -19,7 +57,13 @@
           <a class="nav-link" href="/config">Bot configuration</a>
         </li>
         <li class="nav-item">
+          <a class="nav-link" href="/setup">Setup</a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link" href="/villages">Village configuration</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="/farms">Farms &amp; scavenging</a>
         </li>
         <li class="nav-item">
           <a class="nav-link" href="/map">World map</a>
@@ -28,9 +72,17 @@
           <a class="nav-link" href="/building_templates">Building templates</a>
         </li>
         <li class="nav-item">
+          <a class="nav-link" href="/unit_templates">Unit templates</a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link disabled" href="/attacks">Attack planner (alpha)</a>
         </li>
       </ul>
+      <div class="btn-group btn-group-sm ml-auto" role="group" id="theme-switch">
+        <button type="button" class="btn btn-outline-light" data-theme-set="light" title="Light mode">Light</button>
+        <button type="button" class="btn btn-outline-light" data-theme-set="dark" title="Dark mode">Dark</button>
+        <button type="button" class="btn btn-outline-light" data-theme-set="tw" title="Tribal Wars style">TW</button>
+      </div>
     </nav>
     <div class="container-fluid">
 
@@ -42,6 +94,22 @@
     <script src="https://code.jquery.com/jquery-3.3.1.min.js" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
+    <script>
+      (function () {
+        function apply(theme) {
+          document.documentElement.setAttribute('data-theme', theme);
+          localStorage.setItem('twb-theme', theme);
+          document.querySelectorAll('#theme-switch [data-theme-set]').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-theme-set') === theme);
+          });
+        }
+        var current = localStorage.getItem('twb-theme') || 'light';
+        apply(current);
+        document.querySelectorAll('#theme-switch [data-theme-set]').forEach(function (b) {
+          b.addEventListener('click', function () { apply(b.getAttribute('data-theme-set')); });
+        });
+      })();
+    </script>
   {% block scripts %} {% endblock %}
   </body>
 </html>

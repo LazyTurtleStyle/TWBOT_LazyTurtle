@@ -145,10 +145,15 @@ Pattern request: create/edit templates inline instead of hand-writing `.txt` fil
 These are configured once per world and shouldn't be in your way every session. Group them
 into a "Setup / World" area, ideally a first-run wizard.
 
-- [ ] **Group one-time setup** (server, reporting, notifications, world) into one setup
-  flow, separate from the day-to-day Bot tab. Don't force re-entry on every start.
+- [x] **Group one-time setup** (server, world, notifications, reporting) into one setup
+  flow. New **Setup** page (`/setup`, `setup.html`, navbar link) walks those set-once sections
+  as numbered steps, reusing the grouped config controls + the Telegram setup card, separate
+  from the day-to-day Bot tab. Backend: `SETUP_SECTIONS` + `pre_process_setup` in
+  `webmanager/server.py`.
 - [ ] **Support creating a fresh/empty bot for another world** (new config) from the UI —
-  this is the scenario where the set-once server settings actually matter again.
+  this is the scenario where the set-once server settings actually matter again. Bigger job:
+  the bot is single-config today (one `config.json`), so this needs multi-config/profile
+  support before a UI makes sense.
 - [x] **Notifications: add setup instructions.** The Notifications config tab now shows a
   step-by-step "Set up Telegram notifications" card (@BotFather token, add bot to chat, get
   chat id, enable + save) plus a **Send test message** button. Backend: data-driven
