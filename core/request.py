@@ -2,6 +2,7 @@
 Class for using one generic cookie jar, emulating a single tab
 """
 
+import os
 import requests
 
 from core.filemanager import FileManager
@@ -34,6 +35,15 @@ class WebWrapper:
     auth_endpoint = None
     reporter = None
     delay = 1.0
+    # When False, get_url returns the bot-protection page instead of blocking on
+    # input() for a manual captcha solve. Used by background pollers that have no
+    # interactive console.
+    block_on_captcha = True
+    # Only the wrapper that owns the login (the main loop) persists its rotated
+    # cookies back to cache/session.json. Background pollers read that file but
+    # must never write it, or two sessions would fight over the session id.
+    is_session_owner = False
+    _last_persisted_cookies = None
 
     def __init__(self, url, server=None, endpoint=None, reporter_enabled=False, reporter_constr=None):
         """
@@ -60,6 +70,28 @@ class WebWrapper:
         get_h = re.search(r'&h=(\w+)', response.text)
         if get_h:
             self.last_h = get_h.group(1)
+        if self.is_session_owner:
+            self.persist_session()
+
+    def persist_session(self):
+        """Write the live cookie jar back to cache/session.json.
+
+        TribalWars rotates the session id over time; this requests session
+        follows that automatically, but the incoming-attack poller loads its
+        cookies from cache/session.json. Persisting the rotated cookies here
+        keeps the poller on the *current* session instead of replaying a stale
+        id - which TribalWars treats as a session conflict and logs out, taking
+        this session down with it. Only writes when the cookies actually change.
+        """
+        cookies = {c.name: c.value for c in self.web.cookies}
+        if not cookies or cookies == self._last_persisted_cookies:
+            return
+        FileManager.save_json_file_atomic({
+            'endpoint': self.endpoint,
+            'server': self.server,
+            'cookies': cookies,
+        }, "cache/session.json")
+        self._last_persisted_cookies = cookies
 
     def get_url(self, url, headers=None):
         """
@@ -75,6 +107,9 @@ class WebWrapper:
             res = self.web.get(url=url, headers=headers)
             self.logger.debug("GET %s [%d]", url, res.status_code)
             self.post_process(res)
+            if 'data-bot-protect="forced"' in res.text and not self.block_on_captcha:
+                self.logger.warning("Bot protection hit during background poll, skipping")
+                return res
             if 'data-bot-protect="forced"' in res.text:
                 self.logger.warning("Bot protection hit! cannot continue")
                 self.reporter.report(
@@ -116,15 +151,23 @@ class WebWrapper:
         session_data = FileManager.load_json_file("cache/session.json")
         if session_data:
             self.web.cookies.update(session_data['cookies'])
+            self._last_persisted_cookies = dict(session_data['cookies'])
             get_test = self.get_url("game.php?screen=overview")
             if "game.php" in get_test.url:
+                self.is_session_owner = True
                 return True
             self.logger.warning("Current session cache not valid")
 
         self.web.cookies.clear()
-        cinp = input("Enter browser cookie string> ")
+        cookie_file = "cache/cookies.txt"
+        if os.path.exists(cookie_file):
+            with open(cookie_file, 'r') as f:
+                cinp = f.read()
+            print("Loaded cookies from cache/cookies.txt")
+        else:
+            cinp = input("Enter browser cookie string> ")
         cookies = {}
-        cinp = cinp.strip()
+        cinp = cinp.strip().replace('\n', '').replace('\r', '')
         for itt in cinp.split(';'):
             itt = itt.strip()
             kvs = itt.split("=")
@@ -142,6 +185,8 @@ class WebWrapper:
             'server': self.server,
             'cookies': cookies
         }, "cache/session.json")
+        self._last_persisted_cookies = dict(cookies)
+        self.is_session_owner = True
 
     def get_action(self, village_id, action):
         """

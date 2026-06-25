@@ -108,6 +108,20 @@ class FileManager:
             json.dump(data, file, indent=2, sort_keys=False, **kwargs)
 
     @staticmethod
+    def save_json_file_atomic(data, path, **kwargs):
+        """Like save_json_file, but writes to a temp file and renames it in place.
+
+        os.replace is atomic, so a concurrent reader (e.g. the incoming poller
+        loading cache/session.json while the main loop refreshes it) always sees
+        either the old or the new file, never a half-written one.
+        """
+        full_path = os.path.join(FileManager.get_root(), path)
+        tmp_path = "%s.%d.tmp" % (full_path, os.getpid())
+        with open(tmp_path, "w") as file:
+            json.dump(data, file, indent=2, sort_keys=False, **kwargs)
+        os.replace(tmp_path, full_path)
+
+    @staticmethod
     def copy_file(src_path, dest_path):
         """Copies a file from the source path to the destination path."""
         full_src_path = os.path.join(FileManager.get_root(), src_path)

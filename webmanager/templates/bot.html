@@ -2,49 +2,499 @@
 
 {% block content %}
 
-<div class="row">
-    <div class="col-lg-8">
-        <h4>Reports</h4>
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Type</th>
-                    <th>Data</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for report in data.reports %}
-                    <tr>
-                        <td>{{ report }}</td>
-                        <td>{{ data.reports[report].type }}</td>
-                        <td>{{ data.reports[report] }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<style>
+    .quick-panel { position: fixed; top: 120px; right: 0; z-index: 1050; display: flex; align-items: stretch; }
+    .quick-tab { background: #343a40; color: #fff; border: none; border-radius: 6px 0 0 6px;
+                 padding: 12px 6px; cursor: pointer; font-size: .72rem; line-height: 1.1; writing-mode: vertical-rl; }
+    .quick-body { width: 230px; background: var(--card-bg); color: var(--fg); border: 1px solid var(--border); border-right: none;
+                  border-radius: 6px 0 0 6px; padding: 12px; box-shadow: -2px 2px 10px rgba(0,0,0,.15); display: none; }
+    .quick-panel.open .quick-body { display: block; }
+    .quick-toggle { min-width: 52px; }
+    td sup { font-size: .65em; }
+</style>
+
+<!-- Quick settings side panel -->
+<div id="quick-panel" class="quick-panel">
+    <div class="quick-body">
+        <h6 class="mb-2">Quick settings</h6>
+        {% for q in quick %}
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="small">{{ q.label }}</span>
+            <button class="btn btn-sm quick-toggle {{ 'btn-success' if q.on else 'btn-danger' }}"
+                    data-key="{{ q.key }}" data-on="{{ '1' if q.on else '0' }}"
+                    onclick="quickToggle(this)">{{ 'On' if q.on else 'Off' }}</button>
+        </div>
+        {% endfor %}
+        <small class="text-muted">Writes to config.json &middot; applies next bot cycle.</small>
     </div>
-    <div class="col-lg-4">
-        <h4>Bot</h4>
-        Status:
+    <button class="quick-tab" onclick="toggleQuick()">&#9881; Quick settings</button>
+</div>
+
+<!-- Status bar -->
+<div class="row mt-3 mb-1">
+    <div class="col-12 d-flex align-items-center flex-wrap">
+        <h4 class="mb-0 mr-3">Overview</h4>
         {% if data.status %}
-            <button class="btn btn-sm btn-success">Active</button>
+            <span class="badge badge-success p-2">&#9679; Bot active</span>
         {% else %}
-            <button class="btn btn-sm btn-warning">Inactive</button>
-            <br />
-            <i>Ignore this if you are running twb.py yourself</i>
+            <span class="badge badge-secondary p-2">&#9679; Bot inactive</span>
+        {% endif %}
+        <span class="ml-3 text-muted small">
+            World: <strong>{{ session.world or session.server or 'unknown' }}</strong>
+            &middot; {{ session.endpoint }}
+        </span>
+    </div>
+    {% if not data.status %}
+    <div class="col-12">
+        <small class="text-muted">
+            No running <code>twb.py</code> process detected. Start the bot with
+            <code>python twb.py</code> (or <code>start.sh</code>). Ignore this if you run it elsewhere.
+        </small>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Summary cards -->
+<div class="row">
+    {% set cards = [
+        ('Villages', overview.summary.villages, 'managed'),
+        ('Farm targets', overview.summary.farm_targets, 'tracked'),
+        ('Scout targets', overview.summary.scout_targets, 'tracked'),
+        ('Scavenging runs', overview.summary.scavenging_runs, 'reported'),
+        ('Trades', overview.summary.trades, 'reported'),
+        ('Build queue', overview.summary.queued_buildings, 'items')
+    ] %}
+    {% for label, value, sub in cards %}
+    <div class="col-6 col-md-2 mb-3">
+        <div class="card text-center h-100">
+            <div class="card-body p-2">
+                <div class="h3 mb-0">{{ value }}</div>
+                <div class="small font-weight-bold">{{ label }}</div>
+                <div class="small text-muted">{{ sub }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Aggregate resources -->
+<div class="row">
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-header py-2"><strong>Total resources</strong></div>
+            <div class="card-body py-2">
+                <img src="/static/images/wood.png" /> {{ overview.summary.resources.wood|comma }}
+                <img src="/static/images/stone.png" class="ml-2" /> {{ overview.summary.resources.stone|comma }}
+                <img src="/static/images/iron.png" class="ml-2" /> {{ overview.summary.resources.iron|comma }}
+                <img src="/static/images/worker.png" class="ml-2" /> {{ overview.summary.resources['pop']|comma }}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Troops: total owned vs currently home -->
+<div class="row">
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header py-2">
+                <strong>Total troops</strong>
+                <span class="text-muted small">all owned, including troops away</span>
+            </div>
+            <div class="card-body py-2">
+                {% for unit, amount in overview.summary.troops.items() %}
+                    {% if amount %}
+                        <span class="mr-3 text-nowrap">
+                            <img src="/static/images/unit_{{unit}}.png" alt="{{unit}}" /> {{ amount|comma }}
+                        </span>
+                    {% endif %}
+                {% else %}
+                    <span class="text-muted">No troop data yet.</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header py-2">
+                <strong>Troops in villages</strong>
+                <span class="text-muted small">currently home / available</span>
+            </div>
+            <div class="card-body py-2">
+                {% for unit, amount in overview.summary.troops_home.items() %}
+                    {% if amount %}
+                        <span class="mr-3 text-nowrap">
+                            <img src="/static/images/unit_{{unit}}.png" alt="{{unit}}" /> {{ amount|comma }}
+                        </span>
+                    {% endif %}
+                {% else %}
+                    <span class="text-muted">No troops currently home.</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Villages -->
+    <div class="col-lg-8 mb-3">
+        <div class="card">
+            <div class="card-header py-2"><strong>Villages</strong></div>
+            <div class="table-responsive">
+                <table class="table table-striped table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Village</th>
+                            <th>Points</th>
+                            <th>Resources</th>
+                            <th>Troops</th>
+                            <th>Build queue</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for v in overview.villages %}
+                        <tr>
+                            <td>
+                                <strong>{{ v.name }}</strong>
+                                {% if v.location %}<br /><small class="text-muted">{{ v.location[0] }}|{{ v.location[1] }}</small>{% endif %}
+                            </td>
+                            <td>{{ v.points|comma }}</td>
+                            <td class="text-nowrap small">
+                                <img src="/static/images/wood.png" /> {{ v.resources.wood|comma }}
+                                <img src="/static/images/stone.png" /> {{ v.resources.stone|comma }}<br />
+                                <img src="/static/images/iron.png" /> {{ v.resources.iron|comma }}
+                                <img src="/static/images/worker.png" /> {{ v.resources['pop']|comma }}
+                            </td>
+                            <td class="small">
+                                {% for unit, amount in v.troops.items() %}
+                                    <span class="text-nowrap mr-1"><img src="/static/images/unit_{{unit}}.png" alt="{{unit}}" /> {{ amount }}</span>
+                                {% else %}
+                                    <span class="text-muted">-</span>
+                                {% endfor %}
+                            </td>
+                            <td class="small">
+                                {% if v.queue_preview %}
+                                    {% for b in v.queue_preview %}
+                                        <span class="badge {% if loop.first %}badge-primary{% else %}badge-light border{% endif %}"
+                                              title="{{ b.label }}">{{ b.short }}{% if b.level %}<sup>{{ b.level }}</sup>{% endif %}</span>
+                                    {% endfor %}
+                                    {% if v.queue_len > v.queue_preview|length %}
+                                        <span class="text-muted" title="more builds queued">+{{ v.queue_len - v.queue_preview|length }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-muted">idle</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-nowrap">
+                                <a href="map?center={{v.id}}" class="btn btn-outline-secondary btn-sm">Map</a>
+                                <a href="village?id={{v.id}}" class="btn btn-outline-secondary btn-sm">Config</a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-muted">No managed villages yet. Start the bot to populate this.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent activity + session -->
+    <div class="col-lg-4 mb-3">
+        <!-- Poller logged out: the incomings panel is blind, so make that explicit
+             instead of letting the "no attacks" all-clear below imply safety. -->
+        {% if overview.incoming_logged_out %}
+        <div class="card mb-3 border-warning">
+            <div class="card-header py-2 bg-warning text-dark">
+                <strong>&#9888; Incoming tracking is logged out</strong>
+            </div>
+            <div class="card-body py-2">
+                <small>The session cookie has expired, so the bot currently <strong>cannot
+                read incoming attacks</strong> &ndash; this is not an all-clear. Refresh the
+                browser cookie to resume detection.</small>
+            </div>
+        </div>
         {% endif %}
 
-        <p>Current session: {{session.endpoint}}</p>
-        <input type="text" id="session_data" class="form-control" value="{{session.raw}}"/>
-        <button class="btn btn-success btn-sm" onclick="set_session_data()">Update</button>
+        <!-- Active incoming: the live "under attack right now" signal -->
+        {% if overview.active_incoming %}
+        <div class="card mb-3 border-danger">
+            <div class="card-header py-2 bg-danger text-white">
+                <strong>&#9888; Under attack now ({{ overview.incoming_total or overview.active_incoming|length }})</strong>
+            </div>
+            <ul class="list-group list-group-flush">
+                {% for v in overview.active_incoming[:10] %}
+                <li class="list-group-item list-group-item-danger py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center" style="cursor:pointer"
+                         onclick="toggleIncoming('{{ v.id }}')">
+                        <span><strong>{{ v.name }}</strong> <small class="text-muted">#{{ v.id }}</small></span>
+                        <span>
+                            <span class="badge badge-dark">{{ v.commands|length }} incoming</span>
+                            <span class="text-muted" id="inc-caret-{{ v.id }}">&#9656;</span>
+                        </span>
+                    </div>
+                    <div id="inc-{{ v.id }}" class="mt-2" hidden>
+                        {% for c in v.commands %}
+                        <div class="card mb-2 bg-light text-dark">
+                            <div class="card-body p-2">
+                                <div class="d-flex justify-content-between">
+                                    <span>
+                                        <strong>{{ c.player_name or 'Unknown player' }}</strong>
+                                        {% if c.origin_coords %}
+                                        <small class="text-muted">{{ c.origin_name }} ({{ c.origin_coords[0] }}|{{ c.origin_coords[1] }})</small>
+                                        {% endif %}
+                                    </span>
+                                    <strong class="text-danger inc-eta" data-arrival="{{ c.arrival }}">
+                                        {{ c.eta|dur }}
+                                    </strong>
+                                </div>
+                                <small class="text-muted d-block">
+                                    Detected {{ c.first_seen|ago }}
+                                    {% if c.distance %} &middot; {{ c.distance }} fields{% endif %}
+                                    {% if c.enemy_points %} &middot; {{ c.enemy_points|comma }} pts{% endif %}
+                                    {% if c.enemy_tribe %} &middot; tribe {{ c.enemy_tribe }}{% endif %}
+                                    {% if c.arrival %} &middot; lands {{ c.arrival|ts }}{% endif %}
+                                </small>
+
+                                <div class="mt-1">
+                                    {% if c.game_label %}
+                                    <span class="badge badge-secondary" title="The tag shown inside the game">in-game: {{ c.game_label }}</span>
+                                    {% endif %}
+                                    {% set est_title = "We can't see the enemy's send time, only when we first spotted this command. So the attack is at least as slow as the fastest unit that could still be in the air - shown here. Spotting it sooner (the background poller) makes this tighter." %}
+                                    {% if c.tag_auto == 'snob' %}
+                                    <span class="badge badge-danger" title="{{ est_title }}">confirmed noble</span>
+                                    <small class="text-muted">too slow for anything but a noble &ndash; every faster unit would already have landed</small>
+                                    {% elif c.tag_auto in ['ram', 'catapult'] %}
+                                    <span class="badge badge-warning" title="{{ est_title }}">at least ram-speed</span>
+                                    <small class="text-muted">real (offensive) attack or slower &ndash; a noble can't be ruled out</small>
+                                    {% elif c.tag_auto in ['spy', 'light', 'marcher', 'knight'] %}
+                                    <span class="badge badge-secondary" title="{{ est_title }}">could be as fast as {{ c.tag_auto }}</span>
+                                    <small class="text-muted">spotted too late to narrow down &ndash; could be a fake/raid or a noble</small>
+                                    {% elif c.tag_auto %}
+                                    <span class="badge badge-secondary" title="{{ est_title }}">at least {{ c.tag_auto }}-speed</span>
+                                    <small class="text-muted">faster units would already have arrived</small>
+                                    {% else %}
+                                    <small class="text-muted">timing unclear &ndash; spotted before it could have been sent (stale detection)</small>
+                                    {% endif %}
+                                </div>
+
+                                {% if c.units %}
+                                <table class="table table-sm table-borderless mb-1 mt-1" style="font-size:0.8rem">
+                                    <tbody>
+                                        {% for row in c.units %}
+                                        {% if loop.index0 % 3 == 0 %}<tr>{% endif %}
+                                            <td class="py-0 {% if not row.possible %}text-muted{% else %}font-weight-bold{% endif %}"
+                                                title="{{ 'possible slowest unit - this speed is consistent with how long it has been in the air' if row.possible else 'ruled out - this unit is fast enough that it would already have landed' }}">
+                                                {{ row.unit }} {{ row.seconds|dur }}
+                                            </td>
+                                        {% if loop.index % 3 == 0 or loop.last %}</tr>{% endif %}
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                                {% endif %}
+
+                                <div class="input-group input-group-sm mt-1">
+                                    <input type="text" class="form-control" placeholder="tag (e.g. fake / noble / real)"
+                                           id="tag-{{ c.command_id }}" value="{{ c.tag or '' }}">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="presetTag('{{ c.command_id }}','noble')">noble</button>
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="presetTag('{{ c.command_id }}','fake')">fake</button>
+                                        <button class="btn btn-outline-secondary" type="button"
+                                                onclick="presetTag('{{ c.command_id }}','real')">real</button>
+                                        <button class="btn btn-success" type="button"
+                                                onclick="saveTag('{{ c.command_id }}')">Save</button>
+                                    </div>
+                                </div>
+                                <small id="tagstatus-{{ c.command_id }}" class="text-muted"></small>
+                            </div>
+                        </div>
+                        {% else %}
+                        <small class="text-muted">No attack details captured yet &ndash; the bot records
+                            them on its next run while the village is under attack.</small>
+                        {% endfor %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% elif not overview.incoming_logged_out %}
+        <div class="alert alert-secondary py-2 mb-3 text-center" role="alert">
+            &#10003; No active incoming attacks
+        </div>
+        {% endif %}
+
+        <!-- Already happened: incoming hits pulled from past reports -->
+        {% if overview.recent_incoming %}
+        <div class="card mb-3">
+            <div class="card-header py-2">
+                <strong>Recently hit by others</strong>
+                <small class="text-muted">already happened</small>
+            </div>
+            <ul class="list-group list-group-flush">
+                {% for a in overview.recent_incoming %}
+                <li class="list-group-item py-2 px-3">
+                    <div class="d-flex justify-content-between">
+                        <span>
+                            <span class="badge badge-secondary">{{ a.type }}</span>
+                            <small>from {{ a.origin }} &rarr; {{ a.dest }}</small>
+                        </span>
+                        <small class="text-muted" title="{{ a.when|ts }}">{{ a.when|ago }}</small>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="card mb-3">
+            <div class="card-header py-2"><strong>Recent activity</strong></div>
+            <ul class="list-group list-group-flush">
+                {% for a in overview.activity %}
+                <li class="list-group-item py-2 px-3{% if a.incoming %} list-group-item-warning{% endif %}">
+                    <div class="d-flex justify-content-between">
+                        <span>
+                            {% if a.incoming %}
+                                <span class="badge badge-dark">incoming {{ a.type }}</span>
+                            {% elif a.type == 'attack' %}
+                                <span class="badge badge-danger">attack</span>
+                            {% else %}
+                                <span class="badge badge-info">scout</span>
+                            {% endif %}
+                            <small>{{ a.origin }} &rarr; {{ a.dest }}</small>
+                        </span>
+                        <small class="text-muted" title="{{ a.when|ts }}">{{ a.when|ago }}</small>
+                    </div>
+                    {% if a.loot_total %}
+                        <small class="text-muted">Loot: {{ a.loot_total|comma }}</small>
+                    {% endif %}
+                    {% if a.losses %}
+                        <small class="text-danger d-block">Losses: {% for u, n in a.losses.items() %}{{ u }} {{ n }} {% endfor %}</small>
+                    {% endif %}
+                </li>
+                {% else %}
+                <li class="list-group-item text-muted">No farm/scout activity recorded yet.</li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Session (cookie) -->
+        <div class="card">
+            <div class="card-header py-2"><strong>Session</strong></div>
+            <div class="card-body py-2">
+                <p class="mb-1 small">Current session: {{ session.endpoint }}</p>
+                <textarea id="session_data" rows="3" class="form-control form-control-sm"
+                          placeholder="Paste your full browser cookie string here">{{ session.raw }}</textarea>
+                <button class="btn btn-success btn-sm mt-2" onclick="set_session_data()">Update</button>
+                <span id="session_status" class="small ml-2"></span>
+                <small class="d-block text-muted mt-1">
+                    Saved straight to the bot's session &mdash; no need to edit cookies.txt.
+                    Takes effect the next time the bot starts.
+                </small>
+            </div>
+        </div>
     </div>
 </div>
 
 {% endblock %}
 {% block scripts %}
 <script>
+function set_session_data() {
+    var raw = $('#session_data').val();
+    var status = $('#session_status');
+    status.removeClass('text-success text-danger').text('Saving...');
+    $.post('/app/session/set', {session: raw})
+        .done(function(resp) {
+            if (resp && resp.ok) {
+                status.addClass('text-success').text('Saved ✓');
+            } else {
+                status.addClass('text-danger').text('No valid cookies found in that string');
+            }
+        })
+        .fail(function() {
+            status.addClass('text-danger').text('Error saving session');
+        });
+}
 
+function toggleQuick() {
+    document.getElementById('quick-panel').classList.toggle('open');
+}
 
+function toggleIncoming(id) {
+    var el = document.getElementById('inc-' + id);
+    var caret = document.getElementById('inc-caret-' + id);
+    if (!el) return;
+    el.hidden = !el.hidden;
+    if (caret) caret.innerHTML = el.hidden ? '&#9656;' : '&#9662;';
+}
+
+function fmtDur(seconds) {
+    var sign = seconds < 0 ? '-' : '';
+    seconds = Math.abs(seconds);
+    var h = Math.floor(seconds / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    return h ? (sign + h + ':' + pad(m) + ':' + pad(s)) : (sign + m + ':' + pad(s));
+}
+
+// Live countdown for each incoming, ticking off the absolute arrival epoch.
+setInterval(function() {
+    var now = Math.floor(Date.now() / 1000);
+    document.querySelectorAll('.inc-eta').forEach(function(el) {
+        var arrival = parseInt(el.getAttribute('data-arrival'), 10);
+        if (!arrival) return;
+        var left = arrival - now;
+        el.textContent = left <= 0 ? 'landed' : fmtDur(left);
+    });
+}, 1000);
+
+function presetTag(commandId, value) {
+    var input = document.getElementById('tag-' + commandId);
+    if (input) input.value = value;
+    saveTag(commandId);
+}
+
+function saveTag(commandId) {
+    var input = document.getElementById('tag-' + commandId);
+    var status = document.getElementById('tagstatus-' + commandId);
+    if (!input) return;
+    if (status) status.textContent = 'Saving...';
+    $.post('/app/incoming/tag', {command_id: commandId, tag: input.value})
+        .done(function(resp) {
+            if (!status) return;
+            if (!resp || !resp.ok) { status.textContent = 'Could not save tag'; return; }
+            var ig = resp.ingame || {};
+            if (ig.ok) {
+                status.textContent = 'Saved ✓ (renamed in-game)';
+            } else if (ig.reason === 'no_endpoint_yet') {
+                status.textContent = 'Saved ✓ (in-game rename activates after the bot scrapes a live incomings page)';
+            } else if (ig.reason === 'no_session' || ig.error === 'session_invalid') {
+                status.textContent = 'Saved ✓ (in-game rename needs a fresh session)';
+            } else if (ig.reason === 'empty') {
+                status.textContent = 'Saved ✓';
+            } else {
+                status.textContent = 'Saved ✓ (in-game rename failed: ' + (ig.error || ig.reason || 'unknown') + ')';
+            }
+        })
+        .fail(function() { if (status) status.textContent = 'Error saving tag'; });
+}
+
+function quickToggle(btn) {
+    var key = btn.getAttribute('data-key');
+    var next = btn.getAttribute('data-on') !== '1';
+    $.getJSON('/app/quick/set?key=' + encodeURIComponent(key) + '&value=' + next, function(resp) {
+        if (resp && resp.ok) {
+            btn.setAttribute('data-on', next ? '1' : '0');
+            btn.textContent = next ? 'On' : 'Off';
+            btn.classList.toggle('btn-success', next);
+            btn.classList.toggle('btn-danger', !next);
+        } else {
+            alert('Could not update setting');
+        }
+    }).fail(function() { alert('Error updating setting'); });
+}
 </script>
 {% endblock %}
+</content>
