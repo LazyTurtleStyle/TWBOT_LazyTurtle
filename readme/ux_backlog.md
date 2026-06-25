@@ -109,7 +109,9 @@ sometimes vague help text. Goal: readable, well-explained settings.
   per-village snapshot table linking to each village's config.
 - [x] Farm/scavenge activity is already in the P1 overview — `OverviewBuilder` aggregates
   `farm_targets`, `scout_targets` and `scavenging_runs` counters, shown on the status page.
-  - [ ] Optional polish: add "last run" timestamp and loot totals to those overview counters.
+  - [x] Added **Recent loot** (summed farm haul) and **Last activity** (time of the most
+    recent report) cards to the overview summary row, over the same ~100-report window as the
+    scavenging/trade counters. `loot_recent`/`last_activity` in `OverviewBuilder.build`.
 
 ## Template editing (do-it-from-here)
 

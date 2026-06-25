@@ -683,6 +683,14 @@ class OverviewBuilder:
         # active_incoming above which is the live "under attack right now" signal.
         recent_incoming = [a for a in activity if a["incoming"]][:10]
 
+        # Recent farm haul + latest activity time, over the same window of reports
+        # as the scavenging/trade counters above (sync() keeps the newest ~100).
+        loot_recent = sum(
+            a["loot_total"] for a in activity
+            if a["type"] == "attack" and not a["incoming"]
+        )
+        last_activity = max((a["when"] for a in activity), default=0)
+
         return {
             "summary": {
                 "villages": len(managed),
@@ -694,6 +702,8 @@ class OverviewBuilder:
                 "resources": totals,
                 "troops": total_troops,
                 "troops_home": home_troops,
+                "loot_recent": loot_recent,
+                "last_activity": last_activity,
             },
             "villages": villages,
             "activity": activity[:20],

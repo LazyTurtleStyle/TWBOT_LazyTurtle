@@ -75,6 +75,25 @@
         </div>
     </div>
     {% endfor %}
+    <div class="col-6 col-md-2 mb-3">
+        <div class="card text-center h-100">
+            <div class="card-body p-2">
+                <div class="h3 mb-0">{{ overview.summary.loot_recent|comma }}</div>
+                <div class="small font-weight-bold">Recent loot</div>
+                <div class="small text-muted">last ~100 reports</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2 mb-3">
+        <div class="card text-center h-100">
+            <div class="card-body p-2">
+                <div class="h5 mb-0 mt-1" title="{% if overview.summary.last_activity %}{{ overview.summary.last_activity|ts }}{% endif %}">
+                    {% if overview.summary.last_activity %}{{ overview.summary.last_activity|ago }}{% else %}&mdash;{% endif %}</div>
+                <div class="small font-weight-bold">Last activity</div>
+                <div class="small text-muted">most recent report</div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Aggregate resources -->
