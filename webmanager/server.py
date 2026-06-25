@@ -37,8 +37,12 @@ def _select_active_world():
 
 @app.context_processor
 def _inject_worlds():
-    """Make the active world + world list available to every template."""
-    return {"active_world": DataReader.active_world(), "worlds": DataReader.list_worlds()}
+    """Make the active world + world list + bot run-state available to every template."""
+    return {
+        "active_world": DataReader.active_world(),
+        "worlds": DataReader.list_worlds(),
+        "bot_running": bm.is_running(DataReader.active_world()),
+    }
 
 
 @app.route('/world/select')

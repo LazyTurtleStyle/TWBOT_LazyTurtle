@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en" data-shell>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>{% block title %}TWB{% endblock %} · TWB</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+	<style>
+	/* ============================================================
+	   TWB — "war-room command console" design system
+	   ============================================================ */
+	:root {
+		--bg:        #14120E;  /* cooled iron */
+		--bg-grid:   #1b1813;
+		--surface:   #1C1915;  /* panel */
+		--surface-2: #232019;  /* raised */
+		--line:      #34302A;  /* hairline */
+		--line-soft: #2a2722;
+		--ink:       #E9E1D0;  /* parchment */
+		--ink-dim:   #9E9587;  /* faded parchment */
+		--ink-faint: #6f685c;
+		--ember:     #E07B2C;  /* forge accent */
+		--ember-dim: #b9631f;
+		--blood:     #D24B3E;  /* under attack */
+		--moss:      #93A56A;  /* clear / loot */
+		--gold:      #C9A24B;  /* points / value */
+		--radius: 6px;
+		--shadow: 0 1px 0 rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+		--sidebar-w: 224px;
+		--display: "Barlow Condensed", system-ui, sans-serif;
+		--body: "IBM Plex Sans", system-ui, sans-serif;
+		--mono: "IBM Plex Mono", ui-monospace, monospace;
+	}
+
+	* { box-sizing: border-box; }
+	html, body { margin: 0; }
+	body {
+		background-color: var(--bg);
+		/* faint campaign-map coordinate grid */
+		background-image:
+			linear-gradient(var(--bg-grid) 1px, transparent 1px),
+			linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+		background-size: 44px 44px;
+		color: var(--ink);
+		font-family: var(--body);
+		font-size: 14px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+	}
+	a { color: var(--ember); text-decoration: none; }
+	a:hover { color: #f0934a; }
+	h1,h2,h3,h4 { font-family: var(--display); font-weight: 600; letter-spacing: .01em; margin: 0; }
+	.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+	.coord { font-family: var(--mono); font-size: .85em; color: var(--ink-dim); }
+
+	/* eyebrow — banner/standard label */
+	.eyebrow {
+		font-family: var(--display); font-weight: 600; text-transform: uppercase;
+		letter-spacing: .18em; font-size: 11px; color: var(--ink-faint);
+	}
+
+	/* ---------- App shell ---------- */
+	.app { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+
+	.sidebar {
+		background: linear-gradient(180deg, #1a1712, #131009);
+		border-right: 1px solid var(--line);
+		display: flex; flex-direction: column;
+		position: sticky; top: 0; height: 100vh; overflow-y: auto;
+	}
+	.brand {
+		display: flex; align-items: center; gap: 10px;
+		padding: 18px 18px 14px; border-bottom: 1px solid var(--line-soft);
+	}
+	.brand-mark {
+		width: 30px; height: 30px; flex: none; border-radius: 5px;
+		background: radial-gradient(120% 120% at 30% 20%, var(--ember), var(--ember-dim) 70%, #6b350f);
+		box-shadow: 0 0 0 1px rgba(224,123,44,.35), 0 4px 14px -6px var(--ember);
+		display: grid; place-items: center;
+		font-family: var(--display); font-weight: 700; color: #1a0e04; font-size: 16px;
+	}
+	.brand-name { font-family: var(--display); font-weight: 700; font-size: 20px; letter-spacing: .04em; }
+	.brand-name span { color: var(--ember); }
+
+	.nav { padding: 10px 0 4px; flex: 1; }
+	.nav-group { padding: 12px 18px 4px; }
+	.nav-group .eyebrow { display: block; }
+	.nav-item {
+		display: flex; align-items: center; gap: 10px;
+		padding: 7px 18px; color: var(--ink-dim); font-weight: 500;
+		border-left: 2px solid transparent;
+	}
+	.nav-item:hover { background: rgba(255,255,255,.03); color: var(--ink); }
+	.nav-item.active {
+		color: var(--ink); border-left-color: var(--ember);
+		background: linear-gradient(90deg, rgba(224,123,44,.14), transparent 70%);
+	}
+	.nav-item .ico { width: 16px; text-align: center; opacity: .8; font-size: 13px; }
+
+	.bot-status {
+		margin: 8px 14px 14px; padding: 10px 12px;
+		border: 1px solid var(--line); border-radius: var(--radius);
+		background: var(--surface); display: flex; align-items: center; gap: 10px;
+	}
+	.pulse { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+	.pulse.on  { background: var(--moss);  box-shadow: 0 0 0 0 rgba(147,165,106,.7); animation: pulse 2.4s infinite; }
+	.pulse.off { background: var(--ink-faint); }
+	@keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(147,165,106,0); } 100% { box-shadow: 0 0 0 0 rgba(147,165,106,0); } }
+	.bot-status .label { font-size: 12px; line-height: 1.25; }
+	.bot-status .label b { font-family: var(--display); letter-spacing: .03em; }
+
+	/* ---------- Main ---------- */
+	.main { min-width: 0; display: flex; flex-direction: column; }
+	.topbar {
+		display: flex; align-items: center; gap: 14px;
+		padding: 12px 22px; border-bottom: 1px solid var(--line);
+		background: rgba(20,18,14,.7); backdrop-filter: blur(6px);
+		position: sticky; top: 0; z-index: 20;
+	}
+	.topbar h1 { font-size: 22px; font-weight: 600; }
+	.topbar .spacer { flex: 1; }
+
+	.world-switch { position: relative; }
+	.world-switch > button {
+		font-family: var(--mono); font-size: 12px; color: var(--ink);
+		background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+		padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+	}
+	.world-switch > button:hover { border-color: var(--ember-dim); }
+	.world-menu {
+		display: none; position: absolute; right: 0; top: 110%; min-width: 160px; z-index: 30;
+		background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
+		box-shadow: var(--shadow); padding: 4px;
+	}
+	.world-switch.open .world-menu { display: block; }
+	.world-menu a { display: block; padding: 6px 10px; color: var(--ink-dim); border-radius: 4px; font-size: 13px; }
+	.world-menu a:hover { background: rgba(255,255,255,.05); color: var(--ink); }
+	.world-menu a.active { color: var(--ember); }
+
+	.btn {
+		font-family: var(--body); font-weight: 600; font-size: 13px;
+		border-radius: var(--radius); padding: 6px 14px; cursor: pointer;
+		border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+	}
+	.btn:hover { border-color: var(--ink-faint); }
+	.btn-ember { background: var(--ember); border-color: var(--ember); color: #1a0e04; }
+	.btn-ember:hover { background: #f0934a; border-color: #f0934a; }
+	.btn-danger { background: transparent; border-color: var(--blood); color: var(--blood); }
+	.btn-danger:hover { background: rgba(210,75,62,.12); }
+	.btn-sm { padding: 3px 9px; font-size: 12px; }
+
+	.content { padding: 22px; max-width: 1280px; width: 100%; }
+
+	/* ---------- Panels ---------- */
+	.panel {
+		background: var(--surface); border: 1px solid var(--line);
+		border-radius: var(--radius); box-shadow: var(--shadow);
+	}
+	.panel-head {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+	}
+	.panel-head h3 { font-size: 16px; }
+	.panel-body { padding: 14px 16px; }
+
+	.grid { display: grid; gap: 16px; }
+	.cols-2 { grid-template-columns: 1.5fr 1fr; }
+	@media (max-width: 980px) { .cols-2 { grid-template-columns: 1fr; } }
+
+	/* ---------- Stat tiles ---------- */
+	.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+	.stat {
+		background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+		padding: 12px 14px;
+	}
+	.stat .v { font-family: var(--mono); font-size: 26px; font-weight: 500; line-height: 1; color: var(--ink); }
+	.stat .v.gold { color: var(--gold); }
+	.stat .k { margin-top: 6px; }
+	.stat .sub { color: var(--ink-faint); font-size: 11px; }
+
+	/* ---------- Badges / chips ---------- */
+	.badge {
+		display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 500;
+		padding: 2px 7px; border-radius: 4px; border: 1px solid transparent; white-space: nowrap;
+	}
+	.badge.ember { color: var(--ember); border-color: rgba(224,123,44,.4); background: rgba(224,123,44,.1); }
+	.badge.blood { color: #ef6e62; border-color: rgba(210,75,62,.45); background: rgba(210,75,62,.12); }
+	.badge.moss  { color: #a9bd80; border-color: rgba(147,165,106,.4); background: rgba(147,165,106,.1); }
+	.badge.gold  { color: var(--gold); border-color: rgba(201,162,75,.4); background: rgba(201,162,75,.1); }
+	.badge.dim   { color: var(--ink-dim); border-color: var(--line); background: var(--surface-2); }
+
+	/* ---------- Tables ---------- */
+	table.tw { width: 100%; border-collapse: collapse; }
+	table.tw th {
+		text-align: left; font-family: var(--display); text-transform: uppercase;
+		letter-spacing: .1em; font-size: 11px; color: var(--ink-faint); font-weight: 600;
+		padding: 8px 12px; border-bottom: 1px solid var(--line);
+	}
+	table.tw td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+	table.tw tbody tr:hover { background: rgba(255,255,255,.02); }
+	table.tw tr.alert { background: rgba(210,75,62,.07); }
+	.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+
+	/* ---------- Situation bar (signature) ---------- */
+	.situation {
+		position: relative; overflow: hidden; border-radius: var(--radius);
+		border: 1px solid var(--line); background: var(--surface);
+		padding: 18px 20px 18px 24px; margin-bottom: 18px;
+		display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+	}
+	.situation::before {
+		content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+	}
+	.situation.clear::before { background: var(--moss); }
+	.situation.alert::before { background: var(--blood); animation: bar 1.4s ease-in-out infinite; }
+	.situation.warn::before  { background: var(--ember); }
+	@keyframes bar { 50% { opacity: .35; } }
+	.situation.alert { background: linear-gradient(90deg, rgba(210,75,62,.14), var(--surface) 60%); border-color: rgba(210,75,62,.4); }
+	.situation.warn  { background: linear-gradient(90deg, rgba(224,123,44,.12), var(--surface) 60%); border-color: rgba(224,123,44,.35); }
+	.situation .sit-state { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: .03em; line-height: 1; }
+	.situation.clear .sit-state { color: var(--moss); }
+	.situation.alert .sit-state { color: #ef6e62; }
+	.situation.warn  .sit-state { color: var(--ember); }
+	.situation .sit-sub { color: var(--ink-dim); font-size: 13px; margin-top: 4px; }
+	.situation .sit-spacer { flex: 1; }
+	.threat { display: flex; gap: 18px; flex-wrap: wrap; }
+	.threat .t { text-align: right; }
+	.threat .t .v { font-family: var(--mono); font-size: 22px; }
+	.threat .t .v.blood { color: #ef6e62; }
+	.threat .t .k { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .12em; }
+
+	.section-label { margin: 22px 0 10px; }
+	.muted { color: var(--ink-dim); }
+	.faint { color: var(--ink-faint); }
+	hr.rule { border: 0; border-top: 1px solid var(--line-soft); margin: 14px 0; }
+	.flex { display: flex; align-items: center; gap: 10px; }
+	.between { justify-content: space-between; }
+	input.field, textarea.field, select.field {
+		background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+		border-radius: var(--radius); padding: 7px 10px; font-family: var(--body); width: 100%;
+	}
+	input.field:focus, textarea.field:focus, select.field:focus { outline: none; border-color: var(--ember-dim); }
+
+	@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+	@media (max-width: 760px) {
+		.app { grid-template-columns: 1fr; }
+		.sidebar { position: static; height: auto; flex-direction: row; overflow-x: auto; }
+		.nav { display: flex; }
+	}
+	</style>
+	{% block head %}{% endblock %}
+</head>
+<body>
+{% set nav = [
+	('Overview', [('/', 'Overview', '◆')]),
+	('Operations', [('/attacks','Attack','⚔'), ('/defense','Defense','🛡'), ('/farms','Farms & scavenging','⌖')]),
+	('Villages', [('/villages','All villages','⌂')]),
+	('Automation', [('/config#building','Building','▤'), ('/config#units','Recruitment','‹›'), ('/config#market','Market','⇄'), ('/config#flags','Flags','⚑')]),
+	('Templates', [('/building_templates','Building templates','▦'), ('/unit_templates','Unit templates','▥')]),
+	('World setup', [('/setup','Setup','⚙'), ('/config','All settings','≣')]),
+	('Tools', [('/map','World map','▣')]),
+] %}
+<div class="app">
+	<aside class="sidebar">
+		<div class="brand">
+			<div class="brand-mark">T</div>
+			<div class="brand-name">T<span>W</span>B</div>
+		</div>
+		<nav class="nav">
+			{% for group, items in nav %}
+			<div class="nav-group"><span class="eyebrow">{{ group }}</span></div>
+			{% for href, label, ico in items %}
+			<a class="nav-item {% if request.path == href.split('#')[0] and (href == '/' or request.path != '/') %}active{% endif %}" href="{{ href }}">
+				<span class="ico">{{ ico }}</span>{{ label }}
+			</a>
+			{% endfor %}
+			{% endfor %}
+		</nav>
+		<div class="bot-status">
+			<span class="pulse {{ 'on' if bot_running else 'off' }}"></span>
+			<span class="label">Bot <b>{{ 'online' if bot_running else 'offline' }}</b><br>
+				<span class="faint">{{ active_world or 'default world' }}</span></span>
+		</div>
+	</aside>
+
+	<div class="main">
+		<header class="topbar">
+			<h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>
+			<div class="spacer"></div>
+			{% if worlds %}
+			<div class="world-switch" id="worldSwitch">
+				<button onclick="document.getElementById('worldSwitch').classList.toggle('open')">
+					◇ {{ active_world or 'Default' }} ▾</button>
+				<div class="world-menu">
+					<a class="{% if not active_world %}active{% endif %}" href="/world/select?world=__default__">Default</a>
+					{% for w in worlds %}
+					<a class="{% if active_world == w %}active{% endif %}" href="/world/select?world={{ w }}">{{ w }}</a>
+					{% endfor %}
+				</div>
+			</div>
+			{% endif %}
+			{% if bot_running %}
+			<button class="btn btn-danger btn-sm" onclick="botControl('/bot/stop')">Stop bot</button>
+			{% else %}
+			<button class="btn btn-ember btn-sm" onclick="botControl('/bot/start')">Start bot</button>
+			{% endif %}
+		</header>
+		<main class="content">
+			{% block content %}{% endblock %}
+		</main>
+	</div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.3.1.min.js" crossorigin="anonymous"></script>
+<script>
+	function botControl(url){ fetch(url).then(()=>setTimeout(()=>location.reload(), 600)); }
+	document.addEventListener('click', function(e){
+		var ws = document.getElementById('worldSwitch');
+		if (ws && !ws.contains(e.target)) ws.classList.remove('open');
+	});
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
