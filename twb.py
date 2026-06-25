@@ -582,14 +582,37 @@ def main():
     Notification.send("TWB has crashed 3 times, exiting")
 
 
+def resolve_world_dir():
+    """Honour `--world <name>`: point config.json + cache/ at worlds/<name>/.
+
+    Lets several bot instances share one source tree and dashboard while keeping
+    fully separate config, session and cache per world. Must run before any
+    config/cache access. With no --world the data dir stays the project root, so
+    single-world setups are completely unchanged. Returns the world name or None.
+    """
+    world = None
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--world" and i + 1 < len(argv):
+            world = argv[i + 1]
+        elif arg.startswith("--world="):
+            world = arg.split("=", 1)[1]
+    if not world or not world.strip():
+        return None
+    # A single path segment only - never escape the worlds/ directory.
+    world = os.path.basename(world.strip())
+    data_dir = os.path.join(os.path.dirname(__file__), "worlds", world)
+    os.makedirs(os.path.join(data_dir, "cache"), exist_ok=True)
+    FileManager.set_data_dir(data_dir)
+    logging.info("Running world '%s' (data dir: %s)", world, data_dir)
+    return world
+
+
 def self_config_test():
     """
     Checks if the config file consists of valid json if it exists
     """
-    file_location = os.path.join(
-        os.path.dirname(__file__),
-        "config.json"
-    )
+    file_location = FileManager.get_path("config.json")
     if not os.path.exists(file_location):
         return None
     try:
@@ -602,6 +625,7 @@ def self_config_test():
 
 
 if __name__ == "__main__":
+    resolve_world_dir()  # must run before any config/cache access
     if "-i" in sys.argv:
         logging.info("Bot integrity check passed")
         check_conf = self_config_test()
