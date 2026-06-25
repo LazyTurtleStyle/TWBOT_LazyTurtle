@@ -838,6 +838,70 @@ class AttackPlanner:
         }
 
 
+class DefenseOverview:
+    """Per-village defensive picture: who is under attack now (live incomings),
+    the defensive troops sitting at home, and account-wide totals.
+    """
+
+    DEFENSIVE_UNITS = ["spear", "sword", "archer", "marcher", "spy"]
+
+    @classmethod
+    def build(cls, data):
+        managed = data.get("bot", {}) or {}
+        village_db = data.get("villages", {}) or {}
+        incomings_by_target = OverviewBuilder._build_incomings(village_db)
+        now = int(time.time())
+
+        villages = []
+        total_def = {u: 0 for u in cls.DEFENSIVE_UNITS}
+        under_attack_count = 0
+        total_incoming = 0
+
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            avail = vdata.get("available_troops", {}) or {}
+            home_def = {u: OverviewBuilder._to_int(avail.get(u)) for u in cls.DEFENSIVE_UNITS}
+            for u in cls.DEFENSIVE_UNITS:
+                total_def[u] += home_def[u]
+
+            cmds = incomings_by_target.get(str(vid), [])
+            future = [c for c in cmds if (c.get("eta") or 0) > 0]
+            soonest = min((c["eta"] for c in future), default=None)
+            if future:
+                under_attack_count += 1
+                total_incoming += len(future)
+
+            villages.append({
+                "id": vid,
+                "name": vdata.get("name") or pub.get("name") or vid,
+                "coords": pub.get("location"),
+                "points": pub.get("points"),
+                "incoming": len(future),
+                "soonest_eta": soonest,
+                "soonest_arrival": (now + soonest) if soonest is not None else None,
+                "commands": future,
+                "def_troops": home_def,
+                "def_total": sum(home_def.values()),
+            })
+
+        # Under-attack villages first (soonest arrival first), then strongest garrisons.
+        villages.sort(key=lambda v: (
+            0 if v["incoming"] else 1,
+            v["soonest_eta"] if v["soonest_eta"] is not None else 1 << 62,
+            -v["def_total"],
+        ))
+
+        return {
+            "villages": villages,
+            "defensive_units": cls.DEFENSIVE_UNITS,
+            "total_def": total_def,
+            "total_def_sum": sum(total_def.values()),
+            "under_attack_count": under_attack_count,
+            "total_incoming": total_incoming,
+            "village_count": len(managed),
+        }
+
+
 class BotManager:
     def __init__(self):
         # world key ("" = default) -> pid we started, so each world's bot is

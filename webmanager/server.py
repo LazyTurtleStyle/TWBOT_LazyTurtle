@@ -9,7 +9,8 @@ try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
                                      section_setup, unit_building, unit_list)
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
-                                  UnitTemplateManager, OverviewBuilder, AttackPlanner)
+                                  UnitTemplateManager, OverviewBuilder, AttackPlanner,
+                                  DefenseOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
@@ -349,6 +350,12 @@ def get_config():
 def attacks_page():
     data = sync()
     return render_template('attacks.html', data=data, plan=AttackPlanner.build(data))
+
+
+@app.route('/defense', methods=['GET'])
+def defense_page():
+    data = sync()
+    return render_template('defense.html', data=data, defense=DefenseOverview.build(data))
 
 
 @app.route('/setup', methods=['GET'])

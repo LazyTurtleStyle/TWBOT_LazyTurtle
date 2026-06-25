@@ -184,8 +184,13 @@ into a "Setup / World" area, ideally a first-run wizard.
   - No attack-time override: the configured flag stays put even under attack (per request).
   Backend: `DefenceManager.flag_type` / `auto_upgrade_flags`, `flag_logic` honours the
   per-village type, `manage_flags` only upgrades when opted in.
-  - [ ] Future: a defence overview page with a manual "switch this village to the defense
-    flag now" button (instead of an automatic attack-time override).
+  - [x] **Defense overview page** (`/defense`, navbar **Defense**): per-village defensive
+    picture — who is under attack now (live from the incoming poller, with a "lands in"
+    countdown), incoming counts, and the defensive troops at home, plus account-wide totals.
+    `DefenseOverview.build` in `webmanager/utils.py`.
+    - [ ] Still to add: a manual "switch this village to the defense flag now" button on that
+      page (the counterpart to the no-automatic-override flag decision). Real game action, so
+      it needs the session-API plumbing (like the incomings in-game tag rename).
 
 ## Market
 

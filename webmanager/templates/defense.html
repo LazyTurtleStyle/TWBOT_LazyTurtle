@@ -1,0 +1,118 @@
+{% extends "main.html" %}
+
+{% block content %}
+<style>
+	.def-table th, .def-table td { padding: .4rem .6rem; vertical-align: middle; }
+	.coord { font-variant-numeric: tabular-nums; }
+	.unit-chip { display: inline-block; font-size: .78rem; margin-right: .35rem; white-space: nowrap; }
+</style>
+
+<h3 class="mb-1">Defense overview</h3>
+<p class="text-muted small">Who is under attack right now (from the live incoming-attack poller),
+	and the defensive troops sitting in each village.</p>
+
+<!-- Summary -->
+<div class="row">
+	{% set cards = [
+		('Villages', defense.village_count, 'managed'),
+		('Under attack', defense.under_attack_count, 'right now'),
+		('Incoming', defense.total_incoming, 'attacks'),
+		('Defensive troops', defense.total_def_sum, 'at home'),
+	] %}
+	{% for label, value, sub in cards %}
+	<div class="col-6 col-md-3 mb-3">
+		<div class="card text-center h-100 {% if label == 'Under attack' and value %}border-danger{% endif %}">
+			<div class="card-body p-2">
+				<div class="h3 mb-0 {% if label == 'Under attack' and value %}text-danger{% endif %}">{{ value }}</div>
+				<div class="small font-weight-bold">{{ label }}</div>
+				<div class="small text-muted">{{ sub }}</div>
+			</div>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+
+<!-- Per-village table -->
+<div class="card">
+	<div class="card-header py-2"><strong>Villages</strong>
+		<small class="text-muted">— under attack first</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Village</th><th class="text-right">Points</th><th>Status</th>
+				<th class="text-right">Incoming</th><th>Defensive troops (home)</th>
+			</tr></thead>
+			<tbody>
+				{% for v in defense.villages %}
+				<tr class="{% if v.incoming %}table-danger{% endif %}">
+					<td>
+						<strong>{{ v.name }}</strong>
+						<small class="text-muted d-block coord">
+							{% if v.coords %}{{ v.coords[0] }}|{{ v.coords[1] }} &middot; {% endif %}#{{ v.id }}</small>
+					</td>
+					<td class="text-right">{{ v.points|comma if v.points else '—' }}</td>
+					<td>
+						{% if v.incoming %}
+							<span class="badge badge-danger">&#9888; under attack</span>
+							{% if v.soonest_arrival %}
+							<small class="d-block text-danger">lands in
+								<span class="def-eta" data-arrival="{{ v.soonest_arrival }}">…</span></small>
+							{% endif %}
+						{% else %}
+							<span class="badge badge-success">clear</span>
+						{% endif %}
+					</td>
+					<td class="text-right">{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>{% else %}—{% endif %}</td>
+					<td>
+						<strong>{{ v.def_total|comma }}</strong>
+						{% set parts = [] %}
+						{% for u in defense.defensive_units %}
+							{% if v.def_troops[u] %}
+							<span class="unit-chip text-muted">{{ u }} {{ v.def_troops[u]|comma }}</span>
+							{% endif %}
+						{% endfor %}
+						{% if not v.def_total %}<small class="text-muted">— none at home</small>{% endif %}
+					</td>
+				</tr>
+				{% else %}
+				<tr><td colspan="5" class="text-muted">No managed villages.</td></tr>
+				{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+
+<!-- Account-wide defensive troops -->
+<div class="card mt-3">
+	<div class="card-header py-2"><strong>Total defensive troops (all villages, at home)</strong></div>
+	<div class="card-body py-2">
+		{% set any = false %}
+		{% for u in defense.defensive_units %}
+			{% if defense.total_def[u] %}
+			<span class="unit-chip">{{ u }}: <strong>{{ defense.total_def[u]|comma }}</strong></span>
+			{% set any = true %}
+			{% endif %}
+		{% endfor %}
+		{% if not defense.total_def_sum %}<span class="text-muted">No defensive troops at home.</span>{% endif %}
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Live "lands in" countdown for villages under attack (absolute arrival epoch).
+function pad(n) { return String(n).padStart(2, '0'); }
+function tickDefense() {
+	const now = Math.floor(Date.now() / 1000);
+	document.querySelectorAll('.def-eta').forEach(function(el) {
+		let s = parseInt(el.getAttribute('data-arrival'), 10) - now;
+		if (isNaN(s)) return;
+		if (s < 0) { el.textContent = 'landed'; return; }
+		const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+		el.textContent = (h > 0 ? h + ':' + pad(m) : m) + ':' + pad(sec);
+	});
+}
+tickDefense();
+setInterval(tickDefense, 1000);
+</script>
+{% endblock %}
