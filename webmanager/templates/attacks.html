@@ -1,0 +1,171 @@
+{% extends "main.html" %}
+
+{% block content %}
+<style>
+	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	.coord { font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="d-flex align-items-center mb-1" style="gap:.5rem">
+	<h3 class="mb-0">Attack planner</h3>
+	<span class="badge badge-warning">alpha</span>
+</div>
+<p class="text-muted small">
+	Plan travel/arrival times between your villages and a target, and review the targets the
+	bot is already tracking. Times use this world's unit speeds
+	(speed {{ plan.world_speed }}, unit speed {{ plan.unit_speed }}).
+</p>
+
+<div class="row">
+	<!-- Travel-time planner -->
+	<div class="col-lg-5 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Travel-time planner</strong></div>
+			<div class="card-body">
+				<div class="form-group mb-2">
+					<label class="small mb-1">Origin (your village)</label>
+					<select id="origin" class="form-control form-control-sm">
+						{% for o in plan.origins %}
+						{% if o.coords %}
+						<option value="{{ o.coords[0] }}|{{ o.coords[1] }}">
+							{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
+						{% endif %}
+						{% else %}
+						<option value="">No managed villages found</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="form-row">
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target X</label>
+						<input id="tx" type="number" class="form-control form-control-sm" placeholder="e.g. 431" />
+					</div>
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target Y</label>
+						<input id="ty" type="number" class="form-control form-control-sm" placeholder="e.g. 414" />
+					</div>
+				</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Arrive at (optional)</label>
+					<input id="arrival" type="time" step="1" class="form-control form-control-sm" />
+					<small class="text-muted">Adds a "send by" column so each unit lands at this time
+						(today, or tomorrow if it's already past).</small>
+				</div>
+				<div id="dist" class="small text-muted mb-2"></div>
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr>
+						<th>Unit</th>
+						<th class="text-right">Travel</th>
+						<th class="text-right">Arrives (if sent now)</th>
+						<th class="text-right">Send by</th>
+					</tr></thead>
+					<tbody id="plan-rows"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<!-- Tracked targets -->
+	<div class="col-lg-7 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Tracked targets ({{ plan.targets|length }})</strong>
+				<small class="text-muted">— what the bot is currently farming / scouting</small></div>
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr>
+						<th>Target</th><th>Kind</th><th class="text-right">Points</th>
+						<th>Owner</th><th class="text-right">Last hit</th><th></th>
+					</tr></thead>
+					<tbody>
+						{% for t in plan.targets %}
+						<tr>
+							<td class="coord">{% if t.coords %}{{ t.coords[0] }}|{{ t.coords[1] }}{% else %}#{{ t.id }}{% endif %}
+								{% if t.name %}<small class="text-muted d-block">{{ t.name }}</small>{% endif %}</td>
+							<td>{% if t.kind == 'scout' %}<span class="badge badge-info">scout</span>
+								{% else %}<span class="badge badge-secondary">{{ t.kind or 'farm' }}</span>{% endif %}</td>
+							<td class="text-right">{{ t.points|comma if t.points else '—' }}</td>
+							<td>{% if t.owner and t.owner != '0' %}{{ t.owner }}{% else %}<span class="text-muted">barbarian</span>{% endif %}</td>
+							<td class="text-right">{% if t.last_attack %}<span title="{{ t.last_attack|ts }}">{{ t.last_attack|ago }}</span>{% else %}—{% endif %}</td>
+							<td class="text-right">{% if t.coords %}<button class="btn btn-outline-primary btn-sm py-0"
+								onclick="planTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Plan</button>{% endif %}</td>
+						</tr>
+						{% else %}
+						<tr><td colspan="6" class="text-muted">No tracked targets yet.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SPEEDS = {{ plan.speeds|tojson }};
+const WORLD_SPEED = {{ plan.world_speed }} || 1;
+const UNIT_SPEED = {{ plan.unit_speed }} || 1;
+const UNITS = {{ plan.units|tojson }};
+
+function pad(n, w) { return String(n).padStart(w, '0'); }
+function fmtDur(sec) {
+	sec = Math.round(sec);
+	const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+	return (h>0 ? h+':'+pad(m,2) : m) + ':' + pad(s,2);
+}
+function fmtClock(d) { return pad(d.getHours(),2)+':'+pad(d.getMinutes(),2)+':'+pad(d.getSeconds(),2); }
+
+function recompute() {
+	const o = (document.getElementById('origin').value || '').split('|');
+	const ox = parseFloat(o[0]), oy = parseFloat(o[1]);
+	const tx = parseFloat(document.getElementById('tx').value);
+	const ty = parseFloat(document.getElementById('ty').value);
+	const rows = document.getElementById('plan-rows');
+	const distEl = document.getElementById('dist');
+	if ([ox,oy,tx,ty].some(isNaN)) {
+		rows.innerHTML = '';
+		distEl.textContent = 'Enter a target (X and Y) to compute travel times.';
+		return;
+	}
+	const dist = Math.hypot(ox-tx, oy-ty);
+	distEl.textContent = 'Distance: ' + dist.toFixed(2) + ' fields';
+
+	let arriveAt = null;
+	const av = document.getElementById('arrival').value;
+	if (av) {
+		const parts = av.split(':').map(Number);
+		arriveAt = new Date();
+		arriveAt.setHours(parts[0]||0, parts[1]||0, parts[2]||0, 0);
+		if (arriveAt < new Date()) arriveAt.setDate(arriveAt.getDate()+1);
+	}
+	const now = new Date();
+	let html = '';
+	UNITS.forEach(u => {
+		const base = SPEEDS[u];
+		const sec = dist * base / (WORLD_SPEED*UNIT_SPEED) * 60;
+		const arrives = new Date(now.getTime() + sec*1000);
+		let sendBy = '—';
+		if (arriveAt) {
+			const send = new Date(arriveAt.getTime() - sec*1000);
+			const past = send < now;
+			sendBy = '<span class="'+(past?'text-danger':'text-success')+'">'+fmtClock(send)+(past?' (too late)':'')+'</span>';
+		}
+		html += '<tr><td>'+u+'</td><td class="text-right">'+fmtDur(sec)+
+			'</td><td class="text-right">'+fmtClock(arrives)+
+			'</td><td class="text-right">'+sendBy+'</td></tr>';
+	});
+	rows.innerHTML = html;
+}
+
+function planTarget(x, y) {
+	document.getElementById('tx').value = x;
+	document.getElementById('ty').value = y;
+	recompute();
+	window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+['origin','tx','ty','arrival'].forEach(id =>
+	document.getElementById(id).addEventListener('input', recompute));
+recompute();
+</script>
+{% endblock %}

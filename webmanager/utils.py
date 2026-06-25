@@ -11,7 +11,8 @@ import psutil
 try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
-        incoming_session_state, UNIT_ORDER,
+        incoming_session_state, field_distance, unit_travel_seconds,
+        DEFAULT_UNIT_SPEEDS, UNIT_ORDER,
     )
 except Exception:  # pragma: no cover - dashboard still works without travel times
     load_world_speeds = None
@@ -19,6 +20,9 @@ except Exception:  # pragma: no cover - dashboard still works without travel tim
     slowest_floor = None
     rename_command_ingame = None
     incoming_session_state = None
+    field_distance = None
+    unit_travel_seconds = None
+    DEFAULT_UNIT_SPEEDS = {}
     UNIT_ORDER = []
 
 # Building display metadata: in-game name + a short chip code, so the build queue
@@ -100,6 +104,25 @@ class DataReader:
         base = (os.path.join(DataReader.project_root(), "worlds", name)
                 if name else DataReader.project_root())
         return os.path.join(base, *parts)
+
+    @staticmethod
+    def world_speeds():
+        """(world_speed, unit_speed, {unit: base_speed}) for the active world.
+
+        Read via the world-aware data dir (game.incomings.load_world_speeds goes
+        through FileManager, which is not world-aware in the web process), with a
+        fallback to standard TribalWars speeds when the world data hasn't been
+        cached yet.
+        """
+        world = DataReader.cache_grab("world")  # {filename-without-json: data}
+        config = world.get("config") or {}
+        units = world.get("unit_info") or {}
+        world_speed = float(config.get("speed", 1) or 1)
+        unit_speed = float(config.get("unit_speed", 1) or 1)
+        speeds = units.get("speeds") if isinstance(units, dict) else None
+        if not speeds:
+            speeds = dict(DEFAULT_UNIT_SPEEDS)
+        return world_speed, unit_speed, speeds
 
     @staticmethod
     def cache_grab(cache_location):
@@ -547,10 +570,9 @@ class OverviewBuilder:
         if not incomings:
             return by_target
 
-        world_speed = unit_speed = None
-        speeds = {}
-        if load_world_speeds:
-            world_speed, unit_speed, speeds = load_world_speeds()
+        # World-aware speeds (load_world_speeds goes through FileManager, which
+        # isn't world-aware in the web process).
+        world_speed, unit_speed, speeds = DataReader.world_speeds()
         now = int(time.time())
 
         for command_id, entry in incomings.items():
@@ -757,6 +779,62 @@ class OverviewBuilder:
             "incoming_total": sum(len(v["commands"]) for v in active_incoming),
             "recent_incoming": recent_incoming,
             "incoming_logged_out": incoming_logged_out,
+        }
+
+
+class AttackPlanner:
+    """Data for the attack-planner page.
+
+    Surfaces our own villages (possible origins), the targets the bot is already
+    tracking (cache/attacks, enriched from the village DB) and the world's unit
+    speeds, so the page can compute per-unit travel/arrival times client-side.
+    """
+
+    @staticmethod
+    def build(data):
+        managed = data.get("bot", {}) or {}
+        village_db = data.get("villages", {}) or {}
+        attacks = data.get("attacks", {}) or {}
+
+        origins = []
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            origins.append({
+                "id": vid,
+                "name": vdata.get("name") or pub.get("name") or vid,
+                "coords": pub.get("location"),
+                "points": pub.get("points"),
+            })
+        origins.sort(key=lambda o: str(o["name"]))
+
+        targets = []
+        for tid, info in attacks.items():
+            v = village_db.get(str(tid)) or {}
+            name = v.get("name")
+            targets.append({
+                "id": tid,
+                "name": name if isinstance(name, str) and name else None,
+                "coords": v.get("location"),
+                "points": v.get("points"),
+                "owner": v.get("owner"),
+                "tribe": v.get("tribe"),
+                "kind": info.get("kind"),
+                "last_attack": info.get("last_attack"),
+            })
+        targets.sort(key=lambda t: t.get("last_attack") or 0, reverse=True)
+
+        world_speed, unit_speed, speeds = DataReader.world_speeds()
+        units = [u for u in UNIT_ORDER if u in speeds]
+
+        return {
+            "origins": origins,
+            "targets": targets,
+            "units": units,
+            # base minutes-per-field per unit + world multipliers, for the JS calc
+            "speeds": {u: speeds[u] for u in units},
+            "world_speed": world_speed,
+            "unit_speed": unit_speed,
+            "now": int(time.time()),
         }
 
 
