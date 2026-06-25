@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import psutil
@@ -57,20 +58,60 @@ def parse_queue_entry(entry):
 
 
 class DataReader:
+    # Which world's data the dashboard reads, stored per-thread so concurrent
+    # requests (the dev server is threaded) never clobber each other's selection.
+    # Unset/None = the project root (the default/single-world setup). Set per
+    # request from the selected world so one web server can serve several worlds
+    # run with `twb.py --world <name>`.
+    _world_local = threading.local()
+
+    @staticmethod
+    def project_root():
+        return os.path.join(os.path.dirname(__file__), "..")
+
+    @staticmethod
+    def set_active_world(world):
+        """Select which world's config/cache the dashboard reads (None = default)."""
+        if world and str(world).strip():
+            DataReader._world_local.name = os.path.basename(str(world).strip())
+        else:
+            DataReader._world_local.name = None
+
+    @staticmethod
+    def active_world():
+        """The selected world name for this request, or None for the default."""
+        return getattr(DataReader._world_local, "name", None)
+
+    @staticmethod
+    def list_worlds():
+        """Names of configured extra worlds under worlds/ (excludes the default)."""
+        wdir = os.path.join(DataReader.project_root(), "worlds")
+        if not os.path.isdir(wdir):
+            return []
+        return sorted(
+            name for name in os.listdir(wdir)
+            if os.path.isdir(os.path.join(wdir, name))
+        )
+
+    @staticmethod
+    def data_path(*parts):
+        """Resolve config.json / cache paths under the active world's data dir."""
+        name = DataReader.active_world()
+        base = (os.path.join(DataReader.project_root(), "worlds", name)
+                if name else DataReader.project_root())
+        return os.path.join(base, *parts)
+
     @staticmethod
     def cache_grab(cache_location):
         output = {}
-        c_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "cache",
-            cache_location
-        )
+        c_path = DataReader.data_path("cache", cache_location)
+        if not os.path.isdir(c_path):
+            return output
         for existing in os.listdir(c_path):
             existing = str(existing)
             if not existing.endswith(".json"):
                 continue
-            t_path = os.path.join(os.path.dirname(__file__), "..", "cache", cache_location, existing)
+            t_path = DataReader.data_path("cache", cache_location, existing)
             with open(t_path, 'r') as f:
                 try:
                     output[existing.replace('.json', '')] = json.load(f)
@@ -95,7 +136,12 @@ class DataReader:
 
     @staticmethod
     def config_grab():
-        with open(os.path.join(os.path.dirname(__file__), "..", "config.json"), 'r') as f:
+        # A freshly created world has no config.json yet; return an empty config
+        # so the dashboard renders a "not set up" view instead of 500-ing.
+        path = DataReader.data_path("config.json")
+        if not os.path.exists(path):
+            return {}
+        with open(path, 'r') as f:
             return json.load(f)
 
     @staticmethod
@@ -104,7 +150,7 @@ class DataReader:
             value = json.loads(value)
         except:
             pass
-        config_file_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+        config_file_path = DataReader.data_path("config.json")
         with open(config_file_path, 'r') as config_file:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
             if "." in parameter:
@@ -119,7 +165,7 @@ class DataReader:
 
     @staticmethod
     def village_config_set(village_id, parameter, value):
-        config_file_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+        config_file_path = DataReader.data_path("config.json")
         with open(config_file_path, 'r') as config_file:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
             if village_id not in template['villages']:
@@ -137,9 +183,7 @@ class DataReader:
     def incoming_tag_set(command_id, tag):
         """Persist a user-set tag onto a cached incoming command."""
         command_id = os.path.basename(str(command_id))
-        path = os.path.join(
-            os.path.dirname(__file__), "..", "cache", "incomings", "%s.json" % command_id
-        )
+        path = DataReader.data_path("cache", "incomings", "%s.json" % command_id)
         if not os.path.exists(path):
             return False
         with open(path, 'r') as f:
@@ -166,7 +210,7 @@ class DataReader:
         endpoint = (session or {}).get("endpoint") or ""
         user_agent = None
         try:
-            cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+            cfg_path = DataReader.data_path("config.json")
             with open(cfg_path, 'r') as cf:
                 user_agent = json.load(cf).get("bot", {}).get("user_agent")
         except (OSError, ValueError):
@@ -181,7 +225,7 @@ class DataReader:
         defaults so a village can be reset to the template behaviour in one click.
         Returns the number of villages updated, or False if there is no template.
         """
-        config_file_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+        config_file_path = DataReader.data_path("config.json")
         with open(config_file_path, 'r') as config_file:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
         defaults = template.get("village_template", {})
@@ -210,7 +254,7 @@ class DataReader:
             value = json.loads(value)
         except (ValueError, TypeError):
             pass
-        config_file_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+        config_file_path = DataReader.data_path("config.json")
         with open(config_file_path, 'r') as config_file:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
         for vid in template.get("villages", {}):
@@ -223,7 +267,7 @@ class DataReader:
 
     @staticmethod
     def get_session():
-        c_path = os.path.join(os.path.dirname(__file__), "..", "cache", "session.json")
+        c_path = DataReader.data_path("cache", "session.json")
         if not os.path.exists(c_path):
             return {"raw": "", "endpoint": "None", "server": "None", "world": "None"}
         with open(c_path, 'r') as session_file:
@@ -268,7 +312,7 @@ class DataReader:
         if not cookies:
             return False
 
-        cache_dir = os.path.join(os.path.dirname(__file__), "..", "cache")
+        cache_dir = DataReader.data_path("cache")
         session_path = os.path.join(cache_dir, "session.json")
 
         endpoint, server = None, None
@@ -717,53 +761,77 @@ class OverviewBuilder:
 
 
 class BotManager:
-    pid = None
+    def __init__(self):
+        # world key ("" = default) -> pid we started, so each world's bot is
+        # tracked and controlled independently.
+        self._pids = {}
 
     @staticmethod
-    def find_bot_pid():
-        """
-        Locate a running twb.py process regardless of who started it.
+    def _world_key(world):
+        """Normalise a world name to a safe key; "" means the default world."""
+        if world and str(world).strip():
+            return os.path.basename(str(world).strip())
+        return ""
 
-        The dashboard and the bot are separate processes, and the bot is usually
-        started by hand (twb.py / start.sh) rather than through this UI. Scanning
-        for the process by command line means the status indicator is correct even
-        then, instead of only when the UI launched the bot itself.
+    @staticmethod
+    def _cmdline_world(cmdline):
+        """The --world value from a process command line, or None (default)."""
+        parts = [str(p) for p in cmdline]
+        for i, part in enumerate(parts):
+            if part == "--world" and i + 1 < len(parts):
+                return BotManager._world_key(parts[i + 1])
+            if part.startswith("--world="):
+                return BotManager._world_key(part.split("=", 1)[1])
+        return ""
+
+    @staticmethod
+    def find_bot_pid(world=None):
+        """Locate the running twb.py process for a given world.
+
+        Matches a python process running twb.py whose --world matches (default
+        world = no --world). Scanning by command line keeps the status accurate
+        even when the bot was started by hand rather than through this UI.
         """
+        want = BotManager._world_key(world)
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
                 cmdline = proc.info.get("cmdline") or []
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-            # Require a python process that actually runs a twb.py script
-            # (`python twb.py`), so editors or greps merely mentioning the
-            # filename don't get mistaken for a running bot.
             runs_python = any("python" in str(part).lower() for part in cmdline)
             runs_script = any(str(part).strip("'\"").endswith("twb.py") for part in cmdline)
-            if runs_python and runs_script:
+            if runs_python and runs_script and BotManager._cmdline_world(cmdline) == want:
                 return proc.info["pid"]
         return None
 
-    def is_running(self):
+    def is_running(self, world=None):
         # Trust a process we started ourselves, otherwise detect an externally
         # started bot so the status is accurate however the bot was launched.
-        if self.pid and psutil.pid_exists(self.pid):
+        key = self._world_key(world)
+        pid = self._pids.get(key)
+        if pid and psutil.pid_exists(pid):
             return True
-        detected = self.find_bot_pid()
+        detected = self.find_bot_pid(world)
         if detected:
-            self.pid = detected
+            self._pids[key] = detected
             return True
-        self.pid = None
+        self._pids.pop(key, None)
         return False
 
-    def start(self):
+    def start(self, world=None):
+        key = self._world_key(world)
         wd = os.path.join(os.path.dirname(__file__), "..")
-        proc = subprocess.Popen("python twb.py", cwd=wd, shell=True)
-        self.pid = proc.pid
-        print("Bot started successfully")
+        cmd = "python twb.py" + (" --world %s" % key if key else "")
+        proc = subprocess.Popen(cmd, cwd=wd, shell=True)
+        self._pids[key] = proc.pid
+        print("Bot started successfully (%s)" % (key or "default"))
 
-    def stop(self):
-        target = self.pid if (self.pid and psutil.pid_exists(self.pid)) else self.find_bot_pid()
+    def stop(self, world=None):
+        key = self._world_key(world)
+        target = self._pids.get(key)
+        if not (target and psutil.pid_exists(target)):
+            target = self.find_bot_pid(world)
         if target:
             os.kill(target, signal.SIGTERM)
-            self.pid = None
-            print("Bot stopped successfully")
+            self._pids.pop(key, None)
+            print("Bot stopped successfully (%s)" % (key or "default"))

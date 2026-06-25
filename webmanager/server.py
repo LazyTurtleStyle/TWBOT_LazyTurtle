@@ -3,7 +3,7 @@ import os
 import sys
 sys.path.insert(0, "../")
 
-from flask import Flask, jsonify, send_from_directory, request, render_template
+from flask import Flask, jsonify, send_from_directory, request, render_template, redirect
 
 try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
@@ -23,6 +23,33 @@ bm = BotManager()
 
 app = Flask(__name__)
 app.config["DEBUG"] = True
+
+# Cookie holding the selected world ("" / absent = the default world).
+WORLD_COOKIE = "twb_world"
+
+
+@app.before_request
+def _select_active_world():
+    """Point DataReader at the world chosen via the navbar switcher (cookie)."""
+    DataReader.set_active_world(request.cookies.get(WORLD_COOKIE))
+
+
+@app.context_processor
+def _inject_worlds():
+    """Make the active world + world list available to every template."""
+    return {"active_world": DataReader.active_world(), "worlds": DataReader.list_worlds()}
+
+
+@app.route('/world/select')
+def world_select():
+    """Switch the dashboard to a world (stored in a cookie) and reload."""
+    world = request.args.get("world", "")
+    resp = redirect(request.referrer or "/")
+    if world and world != "__default__":
+        resp.set_cookie(WORLD_COOKIE, os.path.basename(world), max_age=60 * 60 * 24 * 365)
+    else:
+        resp.set_cookie(WORLD_COOKIE, "", expires=0)
+    return resp
 
 
 @app.template_filter('ts')
@@ -274,7 +301,7 @@ def sync():
     attacks = DataReader.cache_grab("attacks")
     config = DataReader.config_grab()
     managed = DataReader.cache_grab("managed")
-    bot_status = bm.is_running()
+    bot_status = bm.is_running(DataReader.active_world())
 
     # Newest reports first (higher id == more recent), keep the latest 100.
     sort_reports = {key: value for key, value in
@@ -299,14 +326,16 @@ def get_vars():
 
 @app.route('/bot/start')
 def start_bot():
-    bm.start()
-    return jsonify(bm.is_running())
+    world = DataReader.active_world()
+    bm.start(world)
+    return jsonify(bm.is_running(world))
 
 
 @app.route('/bot/stop')
 def stop_bot():
-    bm.stop()
-    return jsonify(not bm.is_running())
+    world = DataReader.active_world()
+    bm.stop(world)
+    return jsonify(not bm.is_running(world))
 
 
 @app.route('/config', methods=['GET'])

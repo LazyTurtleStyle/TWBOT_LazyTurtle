@@ -77,6 +77,24 @@
         <li class="nav-item">
           <a class="nav-link disabled" href="/attacks">Attack planner (alpha)</a>
         </li>
+        {% if worlds %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="worldDrop" role="button"
+             data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"
+             title="Switch which world the dashboard shows">
+            World: <strong>{{ active_world or 'Default' }}</strong>
+          </a>
+          <div class="dropdown-menu" aria-labelledby="worldDrop">
+            <a class="dropdown-item {% if not active_world %}active{% endif %}"
+               href="/world/select?world=__default__">Default</a>
+            <div class="dropdown-divider"></div>
+            {% for w in worlds %}
+            <a class="dropdown-item {% if active_world == w %}active{% endif %}"
+               href="/world/select?world={{ w }}">{{ w }}</a>
+            {% endfor %}
+          </div>
+        </li>
+        {% endif %}
       </ul>
       <div class="btn-group btn-group-sm ml-auto" role="group" id="theme-switch">
         <button type="button" class="btn btn-outline-light" data-theme-set="light" title="Light mode">Light</button>
