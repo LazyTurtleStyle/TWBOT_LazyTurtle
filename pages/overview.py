@@ -92,15 +92,12 @@ class Storage:
             ValueError: If the resources string format is invalid.
             ValueError: If the capacity string format is invalid.
         """
-        resource_values = resources.replace(".", "").split(" ")
-        if len(resource_values) != 3:
-            print("Invalid resources string format")
-        try:
-            self.wood = int(resource_values[0])
-            self.stone = int(resource_values[1])
-            self.iron = int(resource_values[2])
-        except ValueError:
+        resource_values = [v for v in resources.replace(".", "").split() if v.lstrip("-").isdigit()]
+        if len(resource_values) < 3:
             raise ValueError("Invalid resources string format")
+        self.wood = int(resource_values[0])
+        self.stone = int(resource_values[1])
+        self.iron = int(resource_values[2])
         try:
             self.capacity = int(capacity)
         except ValueError:
@@ -218,38 +215,88 @@ class OverviewPage:
         self.result_get: Response = self._get_overview_villages_data()
         self.soup = BeautifulSoup(self.result_get.text, "html.parser")
         self.header_info = self.soup.find("table", id="header_info")
-        self.production_table = self.soup.find("table", id="production_table")
+        self.production_table = self.soup.find("table", id="production_table") or self.soup.find("table", id="combined_table")
         self.villages_data: Dict[str, Village] = {}
         self.parse_production_table()
         self.parse_header_info()
 
     def _get_overview_villages_data(self):
-        """Get the overview villages data using the wrapper object."""
-        return self.wrapper.get_url("game.php?screen=overview_villages")
+        """Get the overview villages data using the wrapper object.
+
+        The mode is pinned to 'combined' explicitly: TribalWars remembers the
+        last-viewed overview mode server-side, and the incoming-attack poller
+        switches it to 'incomings' (a page with no village/production table). An
+        unqualified request would then inherit that mode and parse zero villages,
+        wrongly reporting every village as "not available". 'combined' always
+        renders the parseable combined_table regardless of what the poller left.
+        """
+        return self.wrapper.get_url("game.php?screen=overview_villages&mode=combined&group=0")
 
     def parse_production_table(self):
         """Parse the production table to extract village data."""
-        if self.production_table:
-            rows = self.production_table.find_all("tr")
-            for row in rows:
-                if row.find_all("td"):
-                    cells = row.find_all("td")
-                    idx_offset = 1 if len(cells[0].contents) == 0 else 0  # Compatibility with premium account
-                    village_id = cells[idx_offset].contents[1].attrs["data-id"]
+        if not self.production_table:
+            return
+        rows = self.production_table.find_all("tr")
+        for row in rows:
+            if not row.find_all("td"):
+                continue
+            try:
+                cells = row.find_all("td")
+                idx_offset = 1 if len(cells[0].contents) == 0 else 0  # Compatibility with premium account
 
-                    name, coordinates, continent = self._extract_name_cords_continent(
-                        cells[idx_offset].text.strip()
-                    )
-                    points = cells[1 + idx_offset].text.strip()
-                    resources = cells[2 + idx_offset].text.strip()
-                    storage_capacity = cells[3 + idx_offset].text.strip()
+                # Find data-id: try contents[1] first, then search any child element
+                cell = cells[idx_offset]
+                el_with_id = None
+                if len(cell.contents) > 1 and hasattr(cell.contents[1], "attrs") and "data-id" in cell.contents[1].attrs:
+                    el_with_id = cell.contents[1]
+                else:
+                    el_with_id = cell.find(attrs={"data-id": True})
+                if el_with_id is None:
+                    continue
+                village_id = el_with_id.attrs["data-id"]
 
-                    storage = Storage(resources, storage_capacity)
-                    farm = Farm(cells[4 + idx_offset].text.strip())
-                    village = Village(
-                        village_id, name, coordinates, continent, points, storage, farm
-                    )
-                    self.villages_data[village_id] = village
+                name, coordinates, continent = self._extract_name_cords_continent(
+                    cells[idx_offset].text.strip()
+                )
+
+                # Farm is always the last cell (\d+/\d+ format)
+                farm = Farm(cells[-1].text.strip())
+
+                # Find wood/stone/iron and storage by scanning for 4 consecutive numeric cells
+                # before the farm cell
+                numeric_run = []
+                for i in range(len(cells) - 2, idx_offset, -1):
+                    val = cells[i].text.strip().replace(".", "").replace(",", "")
+                    if val.lstrip("-").isdigit():
+                        numeric_run.insert(0, (i, int(val)))
+                        if len(numeric_run) == 4:
+                            break
+                    else:
+                        numeric_run = []
+
+                if len(numeric_run) < 4:
+                    continue
+
+                wood = str(numeric_run[0][1])
+                stone = str(numeric_run[1][1])
+                iron = str(numeric_run[2][1])
+                storage_capacity = str(numeric_run[3][1])
+                storage = Storage(f"{wood} {stone} {iron}", storage_capacity)
+
+                # Points: first number found after village cell
+                points = "0"
+                for i in range(idx_offset + 1, len(cells)):
+                    m = re.match(r'(\d[\d.]*)', cells[i].text.strip())
+                    if m:
+                        points = m.group(1).replace(".", "")
+                        break
+
+                village = Village(
+                    village_id, name, coordinates, continent, points, storage, farm
+                )
+                self.villages_data[village_id] = village
+            except Exception:
+                pass
 
     def parse_header_info(self) -> None:
         """Parse header information to get world options."""
