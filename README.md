@@ -46,4 +46,21 @@ You need to use the cookie: header value
 *optional: If everything is set-up correctly and the bot is running you can `cd` into the webmanager directory and start the bot interface by running `server.py`. You can access this dashboard by visiting http://127.0.0.1:5000/ in your browser.
 A lot of new features will be added to the dashboard soon.*
 
+### Running multiple worlds
+
+One copy of the bot can play several worlds at once, each with its own config,
+session and cache, all from a single dashboard:
+
+- Start a bot per world with `python twb.py --world <name>` (e.g.
+  `python twb.py --world nl99`). Each world keeps its data under
+  `worlds/<name>/` (`config.json` + `cache/`); the first run sets it up like
+  normal. Templates are shared across worlds.
+- Run **one** web dashboard (`server.py`). A **World** dropdown appears in the
+  navbar once you have at least one `worlds/<name>/` folder; pick a world to view
+  and control its bot. Start/stop and status target that world's process.
+- Running plain `python twb.py` (no `--world`) is unchanged and uses the project
+  root, so existing single-world setups keep working exactly as before.
+
 More information about configuring the bot can be found in the readme directory!
+
+Before turning on farming, run through [readme/farm_checklist.md](readme/farm_checklist.md) - it's easy to miss a setting that leaves farming silently disabled or wrong.

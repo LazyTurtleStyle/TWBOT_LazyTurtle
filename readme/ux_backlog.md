@@ -152,10 +152,14 @@ into a "Setup / World" area, ideally a first-run wizard.
   as numbered steps, reusing the grouped config controls + the Telegram setup card, separate
   from the day-to-day Bot tab. Backend: `SETUP_SECTIONS` + `pre_process_setup` in
   `webmanager/server.py`.
-- [ ] **Support creating a fresh/empty bot for another world** (new config) from the UI —
-  this is the scenario where the set-once server settings actually matter again. Bigger job:
-  the bot is single-config today (one `config.json`), so this needs multi-config/profile
-  support before a UI makes sense.
+- [x] **Multi-world support.** The bot is no longer single-config: `twb.py --world <name>`
+  runs a world out of `worlds/<name>/` (own config.json + cache/ + session; templates shared),
+  and one web dashboard serves all worlds via a navbar **World** switcher (per-request
+  thread-local selection; `BotManager` tracks/starts/stops each world's process by its
+  `--world` cmdline). No `--world` = project root, unchanged. Foundation: `FileManager`
+  data-dir + `DataReader.data_path`.
+  - [ ] Future nicety: a "create new world" button in the UI that scaffolds `worlds/<name>/`
+    and walks the Setup steps, instead of bootstrapping the world from the CLI first.
 - [x] **Notifications: add setup instructions.** The Notifications config tab now shows a
   step-by-step "Set up Telegram notifications" card (@BotFather token, add bot to chat, get
   chat id, enable + save) plus a **Send test message** button. Backend: data-driven
