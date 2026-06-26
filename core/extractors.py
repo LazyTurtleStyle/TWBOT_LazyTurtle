@@ -233,6 +233,36 @@ class Extractor:
         return data
 
     @staticmethod
+    def farm_assistant_icons(res):
+        """
+        Reads the per-target A/B/C/D Farm Assistant icons from the am_farm overview page.
+        For each village id, returns whether each icon is disabled (greyed out in-game,
+        e.g. not enough troops or the wall makes it a guaranteed loss) and, for the C
+        ("from report") icon, the exact troop forecast the game itself calculated
+        (data-units-forecast), since that troop count isn't something we choose ourselves.
+        Returns {village_id: {"a": {...}, "b": {...}, "c": {...}}}, only for icons present.
+        """
+        if type(res) != str:
+            res = res.text
+        result = {}
+        for match in re.finditer(
+                r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>',
+                res,
+        ):
+            attrs, vid, kind = match.group(1), match.group(2), match.group(3)
+            disabled = "farm_icon_disabled" in attrs
+            forecast = None
+            forecast_match = re.search(r'data-units-forecast="([^"]*)"', attrs)
+            if forecast_match:
+                raw = forecast_match.group(1).replace("&quot;", '"')
+                forecast = json.loads(raw, strict=False)
+            result.setdefault(vid, {})[kind] = {
+                "disabled": disabled,
+                "forecast": forecast,
+            }
+        return result
+
+    @staticmethod
     def get_daily_reward(res):
         """
         Detects if there are unopened daily rewards

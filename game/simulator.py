@@ -309,6 +309,45 @@ class Simulator:
             )
         return max(0, resulting)
 
+    def simulate_against_wall(self, attacker_units, wall, moral=100, luck=0):
+        """
+        Estimates average attacker losses from a wall's passive defense
+        when the target has zero defending troops (e.g. a stale-but-safe
+        farm report). Real TW combat still rolls a random luck factor per
+        attack, so treat this as an average-case estimate, not a guarantee.
+        """
+        wall = wall if wall else 0
+        losses = {unit: 0.0 for unit in self.pool}
+        if wall <= 0:
+            return losses
+
+        moral = (moral if moral else 100) / 100
+        luck = 1 + (luck if luck else 0) / 100
+
+        full_units = {unit: attacker_units.get(unit, 0) for unit in self.pool}
+        attack_strength = self.attack_sum(full_units)
+        attack_food = self.attack_sum_food(full_units)
+        attack_food_sum = self.get_sum(attack_food)
+        if attack_food_sum == 0:
+            return losses
+
+        wall_defense = round(math.pow(1.25, wall) * 20)
+        for attack_type in attack_strength:
+            if attack_strength[attack_type] == 0 or attack_food[attack_type] == 0:
+                continue
+            ratio = attack_food[attack_type] / attack_food_sum
+            defense = wall_defense * ratio
+            a = attack_strength[attack_type] * moral * luck / defense
+            if a < 1:
+                # Defense outclasses this attack type entirely, all of it dies
+                for unit in self.attack_units[attack_type]:
+                    losses[unit] = full_units[unit]
+            else:
+                loss_fraction = math.sqrt(1 / a) / a
+                for unit in self.attack_units[attack_type]:
+                    losses[unit] = full_units[unit] * loss_fraction
+        return losses
+
     def simulate(self, attackerUnits, defenderUnits, wall, nightbonus, moral, luck):
         wall = wall if wall else 0
         moral = moral if moral else 100
