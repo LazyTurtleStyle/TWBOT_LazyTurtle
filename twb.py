@@ -264,6 +264,10 @@ class TWB:
                     )
                     config = self.add_village(village_id=found_vid)
 
+        # Forget villages that are no longer owned (conquered/nobled) so their
+        # stale state stops surfacing on the dashboard.
+        config = self.prune_lost_villages(config)
+
         return overview_page, config
 
     def add_village(self, village_id, template=None):
@@ -282,6 +286,35 @@ class TWB:
         FileManager.save_json_file(original, "config.json")
         print("Deployed new configuration file")
         return original
+
+    def prune_lost_villages(self, config):
+        """Forget villages that are no longer owned (conquered / nobled).
+
+        Only runs when logged in with a non-empty found_villages list, so a
+        logged-out or failed overview can never wipe still-owned villages. For
+        each lost village it drops the config entry, deletes the cached state
+        (so the dashboard stops showing the village, its troops and resources)
+        and stops managing it. config.json is backed up to config.bak first.
+        """
+        if not self.found_villages:
+            return config
+        lost = [vid for vid in list(config.get("villages", {}).keys())
+                if vid not in self.found_villages]
+        if not lost:
+            return config
+
+        FileManager.copy_file("config.json", "config.bak")
+        for vid in lost:
+            print("Village %s is no longer owned (conquered/nobled) - removing it" % vid)
+            Notification.send(
+                "TWB: village %s was lost (conquered/nobled). Removing it from the bot." % vid)
+            config["villages"].pop(vid, None)
+            FileManager.remove_file("cache/managed/%s.json" % vid)
+            # Drop it from the in-memory managed list so the run loop stops touching it.
+            self.villages = [v for v in self.villages if str(v.village_id) != str(vid)]
+        FileManager.save_json_file(config, "config.json")
+        print("Deployed new configuration file (removed %d lost village(s))" % len(lost))
+        return config
 
     @staticmethod
     def get_world_options(overview_page: OverviewPage, config):

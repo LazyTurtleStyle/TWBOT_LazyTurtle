@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 
+from core.filemanager import FileManager
 from game.attack import AttackCache
 from game.reports import ReportCache
 
@@ -11,8 +12,12 @@ class VillageManager:
     @staticmethod
     def farm_manager(verbose=False, clean_reports=False):
         logger = logging.getLogger("FarmManager")
-        with open("config.json", "r") as f:
-            config = json.load(f)
+        # Read through FileManager so the active world's config is found
+        # (worlds/<name>/config.json), not just the project-root config.json.
+        config = FileManager.load_json_file("config.json")
+        if not config:
+            logger.warning("No config.json found for the active world; skipping farm manager")
+            return
 
         if verbose:
             logger.info("Villages: %d", len(config["villages"]))
@@ -50,7 +55,7 @@ class VillageManager:
                 percentage_lost = total_loss_count / total_sent_count * 100
 
             perf = ""
-            if data["high_profile"]:
+            if "high_profile" in data and data["high_profile"]:
                 perf = "High Profile "
             if "low_profile" in data and data["low_profile"]:
                 perf = "Low Profile "
@@ -85,7 +90,7 @@ class VillageManager:
                         data["high_profile"] = True
                         AttackCache.set_cache(farm, data)
 
-            if percentage_lost > 20 and not data["low_profile"]:
+            if percentage_lost > 20 and not data.get("low_profile"):
                 logger.warning(f"Dangerous {percentage_lost} percentage lost units! Extending farm time")
                 data["low_profile"] = True
                 data["high_profile"] = False
@@ -99,7 +104,8 @@ class VillageManager:
             logger.info("Total loot: %s" % t)
 
         if clean_reports:
-            list_of_files = sorted(["./cache/reports/" + f for f in os.listdir("./cache/reports/")],
+            reports_dir = FileManager._resolve("cache/reports")
+            list_of_files = sorted([os.path.join(reports_dir, f) for f in os.listdir(reports_dir)],
                                    key=os.path.getctime)
 
             logger.info(f"Found {len(list_of_files)} files")

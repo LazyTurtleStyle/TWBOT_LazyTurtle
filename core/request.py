@@ -159,10 +159,11 @@ class WebWrapper:
             self.logger.warning("Current session cache not valid")
 
         self.web.cookies.clear()
-        cookie_file = "cache/cookies.txt"
-        if os.path.exists(cookie_file):
-            with open(cookie_file, 'r') as f:
-                cinp = f.read()
+        # Read through FileManager so the cookie file is found in the active
+        # world's data dir (worlds/<name>/cache/cookies.txt), not just the
+        # project-root cache/. Only prompt interactively as a last resort.
+        cinp = FileManager.read_file("cache/cookies.txt")
+        if cinp is not None:
             print("Loaded cookies from cache/cookies.txt")
         else:
             cinp = input("Enter browser cookie string> ")

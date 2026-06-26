@@ -4,6 +4,7 @@ Detects certain building levels from TWStats
 
 import json
 import logging
+import os
 import sys
 from collections import defaultdict
 
@@ -59,12 +60,12 @@ class TwStats:
                 building_level, village_population = int(tds[0]), int(tds[-1])
                 output[upgrade_building][building_level] = village_population
 
-        try:
-            with open('cache/world/buildings_%s.json' % world, 'w') as f:
-                f.write(json.dumps(output))
-        except:
-            with open(f"../cache/world/buildings_{world}.json", "w", encoding="utf-8") as f:
-                f.write(json.dumps(output))
+        # Write through the active world's data dir (worlds/<name>/cache/world/),
+        # creating it if needed — matches the world-aware read in get_cache().
+        target = FileManager._resolve("cache/world/buildings_%s.json" % world)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(json.dumps(output))
         self.output = output
         return output
 
