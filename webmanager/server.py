@@ -42,6 +42,7 @@ def _inject_worlds():
         "active_world": DataReader.active_world(),
         "worlds": DataReader.list_worlds(),
         "bot_running": bm.is_running(DataReader.active_world()),
+        "quick_toggles": quick_settings_state(),
     }
 
 
@@ -75,6 +76,22 @@ def format_comma(value):
         return "{:,}".format(int(value))
     except (ValueError, TypeError):
         return value
+
+
+@app.template_filter('kshort')
+def format_kshort(value):
+    """Abbreviate big numbers: 1447 -> 1.4k, 35115 -> 35.1k, 1.2M -> 1.2m."""
+    try:
+        n = int(value)
+    except (ValueError, TypeError):
+        return value
+    if abs(n) < 1000:
+        return str(n)
+    for div, suffix in ((1_000_000_000, 'b'), (1_000_000, 'm'), (1000, 'k')):
+        if abs(n) >= div:
+            out = "{:.1f}".format(n / div).rstrip('0').rstrip('.')
+            return out + suffix
+    return str(n)
 
 
 @app.template_filter('dur')
@@ -364,7 +381,7 @@ def defense_page():
 
 @app.route('/setup', methods=['GET'])
 def setup_page():
-    return render_template('setup.html', data=sync(), steps=pre_process_setup(),
+    return render_template('setup.html', data=sync(), sections=pre_process_config(),
                            helpfile=help_file, section_labels=section_labels,
                            section_setup=section_setup)
 
@@ -380,11 +397,82 @@ def notification_test():
     return jsonify({"ok": ok, "error": err})
 
 
+def _warehouse_capacity(level):
+    """Standard TribalWars warehouse capacity for a storage level (caps at 400k)."""
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return 1000
+    return min(400000, int(round(1000 * (1.2294934 ** (level - 1))))) if level else 1000
+
+
+def _farm_capacity(level):
+    """Standard TribalWars farm population capacity for a farm level (caps at 24k)."""
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return 240
+    return min(24000, int(round(240 * (1.172103 ** (level - 1))))) if level else 240
+
+
+def pre_process_village_detail(data, vid):
+    """Dashboard view-model for one village (resources + capacity, troops, queue)."""
+    vd = (data.get('bot', {}) or {}).get(str(vid)) or {}
+    public = vd.get('public', {}) or {}
+    res = vd.get('resources', {}) or {}
+    levels = vd.get('buidling_levels', {}) or {}
+    prod = vd.get('production', {}) or {}
+
+    def _i(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    # Prefer the exact capacity the game reported; fall back to the level formula.
+    cap = _i(vd.get('storage_max')) or _warehouse_capacity(levels.get('storage'))
+    pop_cap = _i(vd.get('pop_max')) or _farm_capacity(levels.get('farm'))
+
+    resources = []
+    for key, label in (('wood', 'Wood'), ('stone', 'Clay'), ('iron', 'Iron')):
+        stored = _i(res.get(key))
+        resources.append({'key': key, 'label': label, 'stored': stored, 'cap': cap,
+                          'pct': min(100, round(stored * 100 / cap)) if cap else 0,
+                          'full': cap and stored >= cap * 0.97,
+                          'prod': _i(prod.get(key))})
+    # pop_used is exact when present; otherwise resman stores free pop, so derive used.
+    if vd.get('pop_used') is not None:
+        pop = _i(vd.get('pop_used'))
+    else:
+        pop = max(0, pop_cap - _i(res.get('pop')))
+    total = {k: _i(v) for k, v in (vd.get('troops', {}) or {}).items()}
+    home = {k: _i(v) for k, v in (vd.get('available_troops', {}) or {}).items()}
+    away = {k: max(0, total.get(k, 0) - home.get(k, 0)) for k in total}
+    return {
+        'id': str(vid),
+        'name': vd.get('name') or public.get('name') or vid,
+        'location': public.get('location'),
+        'points': public.get('points'),
+        'pop_now': pop, 'pop_cap': pop_cap,
+        'pop_pct': min(100, round(pop * 100 / pop_cap)) if pop_cap else 0,
+        'resources': resources,
+        'storage_level': levels.get('storage'),
+        'farm_level': levels.get('farm'),
+        'troops_total': total, 'troops_home': home, 'troops_away': away,
+        'queue_count': vd.get('active_building_queue', 0),
+        'queue_plan': (vd.get('building_queue') or [])[:8],
+        'under_attack': vd.get('under_attack'),
+        'scavenge_state': vd.get('scavenge_state'),
+        'has_snapshot': bool(vd),
+    }
+
+
 @app.route('/village', methods=['GET'])
 def get_village_config():
     data = sync()
     vid = request.args.get("id", None)
     return render_template('village.html', data=data, config=pre_process_village_config(village_id=vid),
+                           detail=pre_process_village_detail(data, vid),
                            current_select=vid, helpfile=help_file)
 
 
@@ -397,9 +485,69 @@ def get_map():
     return render_template('map.html', data=sync_data, map=map_data)
 
 
+def pre_process_overrides(data):
+    """Per-village override rows for the villages page.
+
+    A village "overrides" the global village_template when its stored config
+    differs from it in any field. Fields that are inherently per-village
+    (additional_farms) or that the template itself doesn't carry are ignored.
+    """
+    config = data.get('config', {}) or {}
+    template = config.get('village_template', {}) or {}
+    villages_cfg = config.get('villages', {}) or {}
+    ignore = {'additional_farms'}
+    compare_keys = [k for k in template.keys() if k not in ignore]
+
+    rows = []
+    overriding = 0
+    for vid, vdata in (data.get('bot', {}) or {}).items():
+        vid = str(vid)
+        public = (vdata or {}).get('public', {}) or {}
+        loc = public.get('location')
+        coord = '{}|{}'.format(loc[0], loc[1]) if isinstance(loc, (list, tuple)) and len(loc) == 2 else None
+        vcfg = villages_cfg.get(vid)
+
+        if vcfg is None:
+            rows.append({
+                'id': vid,
+                'name': vdata.get('name') or public.get('name') or vid,
+                'coord': coord,
+                'has_config': False,
+                'overrides': False,
+                'diff': [],
+                'building': None,
+                'units': None,
+                'managed': False,
+            })
+            continue
+
+        diff = [k for k in compare_keys if vcfg.get(k) != template.get(k)]
+        is_override = bool(diff)
+        if is_override:
+            overriding += 1
+        rows.append({
+            'id': vid,
+            'name': vdata.get('name') or public.get('name') or vid,
+            'coord': coord,
+            'has_config': True,
+            'overrides': is_override,
+            'diff': diff,
+            'building': vcfg.get('building'),
+            'units': vcfg.get('units'),
+            'managed': bool(vcfg.get('managed')),
+        })
+
+    rows.sort(key=lambda r: (not r['overrides'], r['name'].lower()))
+    total = len(rows)
+    summary = '{} of {} village{} override the global template.'.format(
+        overriding, total, '' if total == 1 else 's')
+    return {'rows': rows, 'summary': summary, 'overriding': overriding, 'total': total}
+
+
 @app.route('/villages', methods=['GET'])
 def get_village_overview():
-    return render_template('villages.html', data=sync())
+    data = sync()
+    return render_template('villages.html', data=data, overrides=pre_process_overrides(data))
 
 
 @app.route('/building_templates', methods=['GET', 'POST'])

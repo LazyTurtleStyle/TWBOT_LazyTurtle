@@ -2,61 +2,68 @@
 {% block title %}Villages{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center mt-3 mb-2">
-	<h4 class="mb-0">Villages</h4>
-	<button id="apply_all_default" class="btn btn-sm btn-outline-secondary ml-3"
-		title="Overwrite every village's settings with the default village template">Reset all to default template</button>
-</div>
-<div class="row">
-	<table class="table table-striped">
-		<thead>
-			<tr>
-				<th>ID#</th>
-				<th>Name</th>
-				<th>Info</th>
-				<th>Building</th>
-				<th>Units</th>
-				<th>Actions</th>
-			</tr>
-		</thead>
-		<tbody>
-			{% for village_id in data.bot %}
+<div class="module-section">
+	<div class="section-head">
+		<div class="subhead" style="border:0;padding:0">Per-village overrides</div>
+		<button id="apply_all_default" class="btn btn-sm"
+			title="Overwrite every village's settings with the default village template">Reset all to default</button>
+	</div>
+	<div class="faint" style="font-size:12px;margin-top:-4px">
+		{{ overrides.summary }} Villages with a badge below override the global template — edit them here, not in a separate menu.
+	</div>
+
+	<div class="panel" style="box-shadow:none;margin-top:10px">
+		<table class="tw">
+			<thead>
 				<tr>
-					<td>{{village_id}}</td>
-					<td>{{data.bot[village_id].public.name}}</td>
+					<th>Village</th>
+					<th>Building</th>
+					<th>Units</th>
+					<th>Queue</th>
+					<th>Status</th>
+					<th class="num"></th>
+				</tr>
+			</thead>
+			<tbody>
+				{% for row in overrides.rows %}
+				<tr{% if row.overrides %} class="alert"{% endif %}>
 					<td>
-						<img src="/static/images/wood.png" /> {{data.bot[village_id].resources.wood}}
-						<img src="/static/images/stone.png" /> {{data.bot[village_id].resources.stone}}
-						<img src="/static/images/iron.png" /> {{data.bot[village_id].resources.iron}}
-						<img src="/static/images/worker.png" /> {{data.bot[village_id].resources["pop"]}}
+						<a class="vlink" href="village?id={{ row.id }}">{{ row.name }}</a>
+						{% if row.coord %}<span class="coord">{{ row.coord }}</span>{% endif %}
 					</td>
-					<td>{% if village_id in data.config.villages %} {{data.config.villages[village_id].building}} {% else %} No config {% endif %}</td>
-					<td>{% if village_id in data.config.villages %} {{data.config.villages[village_id].units}} {% else %} No config {% endif %}</td>
 					<td>
-						<a href="map?center={{village_id}}" class="btn btn-success btn-sm">Map</a>
-						<a href="village?id={{village_id}}" class="btn btn-success btn-sm">Config</a>
-						{% if village_id in data.config.villages %}
-						<button class="btn btn-outline-secondary btn-sm apply-default" data-village-id="{{village_id}}"
-							title="Overwrite this village's settings with the default village template">Default</button>
+						{% if row.building %}
+							<span class="badge {% if 'building' in row.diff %}ember{% else %}dim{% endif %}"
+								{% if 'building' in row.diff %}title="Overrides the global template"{% endif %}>{{ row.building }}</span>
+						{% else %}<span class="faint">&mdash;</span>{% endif %}
+					</td>
+					<td>
+						{% if row.units %}
+							<span class="badge {% if 'units' in row.diff %}ember{% else %}dim{% endif %}"
+								{% if 'units' in row.diff %}title="Overrides the global template"{% endif %}>{{ row.units }}</span>
+						{% else %}<span class="faint">&mdash;</span>{% endif %}
+					</td>
+					<td class="num mono">{{ data.bot[row.id].building_queue | count if data.bot[row.id].building_queue else 0 }}</td>
+					<td>
+						{% if not row.has_config %}<span class="badge dim">no config</span>
+						{% elif row.managed %}<span class="badge moss">active</span>
+						{% else %}<span class="badge dim">paused</span>{% endif %}
+						{% if row.overrides %}<span class="badge ember" title="{{ row.diff | length }} field(s) differ from the global template">override</span>{% endif %}
+					</td>
+					<td class="num">
+						<a href="map?center={{ row.id }}" class="btn btn-sm">Map</a>
+						<a href="village?id={{ row.id }}" class="btn btn-sm">Edit</a>
+						{% if row.has_config %}
+						<button class="btn btn-sm apply-default" data-village-id="{{ row.id }}"
+							title="Overwrite this village's settings with the default village template">Reset</button>
 						{% endif %}
 					</td>
 				</tr>
-				<tr>
-					<td></td>
-					<td>
-						{% for unit in data.bot[village_id].troops %}
-							<img src="/static/images/unit_{{unit}}.png" alt="{{unit}}" /> {{data.bot[village_id].troops[unit]}}
-						{% endfor %}
-					</td>
-					<td>
-						Building: {{data.bot[village_id].queued | count}}
-					</td>
-				</tr>
-			{% endfor %}
-		</tbody>
-	</table>
+				{% endfor %}
+			</tbody>
+		</table>
+	</div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}

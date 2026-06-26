@@ -1,6 +1,15 @@
 {% extends "shell.html" %}
 {% block title %}Overview{% endblock %}
 
+{% block topbar_meta %}
+<div class="run-meta">
+	<div class="t"><div class="k">Last activity</div>
+		<div class="v good">{% if overview.summary.last_activity %}{{ overview.summary.last_activity|ago }}{% else %}—{% endif %}</div></div>
+	<div class="t"><div class="k">Bot</div>
+		<div class="v {{ 'good' if bot_running }}">{{ 'running' if bot_running else 'stopped' }}</div></div>
+</div>
+{% endblock %}
+
 {% block content %}
 {# soonest incoming arrival across all under-attack villages, for the situation bar #}
 {% set arrivals = [] %}
@@ -9,10 +18,10 @@
 
 <!-- Situation bar (signature) -->
 {% if overview.incoming_logged_out %}
-<div class="situation warn">
+<div class="situation critical">
 	<div>
-		<div class="sit-state">Tracking offline</div>
-		<div class="sit-sub">The session cookie has expired — the bot can't read incoming attacks. Refresh it in Session below.</div>
+		<div class="sit-state">&#9888; Session expired — tracking offline</div>
+		<div class="sit-sub">The login cookie is no longer valid, so the bot can't read incoming attacks. Reconnect in the Session panel below.</div>
 	</div>
 </div>
 {% elif overview.active_incoming %}
@@ -36,21 +45,22 @@
 	<div class="sit-spacer"></div>
 	<div class="threat">
 		<div class="t"><div class="v">{{ overview.summary.villages }}</div><div class="k">villages</div></div>
-		<div class="t"><div class="v" style="color:var(--gold)">{{ overview.summary.loot_recent|comma }}</div><div class="k">recent loot</div></div>
+		<div class="t"><div class="v" style="color:var(--gold)">{{ (overview.summary.farm_loot_24h + overview.summary.scav_loot_24h)|kshort }}</div><div class="k">loot · 24h</div></div>
+		<div class="t"><div class="v" style="color:var(--gold)">{{ (overview.summary.farm_loot_total + overview.summary.scav_loot_total)|kshort }}</div><div class="k">loot · total</div></div>
 	</div>
 </div>
 {% endif %}
 
 <!-- Stat tiles -->
-<div class="stats">
+<div class="stats" style="margin-bottom:22px">
 	{% set tiles = [
 		('Villages', overview.summary.villages, 'managed', false),
-		('Farm targets', overview.summary.farm_targets, 'tracked', false),
-		('Scout targets', overview.summary.scout_targets, 'tracked', false),
-		('Recent loot', overview.summary.loot_recent|comma, 'last ~100 reports', true),
-		('Scavenging', overview.summary.scavenging_runs, 'runs', false),
-		('Trades', overview.summary.trades, 'reported', false),
-		('Build queue', overview.summary.queued_buildings, 'items', false),
+		('Farm runs · 24h', overview.summary.farm_runs_24h|kshort, overview.summary.farm_runs_total|kshort ~ ' total', false),
+		('Farm loot · 24h', overview.summary.farm_loot_24h|kshort, overview.summary.farm_loot_total|kshort ~ ' total', true),
+		('Scavenging · 24h', overview.summary.scav_runs_24h|kshort, overview.summary.scav_runs_total|kshort ~ ' total', false),
+		('Scav loot · 24h', overview.summary.scav_loot_24h|kshort, overview.summary.scav_loot_total|kshort ~ ' total', true),
+		('Trades · 24h', overview.summary.trades_24h|kshort, overview.summary.trades_total|kshort ~ ' total', false),
+		('Build queue', overview.summary.active_build_items, 'in HQ now', false),
 	] %}
 	{% for k, v, sub, gold in tiles %}
 	<div class="stat">
@@ -61,36 +71,36 @@
 	{% endfor %}
 </div>
 
-<div class="grid cols-2" style="margin-top:18px">
-	<!-- Activity feed -->
-	<div class="panel">
-		<div class="panel-head"><h3>Recent activity</h3><span class="eyebrow">farm &amp; scout reports</span></div>
-		<table class="tw">
-			<thead><tr><th>Action</th><th>Route</th><th>Wall</th><th class="num">Loot</th><th class="num">When</th></tr></thead>
-			<tbody>
-			{% for a in overview.activity %}
-				<tr class="{% if a.incoming %}alert{% endif %}">
-					<td>{% if a.incoming %}<span class="badge blood">incoming {{ a.type }}</span>
-						{% elif a.type == 'attack' %}<span class="badge ember">attack</span>
-						{% else %}<span class="badge dim">scout</span>{% endif %}</td>
-					<td class="coord">{{ a.origin }} &rarr; {{ a.dest }}</td>
-					<td>{% if a.wall is not none %}<span class="badge {{ 'gold' if a.wall >= 5 else 'dim' }}">wall {{ a.wall }}</span>{% endif %}</td>
-					<td class="num">{% if a.loot_total %}<span style="color:var(--gold)">{{ a.loot_total|comma }}</span>{% endif %}
-						{% if a.losses %}<span class="badge blood" title="troops lost">&minus;{{ a.losses.values()|map('int')|sum }}</span>{% endif %}</td>
-					<td class="num muted" title="{{ a.when|ts }}">{{ a.when|ago }}</td>
-				</tr>
-			{% else %}
-				<tr><td colspan="5" class="muted">No farm/scout activity recorded yet.</td></tr>
-			{% endfor %}
-			</tbody>
-		</table>
-	</div>
+<div class="grid-2">
 
-	<!-- Right column -->
-	<div class="grid" style="align-content:start; gap:16px">
-		{% if overview.active_incoming %}
+	<!-- LEFT: troops, per-village state, under-attack detail -->
+	<div class="stack">
 		<div class="panel">
-			<div class="panel-head"><h3 style="color:#ef6e62">Under attack now</h3><span class="badge blood">{{ overview.incoming_total }}</span></div>
+			<div class="panel-head"><h3>Troops</h3><span class="eyebrow">all villages</span></div>
+			<div class="panel-body">
+				{% set unit_order = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','knight','snob'] %}
+				{% set cols = [
+					('Total owned', overview.summary.troops),
+					('At home', overview.summary.troops_home),
+					('Support / away', overview.summary.troops_away),
+				] %}
+				<div class="troop-cols">
+					{% for label, troops in cols %}
+					<div>
+						<div class="tcol-head">{{ label }}</div>
+						{% set ns = namespace(any=false) %}
+						{% for u in unit_order %}{% set c = troops.get(u, 0) %}{% if c %}
+						<div class="trow"><img class="ticon" src="/static/images/unit_{{ u }}.png" alt="{{ u }}" title="{{ u }}"><span class="tn">{{ c|comma }}</span></div>
+						{% set ns.any = true %}{% endif %}{% endfor %}
+						{% if not ns.any %}<span class="faint">—</span>{% endif %}
+					</div>
+					{% endfor %}
+				</div>
+			</div>
+		</div>
+		{% if overview.active_incoming %}
+		<div class="panel" style="border-color:rgba(210,75,62,.4)">
+			<div class="panel-head"><h3 style="color:#ef6e62">&#9876; Under attack now</h3><span class="badge blood">{{ overview.incoming_total }} active</span></div>
 			<div class="panel-body" style="padding-top:6px">
 				{% for v in overview.active_incoming %}
 				<div style="padding:8px 0; border-bottom:1px solid var(--line-soft)">
@@ -119,31 +129,94 @@
 		</div>
 		{% endif %}
 
+		<div class="section-head">
+			<span class="eyebrow">Villages</span>
+			<span class="faint" style="font-size:12px">{{ overview.villages|length }} managed</span>
+		</div>
 		<div class="panel">
-			<div class="panel-head"><h3>Resources</h3><span class="eyebrow">all villages</span></div>
-			<div class="panel-body">
-				<div class="flex" style="gap:22px; flex-wrap:wrap; font-family:var(--mono)">
-					<span><span class="faint">wood</span> {{ overview.summary.resources.wood|comma }}</span>
-					<span><span class="faint">clay</span> {{ overview.summary.resources.stone|comma }}</span>
-					<span><span class="faint">iron</span> {{ overview.summary.resources.iron|comma }}</span>
-					<span><span class="faint">pop</span> {{ overview.summary.resources['pop']|comma }}</span>
+			<div class="panel-body" style="padding:0">
+				<table class="tw">
+					<thead><tr><th>Village</th><th class="num">Points</th><th>Resources <span class="faint">w/c/i</span></th><th>Build queue</th><th>Status</th></tr></thead>
+					<tbody>
+					{% for v in overview.villages %}
+						{% set is_inc = v.id|string in (overview.active_incoming|map(attribute='id')|map('string')|list) %}
+						<tr class="{% if is_inc %}alert{% endif %}">
+							<td><a class="vlink" href="village?id={{ v.id }}">{{ v.name }}</a>
+								{% if v.location %}<span class="coord">{{ v.location[0] }}|{{ v.location[1] }}</span>{% endif %}</td>
+							<td class="num">{{ v.points|comma if v.points else '—' }}</td>
+							<td class="mono" style="font-size:12px">{{ v.resources.wood|comma }}&middot;{{ v.resources.stone|comma }}&middot;{{ v.resources.iron|comma }}</td>
+							<td>{% if v.queue_preview %}<span class="faint">{{ v.queue_preview[0] }}</span>
+								{% if v.queue_len > 1 %}<span class="badge dim">+{{ v.queue_len - 1 }}</span>{% endif %}
+								{% else %}<span class="badge dim">empty</span>{% endif %}</td>
+							<td>{% if is_inc %}<span class="badge blood">incoming</span>
+								{% else %}<span class="badge moss">clear</span>{% endif %}</td>
+						</tr>
+					{% else %}
+						<tr><td colspan="5" class="muted">No managed villages yet.</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="panel-head" style="border-top:1px solid var(--line-soft);border-bottom:0">
+				<span class="faint" style="font-size:12px">Stored, all villages:
+					<span class="mono">{{ overview.summary.resources.wood|comma }}</span> wood ·
+					<span class="mono">{{ overview.summary.resources.stone|comma }}</span> clay ·
+					<span class="mono">{{ overview.summary.resources.iron|comma }}</span> iron</span>
+				<a class="btn btn-sm" href="/villages">View all villages</a>
+			</div>
+		</div>
+	</div>
+
+	<!-- RIGHT RAIL: activity, troops, session -->
+	<div class="stack">
+		<div class="panel">
+			<div class="panel-head"><h3>Activity</h3>
+				<div class="flex" style="gap:4px">
+					<button class="btn btn-sm act-n btn-ember" data-n="5" onclick="setActivityCount(5,this)">5</button>
+					<button class="btn btn-sm act-n" data-n="10" onclick="setActivityCount(10,this)">10</button>
+					<button class="btn btn-sm act-n" data-n="15" onclick="setActivityCount(15,this)">15</button>
+				</div>
+			</div>
+			<div class="panel-body" style="padding-top:6px;padding-bottom:6px">
+				<div class="feed" id="activityFeed">
+				{% for a in overview.activity[:15] %}
+					<div class="fi" data-idx="{{ loop.index0 }}"{% if loop.index0 >= 5 %} style="display:none"{% endif %}>
+						<span class="when" title="{{ a.when|ts }}">{{ a.when|ago }}</span>
+						<span class="what">
+							{% if a.incoming %}<span class="badge blood">incoming {{ a.type }}</span>
+							{% elif a.type == 'attack' %}<span class="badge ember">attack</span>
+							{% else %}<span class="badge dim">scout</span>{% endif %}
+							<span class="coord">{{ a.origin }} &rarr; {{ a.dest }}</span>
+							{% if a.loot_total %}<span style="color:var(--gold)">+{{ a.loot_total|comma }}</span>{% endif %}
+							{% if a.wall is not none %}<span class="sub">wall {{ a.wall }}</span>{% endif %}
+						</span>
+					</div>
+				{% else %}
+					<div class="fi"><span class="what muted">No farm/scout activity recorded yet.</span></div>
+				{% endfor %}
 				</div>
 			</div>
 		</div>
 
 		<div class="panel">
-			<div class="panel-head"><h3>Troops at home</h3></div>
+			<div class="panel-head"><h3>Scavenging</h3>
+				<span class="badge {{ 'moss' if overview.summary.scavenging_enabled else 'dim' }}">{{ overview.summary.scavenging_enabled }} / {{ overview.summary.villages }} active</span></div>
 			<div class="panel-body">
-				{% for unit, amount in overview.summary.troops_home.items() %}
-					<span class="badge dim" style="margin:0 5px 5px 0">{{ unit }} {{ amount|comma }}</span>
-				{% else %}<span class="muted">No troops sitting at home.</span>{% endfor %}
+				<div class="flex between" style="align-items:flex-end">
+					<div><div class="mono" style="font-size:21px;line-height:1">{{ overview.summary.scavenging_runs }}</div><div class="sub faint">runs · last ~100 reports</div></div>
+					<div style="text-align:right"><div class="mono" style="font-size:21px;line-height:1;color:var(--gold)">{{ overview.summary.loot_recent|comma }}</div><div class="sub faint">recent loot</div></div>
+				</div>
+				<div class="flex between" style="margin-top:12px">
+					<span class="faint" style="font-size:12px">{{ overview.summary.scavenging_enabled }} of {{ overview.summary.villages }} village(s) scavenging</span>
+					<a class="btn btn-sm" href="/farms">Manage scavenging</a>
+				</div>
 			</div>
 		</div>
 
 		<div class="panel">
 			<div class="panel-head"><h3>Session</h3><span class="coord">{{ session.endpoint }}</span></div>
 			<div class="panel-body">
-				<textarea id="session_data" rows="3" class="field" style="font-family:var(--mono); font-size:12px"
+				<textarea id="session_data" rows="3" class="field mono" style="font-size:12px"
 					placeholder="Paste your full browser cookie string here">{{ session.raw }}</textarea>
 				<div class="flex" style="margin-top:8px">
 					<button class="btn btn-ember btn-sm" onclick="set_session_data()">Update session</button>
@@ -158,6 +231,14 @@
 
 {% block scripts %}
 <script>
+function setActivityCount(n, btn) {
+	document.querySelectorAll('#activityFeed .fi').forEach(function(el) {
+		var idx = parseInt(el.getAttribute('data-idx'), 10);
+		if (isNaN(idx)) return;
+		el.style.display = idx < n ? '' : 'none';
+	});
+	document.querySelectorAll('.act-n').forEach(function(b) { b.classList.toggle('btn-ember', b === btn); });
+}
 function fmtDur(seconds) {
 	var sign = seconds < 0 ? '-' : ''; seconds = Math.abs(seconds);
 	var h = Math.floor(seconds/3600), m = Math.floor((seconds%3600)/60), s = seconds%60;

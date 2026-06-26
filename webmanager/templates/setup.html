@@ -1,73 +1,115 @@
 {% extends "shell.html" %}
-{% block title %}Setup{% endblock %}
+{% block title %}Settings{% endblock %}
+{% block crumb_extra %} · configuration{% endblock %}
+
+{% block head %}
+<style>
+	/* config-row controls (reused from the working config editor), themed to sit
+	   inside the war-room tier/module surfaces. */
+	.config-row { display: flex; align-items: center; justify-content: space-between;
+		gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--line-soft); }
+	.config-row:last-child { border-bottom: 0; }
+	.config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 58%; }
+	.config-row-name { font-weight: 500; color: var(--ink); }
+	.config-row-control { flex: 0 0 40%; max-width: 40%; }
+	.config-help { display: inline-flex; align-items: center; justify-content: center;
+		width: 18px; height: 18px; border-radius: 50%; background: var(--ink-faint);
+		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
+	.config-card { background: transparent; border: 0; box-shadow: none; margin: 0; }
+	.config-card .card-header { background: transparent; border: 0; padding: 12px 0 4px;
+		font-family: var(--display); text-transform: uppercase; letter-spacing: .1em;
+		font-size: 11px; color: var(--ink-faint); }
+	.config-card .card-body { padding: 0; }
+	.intro { color: var(--ink-dim); max-width: 760px; }
+	.intro b { color: var(--ink); }
+</style>
+{% endblock %}
+
+{% block topbar_meta %}
+<a id="discard" class="btn btn-sm" style="display:none" onclick="location.reload()">Discard</a>
+<a id="save_top" class="btn btn-ember btn-sm disabled" onclick="saveAll()">Save changes</a>
+{% endblock %}
 
 {% block content %}
-<style>
-	.config-card { margin-bottom: 1rem; }
-	.config-card .card-header { font-weight: 600; padding: .5rem .9rem; }
-	.config-card .card-body { padding: .25rem .9rem; }
-	.config-row { display: flex; align-items: center; justify-content: space-between;
-		gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--border); }
-	.config-row:last-child { border-bottom: 0; }
-	.config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 60%; }
-	.config-row-name { font-weight: 500; }
-	.config-row-control { flex: 0 0 38%; max-width: 38%; }
-	.config-help { display: inline-flex; align-items: center; justify-content: center;
-		width: 18px; height: 18px; border-radius: 50%; background: var(--muted);
-		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
-	.config-section-help { display: block; margin-bottom: .75rem; }
-	.setup-step { margin-bottom: 1.5rem; }
-	.setup-step-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
-	.setup-step-num { display: inline-flex; align-items: center; justify-content: center;
-		width: 28px; height: 28px; border-radius: 50%; background: var(--accent, #17a2b8);
-		color: #fff; font-weight: 700; flex: none; }
-</style>
+<p class="intro">Settings are split into three tiers so you always know where to look:
+	<b>what the world is</b>, <b>how the bot runs</b>, and <b>what each feature does</b>.
+	Toggles and dropdowns save instantly; numbers and text save with the bar below.</p>
 
-<div class="row align-items-center mb-2">
-	<div class="col">
-		<h3 class="mb-0">First-run setup</h3>
-		<small class="text-muted">One-time, per-world settings. Configure these once;
-			they're kept out of the day-to-day Bot tab so they don't get in your way.</small>
+{# ---------- Tier 1 — World configuration (set-once, receded) ---------- #}
+<div class="tier once">
+	<div class="tier-head">
+		<span class="tnum">1</span>
+		<div class="th-text">
+			<h3>World configuration</h3>
+			<div class="desc">Stable facts about world {{ active_world or 'this world' }}. Set once when you join — you'll rarely touch these again.</div>
+		</div>
+		<span class="badge dim">set once</span>
 	</div>
-	<div class="col-auto">
-		<a id="save_config" class="btn btn-success disabled">Save</a>
+	<div class="tier-body">
+		{% if 'server' in sections %}<div>{{ sections['server']|safe }}</div>{% endif %}
+		{% if 'world' in sections %}
+		<div>
+			<div class="subhead">World features — what exists on {{ active_world or 'this world' }}</div>
+			{{ sections['world']|safe }}
+		</div>
+		{% endif %}
 	</div>
 </div>
 
-<div class="row">
-	<div class="col-lg-9">
-		{% for section, body in steps %}
-		<div class="setup-step">
-			<div class="setup-step-head">
-				<span class="setup-step-num">{{ loop.index }}</span>
-				<h4 class="mb-0">{{ section_labels.get(section, section) }}</h4>
-			</div>
-			{% if section in helpfile %}
-				<i class="config-section-help text-muted">{{ helpfile[section] }}</i>
-			{% endif %}
-			{% if section_setup and section in section_setup %}
-				{{ section_setup[section]|safe }}
-			{% endif %}
-			<div class="form-vertical">
-				{{ body|safe }}
-			</div>
-		</div>
-		{% endfor %}
-
-		<div class="alert alert-secondary small" role="alert">
-			Changes take effect the next time the bot starts. Looking to play another world?
-			That needs a separate config &mdash; tracked as a future enhancement.
+{# ---------- Tier 2 — Bot operation ---------- #}
+<div class="tier">
+	<div class="tier-head">
+		<span class="tnum">2</span>
+		<div class="th-text">
+			<h3>Bot operation</h3>
+			<div class="desc">How the bot runs account-wide — timing, activity window, randomization, captcha &amp; identity.</div>
 		</div>
 	</div>
-	<div class="col-lg-3 d-none d-lg-block">
-		<div class="card" style="position: sticky; top: 1rem;">
-			<div class="card-header py-2"><strong>Setup steps</strong></div>
-			<ul class="list-group list-group-flush">
-				{% for section, body in steps %}
-				<li class="list-group-item py-2">{{ loop.index }}. {{ section_labels.get(section, section) }}</li>
-				{% endfor %}
-			</ul>
-		</div>
+	<div class="tier-body">
+		{% if 'bot' in sections %}{{ sections['bot']|safe }}{% endif %}
+	</div>
+</div>
+
+{# ---------- Tier 3 — Feature modules ---------- #}
+<div class="section-head" style="margin-top:4px">
+	<div><span class="tnum">3</span> <b style="font-family:var(--display);font-size:19px;margin-left:8px">Feature modules</b>
+		<div class="desc faint" style="font-size:12.5px;margin-top:2px">What each part of the bot does. Each module is independent — its enable toggle is the first row.</div></div>
+</div>
+{% set modules = [
+	('building', 'Building', '⚒', 'Construction queue & build order'),
+	('units', 'Recruitment', '⚑', 'Troop training & defense'),
+	('farms', 'Farms & scavenging', '⌖', 'Raiding targets & gathering'),
+	('market', 'Market', '⇄', 'Resource balancing & premium trade'),
+	('reporting', 'Action log', '▤', 'Export the bot\'s actions'),
+	('notifications', 'Notifications', '✉', 'Telegram alerts'),
+	('flags', 'Flags', '⚑', 'Flag management & auto-upgrade'),
+] %}
+{% for key, label, ico, sub in modules %}
+{% if key in sections %}
+<div class="module">
+	<div class="module-head">
+		<span class="ico">{{ ico }}</span>
+		<div class="title"><h3>{{ label }}</h3><div class="sub">{{ sub }}</div></div>
+	</div>
+	<div class="module-body">
+		{% if section_setup and key in section_setup %}{{ section_setup[key]|safe }}{% endif %}
+		{{ sections[key]|safe }}
+	</div>
+</div>
+{% endif %}
+{% endfor %}
+
+<div class="alert alert-secondary small" role="alert" style="margin-top:8px">
+	Changes take effect the next time the bot starts a cycle. Per-village overrides live on each
+	<a href="/villages">village</a>, not here.
+</div>
+
+{# ---------- Dirty-state save bar ---------- #}
+<div class="savebar" id="savebar">
+	<span class="sb-text"><span class="sb-dot"></span><span id="sb-count">Unsaved changes</span></span>
+	<div class="flex" style="gap:8px">
+		<button class="btn btn-sm" onclick="location.reload()">Discard</button>
+		<button class="btn btn-ember btn-sm" onclick="saveAll()">Save changes</button>
 	</div>
 </div>
 {% endblock %}
@@ -75,74 +117,57 @@
 {% block scripts %}
 <script>
 	var set_values = {};
+
 	function send_test_notification() {
 		var status = $('#notif_test_status');
 		status.removeClass('text-success text-danger').text('Sending...');
 		$.ajax({type: 'POST', url: '/app/notification/test', dataType: 'json'})
 		 .done(function(data){
-			if (data.ok) {
-				status.addClass('text-success').text('Sent ✓ check your Telegram chat');
-			} else {
-				status.addClass('text-danger').text('Failed: ' + (data.error || 'unknown error'));
-			}
+			if (data.ok) status.addClass('text-success').text('Sent ✓ check your Telegram chat');
+			else status.addClass('text-danger').text('Failed: ' + (data.error || 'unknown error'));
 		 })
 		 .fail(function(){ status.addClass('text-danger').text('Request failed'); });
 	}
 
 	function set_config(parameter, value) {
-		$.getJSON("/app/config/set?parameter="+encodeURIComponent(parameter)+"&value="+encodeURIComponent(value), function(data){
-			console.log("Set values", parameter, value);
-		});
+		return $.getJSON("/app/config/set?parameter=" + encodeURIComponent(parameter) +
+			"&value=" + encodeURIComponent(value));
 	}
-
 	function set_toggle_value(target, value) {
-		if(!value) {
-			target.removeClass("btn-success"); target.addClass("btn-danger"); target.text("Disabled");
-		} else {
-			target.addClass("btn-success"); target.removeClass("btn-danger"); target.text("Enabled");
+		if (!value) { target.removeClass("btn-success").addClass("btn-danger").text("Disabled"); }
+		else { target.addClass("btn-success").removeClass("btn-danger").text("Enabled"); }
+	}
+	function markDirty() {
+		var n = Object.keys(set_values).length;
+		if (n > 0) {
+			$('#sb-count').text(n + ' unsaved change' + (n > 1 ? 's' : ''));
+			$('#savebar').addClass('show');
+			$('#save_top, #discard').show().removeClass('disabled');
 		}
 	}
-
-	function toggle_event(event) {
-		var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		var next_value = !target.hasClass("btn-success");
-		set_config(name, next_value);
-		set_toggle_value(target, next_value);
+	function saveAll() {
+		var keys = Object.keys(set_values);
+		if (!keys.length) return;
+		var done = 0;
+		keys.forEach(function(k){ set_config(k, set_values[k]).always(function(){
+			if (++done === keys.length) setTimeout(function(){ location.reload(); }, 400);
+		}); });
 	}
 
-	function select_event(event) {
-		var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		set_config(name, target.val());
-	}
-
-	function num_event() {
-		var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		set_values[name] = parseInt(target.val());
-		$('#save_config').removeClass('disabled');
-	}
-
-	function text_event() {
-		var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		set_values[name] = target.val();
-		$('#save_config').removeClass('disabled');
-	}
-
-	$( document ).ready(function() {
-		$( "[data-type=toggle]" ).click(function(e) { toggle_event(e); });
-		$( "[data-type=select]" ).change(function(e) { select_event(e); });
-		$( "[data-type=number]" ).change(function(e) { num_event(e); });
-		$( "[data-type=text]" ).change(function(e) { text_event(e); });
-		$('#save_config').click(function(){
-			$.each(set_values, function(set_key, set_value){ set_config(set_key, set_value); });
-			setTimeout(function(){location.reload()}, 500);
+	$(document).ready(function() {
+		$("[data-type=toggle]").click(function(e) {
+			var t = $(e.target), name = t.attr("data-type-option");
+			var next = !t.hasClass("btn-success");
+			set_config(name, next); set_toggle_value(t, next);
+		});
+		$("[data-type=select]").change(function(e) {
+			var t = $(e.target); set_config(t.attr("data-type-option"), t.val());
+		});
+		$("[data-type=number]").change(function(e) {
+			var t = $(e.target); set_values[t.attr("data-type-option")] = parseInt(t.val()); markDirty();
+		});
+		$("[data-type=text]").change(function(e) {
+			var t = $(e.target); set_values[t.attr("data-type-option")] = t.val(); markDirty();
 		});
 		$('[data-toggle="tooltip"]').tooltip();
 	});

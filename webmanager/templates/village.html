@@ -1,129 +1,203 @@
 {% extends "shell.html" %}
-{% block title %}Village{% endblock %}
+{% block title %}{{ detail.name }}{% endblock %}
+{% block crumb_extra %} · villages{% if detail.location %} / {{ detail.location[0] }}|{{ detail.location[1] }}{% endif %}{% endblock %}
+
+{% block head %}
+<style>
+	.config-row { display: flex; align-items: center; justify-content: space-between;
+		gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line-soft); }
+	.config-row:last-child { border-bottom: 0; }
+	.config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 58%; }
+	.config-row-name { font-weight: 500; color: var(--ink); }
+	.config-row-control { flex: 0 0 40%; max-width: 40%; }
+	.config-help { display: inline-flex; align-items: center; justify-content: center;
+		width: 18px; height: 18px; border-radius: 50%; background: var(--ink-faint);
+		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
+	.config-card { background: transparent; border: 0; box-shadow: none; margin: 0; }
+	.config-card .card-header { background: transparent; border: 0; padding: 12px 0 4px;
+		font-family: var(--display); text-transform: uppercase; letter-spacing: .1em; font-size: 11px; color: var(--ink-faint); }
+	.config-card .card-body { padding: 0; }
+</style>
+{% endblock %}
+
+{% block topbar_meta %}
+<div class="run-meta">
+	{% if detail.under_attack %}<div class="t"><span class="badge blood">incoming</span></div>{% endif %}
+	{% if detail.points %}<div class="t"><div class="k">Points</div><div class="v">{{ detail.points|comma }}</div></div>{% endif %}
+	<div class="t"><div class="k">Pop</div><div class="v">{{ detail.pop_now|comma }} / {{ detail.pop_cap|comma }}</div></div>
+</div>
+{% if detail.location %}<a class="btn btn-sm" href="/map?center={{ detail.id }}">Center on map</a>{% endif %}
+{% endblock %}
 
 {% block content %}
-<style>
-    .config-card { margin-bottom: 1rem; }
-    .config-card .card-header { font-weight: 600; padding: .5rem .9rem; }
-    .config-card .card-body { padding: .25rem .9rem; }
-    .config-row { display: flex; align-items: center; justify-content: space-between;
-        gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--border); }
-    .config-row:last-child { border-bottom: 0; }
-    .config-row-label { display: flex; align-items: center; gap: .45rem; flex: 1 1 60%; }
-    .config-row-name { font-weight: 500; }
-    .config-row-control { flex: 0 0 38%; max-width: 38%; }
-    .config-help { display: inline-flex; align-items: center; justify-content: center;
-        width: 18px; height: 18px; border-radius: 50%; background: var(--muted);
-        color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
-</style>
-<div class="row">
-    <div class="col-lg-8">
-        {{ config | safe }}
-    </div>
-    <div class="col-lg-4">
-        <h4>Villages</h4>
-        <ul class="list-group">
-                {% for village in data.bot %}
-                <li class="list-group-item {% if current_select == village %} active {% endif %} ">
-                    <a class="list-group-item-action" href="/village?id={{data.bot[village].public.id}}">{{data.bot[village].public.name}} ({{data.bot[village].public.location}})</a>
-                    {% if current_select == village %}
-                        <button id="save_config" class="btn btn-success btn-sm float-right disabled">Save</button>
-                        <button id="apply_default" class="btn btn-outline-secondary btn-sm float-right mr-1"
-                                title="Overwrite this village's settings with the default village template">Reset to default</button>
-                    {% endif %}
-                </li>
-                {% endfor %}
+{% if not detail.has_snapshot %}
+<div class="situation warn"><div><div class="sit-state">No live data yet</div>
+	<div class="sit-sub">The bot hasn't scraped this village yet — run it once to populate the dashboard. You can still configure it below.</div></div></div>
+{% endif %}
 
-        </ul>
-    </div>
+<div class="vdetail-grid">
+	<!-- LEFT: resources + build queue -->
+	<div class="stack">
+		<div class="panel">
+			<div class="panel-head"><h3>Resources</h3><span class="eyebrow">stored / capacity</span></div>
+			<div class="panel-body">
+				<div class="res-bars">
+					{% for r in detail.resources %}
+					<div class="rb">
+						<span class="rb-k">{{ r.label }}</span>
+						<div class="bar-track"><div class="bar-fill {{ 'moss' if not r.full else '' }}" style="width:{{ r.pct }}%"></div></div>
+						<span class="rb-v">{{ r.stored|comma }} / {{ r.cap|comma }}{% if r.prod %} <span class="faint">+{{ r.prod|comma }}/h</span>{% endif %}{% if r.full %} <span class="badge gold">full</span>{% endif %}</span>
+					</div>
+					{% endfor %}
+					<div class="rb">
+						<span class="rb-k">Pop</span>
+						<div class="bar-track"><div class="bar-fill moss" style="width:{{ detail.pop_pct }}%"></div></div>
+						<span class="rb-v">{{ detail.pop_now|comma }} / {{ detail.pop_cap|comma }}</span>
+					</div>
+				</div>
+				<div class="faint" style="font-size:11px;margin-top:10px">Stored / capacity · per-hour production, live from the game.</div>
+			</div>
+		</div>
 
+		<div class="panel">
+			<div class="panel-head"><h3>Build queue</h3>
+				<span class="badge {{ 'ember' if detail.queue_count else 'dim' }}">{{ detail.queue_count }} in HQ now</span></div>
+			<div class="panel-body" style="padding-top:8px">
+				<div class="faint" style="font-size:12px;margin-bottom:8px">Buildings actively queued in the headquarters: <b>{{ detail.queue_count }}</b>. Next planned by the bot:</div>
+				{% if detail.queue_plan %}
+				<div class="feed">
+					{% for item in detail.queue_plan %}
+					{% set parts = item.split(':') %}
+					<div class="fi"><span class="when">{{ loop.index }}</span>
+						<span class="what">{{ parts[0]|capitalize }} &rarr; level {{ parts[1] if parts|length > 1 else '?' }}</span></div>
+					{% endfor %}
+				</div>
+				{% else %}<span class="muted">No planned builds.</span>{% endif %}
+			</div>
+		</div>
+	</div>
+
+	<!-- RIGHT: troops + quick links -->
+	<div class="stack">
+		<div class="panel">
+			<div class="panel-head"><h3>Troops</h3><span class="eyebrow">total · home · away</span></div>
+			<div class="panel-body">
+				{% set unit_order = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','knight','snob'] %}
+				{% set cols = [('Total', detail.troops_total), ('Home', detail.troops_home), ('Away', detail.troops_away)] %}
+				<div class="troop-cols">
+					{% for label, troops in cols %}
+					<div>
+						<div class="tcol-head">{{ label }}</div>
+						{% set ns = namespace(any=false) %}
+						{% for u in unit_order %}{% set c = troops.get(u, 0) %}{% if c %}
+						<div class="trow"><img class="ticon" src="/static/images/unit_{{ u }}.png" alt="{{ u }}" title="{{ u }}"><span class="tn">{{ c|comma }}</span></div>
+						{% set ns.any = true %}{% endif %}{% endfor %}
+						{% if not ns.any %}<span class="faint">—</span>{% endif %}
+					</div>
+					{% endfor %}
+				</div>
+			</div>
+		</div>
+		<div class="panel">
+			<div class="panel-head"><h3>Scavenging</h3>
+				{% if detail.scavenge_state %}
+				<span class="badge {{ 'moss' if (detail.scavenge_state|selectattr('running')|list) else 'dim' }}">{{ detail.scavenge_state|selectattr('running')|list|length }} / {{ detail.scavenge_state|length }} running</span>
+				{% endif %}</div>
+			<div class="panel-body" style="padding-top:6px">
+				{% if detail.scavenge_state %}
+				{% set roman = ['I','II','III','IV'] %}
+				{% for opt in detail.scavenge_state %}
+				<div class="scav-opt {{ 'run' if opt.running else '' }}">
+					<span class="so-num">{{ roman[opt.option - 1] if opt.option <= 4 else opt.option }}</span>
+					<div class="so-body">
+						<div>Option {{ opt.option }}</div>
+						<div class="so-sub">
+							{% if opt.locked %}Locked — unlock in-game
+							{% elif opt.running %}Gathering{% if opt.loot %} · ~{{ opt.loot|kshort }} loot{% endif %}{% if opt.return_at %} · returns <span class="inc-eta" data-arrival="{{ opt.return_at }}">…</span>{% endif %}
+							{% else %}Idle — troops available{% endif %}
+						</div>
+					</div>
+					{% if opt.running %}<span class="badge moss">running</span>
+					{% elif opt.locked %}<span class="badge dim">locked</span>
+					{% else %}<span class="badge ember">idle</span>{% endif %}
+				</div>
+				{% endfor %}
+				{% else %}
+				<span class="muted">No scavenging data yet — enable scavenging for this village and run the bot once.</span>
+				{% endif %}
+			</div>
+		</div>
+
+		<div class="panel">
+			<div class="panel-head"><h3>Other villages</h3></div>
+			<div class="panel-body" style="padding-top:6px">
+				<div class="feed">
+				{% for village in data.bot %}
+					<div class="fi"><span class="what">
+						<a class="vlink" href="/village?id={{ data.bot[village].public.id }}">{{ data.bot[village].public.name }}</a>
+						<span class="coord">{{ data.bot[village].public.location }}</span>
+					</span></div>
+				{% endfor %}
+				</div>
+			</div>
+		</div>
+	</div>
 </div>
+
+<!-- ---------- Per-village configuration ---------- -->
+<div class="section-head" style="margin-top:8px">
+	<div><span class="eyebrow">Configure this village</span>
+		<div class="faint" style="font-size:12px">Overrides the global template. Toggles save instantly; numbers/text use Save.</div></div>
+	<div class="flex" style="gap:8px">
+		<button id="apply_default" class="btn btn-sm" title="Overwrite this village's settings with the default template">Reset to default</button>
+		<button id="save_config" class="btn btn-ember btn-sm disabled">Save</button>
+	</div>
+</div>
+<div class="panel"><div class="panel-body">
+	{{ config | safe }}
+</div></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    var set_values = {};
+	// Live countdown for scavenging return timers.
+	setInterval(function() {
+		var now = Math.floor(Date.now() / 1000);
+		document.querySelectorAll('.inc-eta').forEach(function(el) {
+			var at = parseInt(el.getAttribute('data-arrival'), 10);
+			if (!at) return;
+			var left = at - now;
+			if (left <= 0) { el.textContent = 'soon'; return; }
+			var h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+			var pad = function(n){ return (n < 10 ? '0' : '') + n; };
+			el.textContent = h ? (h + ':' + pad(m) + ':' + pad(s)) : (m + ':' + pad(s));
+		});
+	}, 1000);
+
+	var set_values = {};
 	function set_config(parameter, value) {
-		$.getJSON("/app/config/set?village_id={{current_select}}&parameter="+encodeURIComponent(parameter)+"&value="+encodeURIComponent(value), function(data){
-			console.log("Set values", parameter, value);
-		});
+		return $.getJSON("/app/config/set?village_id={{current_select}}&parameter=" + encodeURIComponent(parameter) + "&value=" + encodeURIComponent(value));
 	}
-
 	function set_toggle_value(target, value) {
-		if(!value) {
-			target.removeClass("btn-success");
-			target.addClass("btn-danger");
-			target.text("Disabled");
-		} else {
-			target.addClass("btn-success");
-			target.removeClass("btn-danger");
-			target.text("Enabled");
-		}
+		if (!value) { target.removeClass("btn-success").addClass("btn-danger").text("Disabled"); }
+		else { target.addClass("btn-success").removeClass("btn-danger").text("Enabled"); }
 	}
-
-	function toggle_event(event) {
-		var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		var current_value = target.hasClass("btn-success");
-		var next_value = !current_value;
-		set_config(name, next_value);
-		set_toggle_value(target, next_value);
-	}
-
-	function select_event(event) {
-	  var target = $(event.target);
-		var name = target.attr("data-type-option");
-		if(name == undefined) alert("Error setting target");
-		set_config(name, target.val());
-	}
-
-	function num_event() {
-      var target = $(event.target);
-      var name = target.attr("data-type-option");
-      if(name == undefined) alert("Error setting target");
-      set_values[name] = parseInt(target.val());
-      $('#save_config').removeClass('disabled');
-	}
-
-	function text_event() {
-      var target = $(event.target);
-      var name = target.attr("data-type-option");
-      if(name == undefined) alert("Error setting target");
-      set_values[name] = target.val();
-      $('#save_config').removeClass('disabled');
-	}
-
-	$( document ).ready(function() {
-		$( "[data-type=toggle]" ).click(function(e) {
-		  toggle_event(e);
+	$(document).ready(function() {
+		$("[data-type=toggle]").click(function(e) {
+			var t = $(e.target), next = !t.hasClass("btn-success");
+			set_config(t.attr("data-type-option"), next); set_toggle_value(t, next);
 		});
-
-		$( "[data-type=select]" ).change(function(e) {
-		  select_event(e);
+		$("[data-type=select]").change(function(e) { var t = $(e.target); set_config(t.attr("data-type-option"), t.val()); });
+		$("[data-type=number]").change(function(e) { var t = $(e.target); set_values[t.attr("data-type-option")] = parseInt(t.val()); $('#save_config').removeClass('disabled'); });
+		$("[data-type=text]").change(function(e) { var t = $(e.target); set_values[t.attr("data-type-option")] = t.val(); $('#save_config').removeClass('disabled'); });
+		$('#save_config').click(function() {
+			$.each(set_values, function(k, v) { set_config(k, v); });
+			setTimeout(function() { location.reload(); }, 500);
 		});
-
-		$( "[data-type=number]" ).change(function(e) {
-		  num_event(e);
-		});
-
-		$( "[data-type=text]" ).change(function(e) {
-		  text_event(e);
-		});
-
-		$('#save_config').click(function(){
-		  $.each(set_values, function(set_key, set_value){
-		    set_config(set_key, set_value);
-		  });
-		  setTimeout(function(){location.reload()}, 500);
-		});
-
 		$('[data-toggle="tooltip"]').tooltip();
-
-		$('#apply_default').click(function(){
-			if(!confirm('Overwrite this village\'s settings with the default village template? Unsaved edits will be lost.')) return;
-			$.ajax({url: '/app/village/apply_template?village_id={{current_select}}', method: 'POST'})
-			 .done(function(){ location.reload(); });
+		$('#apply_default').click(function() {
+			if (!confirm('Overwrite this village\'s settings with the default village template? Unsaved edits will be lost.')) return;
+			$.ajax({url: '/app/village/apply_template?village_id={{current_select}}', method: 'POST'}).done(function() { location.reload(); });
 		});
 	});
 </script>

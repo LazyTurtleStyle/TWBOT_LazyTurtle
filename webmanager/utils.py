@@ -757,17 +757,103 @@ class OverviewBuilder:
         )
         last_activity = max((a["when"] for a in activity), default=0)
 
+        # How many managed villages have scavenging switched on (from config), for
+        # the overview Scavenging card.
+        try:
+            cfg_villages = (DataReader.config_grab().get("villages", {}) or {})
+        except Exception:
+            cfg_villages = {}
+        scavenging_enabled = sum(1 for v in cfg_villages.values() if v.get("gather_enabled"))
+
+        # Troops away from home (supporting other villages, attacking, or in transit)
+        # = total owned minus what is currently sitting at home, per unit.
+        troops_away = {u: max(0, total_troops.get(u, 0) - home_troops.get(u, 0))
+                       for u in total_troops}
+
+        # Last-24h and all-time counters over the FULL report cache (sync() only
+        # passes the newest ~100, which is enough for the feed but not for totals).
+        # A farm run = an attack report that returned loot. Scavenging/trade 24h
+        # rely on the report timestamp, which the bot now records on every report
+        # (older reports without it simply don't count toward the 24h figure).
+        try:
+            all_reports = DataReader.cache_grab("reports") or {}
+        except Exception:
+            all_reports = {}
+        cutoff = int(time.time()) - 86400
+        farm_runs_total = farm_runs_24h = 0
+        farm_loot_total = farm_loot_24h = 0
+        scav_runs_total = scav_runs_24h = 0
+        trades_total = trades_24h = 0
+        for r in all_reports.values():
+            rtype = (r or {}).get("type")
+            ex = r.get("extra", {}) or {}
+            when = cls._to_int(ex.get("when"))
+            recent = when and when >= cutoff
+            if rtype == "attack":
+                lt = sum(cls._to_int(v) for v in (ex.get("loot", {}) or {}).values())
+                if lt > 0:  # a farm haul
+                    farm_runs_total += 1
+                    farm_loot_total += lt
+                    if recent:
+                        farm_runs_24h += 1
+                        farm_loot_24h += lt
+            elif rtype == "ScavengingCompletedReport":
+                scav_runs_total += 1
+                if recent:
+                    scav_runs_24h += 1
+            elif rtype == "ReportTrade":
+                trades_total += 1
+                if recent:
+                    trades_24h += 1
+
+        # Real in-game HQ build queue (how many buildings are actually queued
+        # now, across all villages) — not the bot's planned build order.
+        active_build_items = sum(
+            cls._to_int((vd or {}).get("active_building_queue", 0))
+            for vd in managed.values()
+        )
+
+        # Scavenging loot. The completed reports carry no haul, so the bot logs
+        # each run's expected loot (carry capacity * option ratio) to
+        # cache/scavenge_log.json: an all-time total plus ~25h of runs for 24h.
+        scav_log = {}
+        try:
+            scav_path = DataReader.data_path("cache", "scavenge_log.json")
+            if os.path.exists(scav_path):
+                with open(scav_path) as f:
+                    scav_log = json.load(f) or {}
+        except Exception:
+            scav_log = {}
+        scav_loot_total = cls._to_int(scav_log.get("total_loot"))
+        scav_loot_24h = sum(
+            cls._to_int(r.get("loot")) for r in (scav_log.get("runs", []) or [])
+            if cls._to_int(r.get("when")) >= cutoff
+        )
+
         return {
             "summary": {
                 "villages": len(managed),
                 "farm_targets": farm_targets,
                 "scout_targets": scout_targets,
                 "scavenging_runs": scavenging_runs,
+                "scavenging_enabled": scavenging_enabled,
                 "trades": trades,
                 "queued_buildings": queued_total,
+                "active_build_items": active_build_items,
+                "farm_runs_24h": farm_runs_24h,
+                "farm_runs_total": farm_runs_total,
+                "farm_loot_24h": farm_loot_24h,
+                "farm_loot_total": farm_loot_total,
+                "scav_runs_24h": scav_runs_24h,
+                "scav_runs_total": scav_runs_total,
+                "scav_loot_24h": scav_loot_24h,
+                "scav_loot_total": scav_loot_total,
+                "trades_24h": trades_24h,
+                "trades_total": trades_total,
                 "resources": totals,
                 "troops": total_troops,
                 "troops_home": home_troops,
+                "troops_away": troops_away,
                 "loot_recent": loot_recent,
                 "last_activity": last_activity,
             },
