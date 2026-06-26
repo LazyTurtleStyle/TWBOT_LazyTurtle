@@ -4,6 +4,7 @@ Report management
 import json
 import logging
 import re
+import time
 from datetime import datetime
 
 from core.extractors import Extractor
@@ -52,6 +53,36 @@ class ReportManager:
         if entry["extra"].get("resources", None):
             return True, entry["extra"]["resources"]
         return False, {}
+
+    def latest_for(self, vid, report_type=None):
+        """
+        Finds the most recent report for a village id, optionally restricted to a report type
+        ("scout" or "attack"). "scout" matches any report carrying spy intel (resources/
+        buildings) - not just pure scout (A) actions, but also B/C farms sent with a spy in
+        the troop mix, since a surviving spy refreshes the exact same intel. Reports get
+        labelled type="attack" rather than "scout" whenever they also contain combat results,
+        so filtering on extra["resources"] instead of the type field is what actually catches
+        those. Returns (report_id, extra_dict, age_seconds) or (None, None, None)
+        """
+        possible_reports = []
+        for repid in self.last_reports:
+            entry = self.last_reports[repid]
+            if report_type == "scout":
+                if "resources" not in entry.get("extra", {}):
+                    continue
+            elif report_type and entry.get("type") != report_type:
+                continue
+            if vid == entry["dest"] and entry["extra"].get("when", None):
+                possible_reports.append((repid, entry))
+        if len(possible_reports) == 0:
+            return None, None, None
+
+        def highest_when(item):
+            return int(item[1]["extra"]["when"])
+
+        report_id, entry = max(possible_reports, key=highest_when)
+        age_seconds = int(time.time()) - int(entry["extra"]["when"])
+        return report_id, entry["extra"], age_seconds
 
     def safe_to_engage(self, vid):
         """
@@ -127,7 +158,20 @@ class ReportManager:
                     continue
 
                 else:
-                    res = self.put(report_id, report_type=report_type)
+                    # Capture the report timestamp for every type (scavenging,
+                    # trade, ...) so the dashboard can split them into last-24h
+                    # vs total. Best-effort: leaves extra empty if not found.
+                    extra = {}
+                    when_match = re.search(
+                        r'(\d{2}\.\d{2}\.\d{2} \d{2}\:\d{2}\:\d{2})<span class=\"small grey\">',
+                        data.text)
+                    if when_match:
+                        try:
+                            extra["when"] = int(datetime.strptime(
+                                when_match.group(1), "%d.%m.%y %H:%M:%S").timestamp())
+                        except ValueError:
+                            pass
+                    res = self.put(report_id, report_type=report_type, data=extra)
                     self.last_reports[report_id] = res
         if new == 12 or full_run and page < 20:
             page += 1

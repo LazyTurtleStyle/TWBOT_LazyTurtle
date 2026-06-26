@@ -690,6 +690,14 @@ class Village:
         return len(rewards) > 0
 
     def set_cache_vars(self):
+        gv = self.game_data.get("village", {}) if self.game_data else {}
+
+        def _prod_per_hour(key):
+            try:
+                return int(round(float(gv.get(key, 0)) * 3600))
+            except (TypeError, ValueError):
+                return 0
+
         village_entry = {
             "name": self.game_data["village"]["name"],
             "public": self.area.in_cache(self.village_id) if self.area else None,
@@ -698,8 +706,20 @@ class Village:
             "available_troops": self.units.troops,
             "buidling_levels": self.builder.levels,
             "building_queue": self.builder.queue,
+            "active_building_queue": getattr(self.builder, "queue_count_ingame", 0),
             "troops": self.units.total_troops,
             "under_attack": self.def_man.under_attack,
+            # Exact capacity/pop/production straight from the game (per-hour for
+            # production; the live rate already includes world speed).
+            "storage_max": gv.get("storage_max"),
+            "pop_used": gv.get("pop"),
+            "pop_max": gv.get("pop_max"),
+            "production": {
+                "wood": _prod_per_hour("wood_prod"),
+                "stone": _prod_per_hour("stone_prod"),
+                "iron": _prod_per_hour("iron_prod"),
+            },
+            "scavenge_state": getattr(self.units, "scavenge_state", None),
             "last_run": int(time.time()),
         }
         FileManager.save_json_file(village_entry, f"cache/managed/{self.village_id}.json")

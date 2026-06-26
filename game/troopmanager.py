@@ -7,7 +7,37 @@ import random
 import time
 
 from core.extractors import Extractor
+from core.filemanager import FileManager
 from game.resources import ResourceManager
+
+# TribalWars scavenging loot ratio per option (I-IV): the resources a run
+# returns equal the squad's total carry capacity times this factor.
+SCAVENGE_LOOT_FACTOR = {1: 0.10, 2: 0.25, 3: 0.50, 4: 0.75}
+
+
+def log_scavenge_haul(village_id, option, carry_max):
+    """Record the expected loot of a dispatched scavenging squad.
+
+    The completed-scavenging reports carry no haul data, so we compute the
+    expected loot up front (carry_max * option loot factor) and accumulate it
+    into cache/scavenge_log.json for the dashboard's 24h / total figures.
+    """
+    try:
+        loot = int(int(carry_max) * SCAVENGE_LOOT_FACTOR.get(int(option), 0))
+    except (TypeError, ValueError):
+        return
+    if loot <= 0:
+        return
+    log = FileManager.load_json_file("cache/scavenge_log.json") or {}
+    now = int(time.time())
+    log["total_loot"] = int(log.get("total_loot", 0)) + loot
+    runs = log.get("runs", []) or []
+    runs.append({"when": now, "loot": loot, "option": int(option), "village": str(village_id)})
+    # Keep ~25h of individual runs for the 24h window; the all-time figure lives
+    # in total_loot so the list stays small.
+    cutoff = now - 90000
+    log["runs"] = [r for r in runs if r.get("when", 0) >= cutoff]
+    FileManager.save_json_file(log, "cache/scavenge_log.json")
 
 
 class TroopManager:
@@ -17,7 +47,6 @@ class TroopManager:
     can_recruit = True
     can_attack = True
     can_dodge = False
-    can_scout = True
     can_farm = True
     can_gather = True
     can_fix_queue = True
@@ -360,6 +389,25 @@ class TroopManager:
         result = self.wrapper.get_url(url=url)
         village_data = Extractor.village_data(result)
 
+        # Snapshot each scavenge option's state (locked / running / idle, plus the
+        # active squad's expected loot + return time) for the dashboard.
+        self.scavenge_state = []
+        for opt in sorted((village_data.get('options') or {}).keys(), key=lambda x: int(x)):
+            o = village_data['options'][opt] or {}
+            squad = o.get('scavenging_squad')
+            carry = (squad or {}).get('carry_max')
+            try:
+                loot = int(int(carry) * SCAVENGE_LOOT_FACTOR.get(int(opt), 0)) if carry else 0
+            except (TypeError, ValueError):
+                loot = 0
+            self.scavenge_state.append({
+                'option': int(opt),
+                'locked': bool(o.get('is_locked')),
+                'running': squad is not None,
+                'return_at': (squad or {}).get('return_time') or (squad or {}).get('finished_at'),
+                'loot': loot,
+            })
+
         sleep = 0
         available_selection = 0
 
@@ -459,10 +507,11 @@ class TroopManager:
                     sleep += random.randint(1, 5)
                     time.sleep(sleep)
                     self.last_gather = int(time.time())
+                    log_scavenge_haul(self.village_id, available_selection, curr_haul)
                     self.logger.info(f"Using troops for gather operation: {available_selection}")
                 else:
-                    # Gathering already exists or locked
-                    break
+                    # Gathering already exists or locked, try next lower option
+                    continue
 
         else:
             for option in reversed(sorted(village_data['options'].keys())):
@@ -505,10 +554,11 @@ class TroopManager:
                             village_id=self.village_id,
                         )
                         self.last_gather = int(time.time())
+                        log_scavenge_haul(self.village_id, selection, total_carry)
                         self.logger.info(f"Using troops for gather operation: {selection}")
                 else:
-                    # Gathering already exists or locked
-                    break
+                    # Gathering already exists or locked, try next lower option
+                    continue
         self.logger.info("All gather operations are underway.")
         return True
 
