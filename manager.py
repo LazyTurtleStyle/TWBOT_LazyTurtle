@@ -28,6 +28,16 @@ class VillageManager:
             logger.info("Reports: %d", len(reports))
             logger.info("Farms: %d", len(attacks))
         t = {"wood": 0, "iron": 0, "stone": 0}
+        # Index attack reports by destination in a single pass so each farm
+        # below is an O(1) lookup instead of re-scanning every report. Without
+        # this the loop is O(farms x reports) every cycle and only gets slower
+        # as the report history grows.
+        reports_by_dest = {}
+        for rep in reports:
+            report = reports[rep]
+            if report["type"] == "attack":
+                reports_by_dest.setdefault(report["dest"], []).append(report)
+
         for farm in attacks:
             data = attacks[farm]
 
@@ -35,20 +45,19 @@ class VillageManager:
             loot = {"wood": 0, "iron": 0, "stone": 0}
             total_loss_count = 0
             total_sent_count = 0
-            for rep in reports:
-                if reports[rep]["dest"] == farm and reports[rep]["type"] == "attack":
-                    for unit in reports[rep]["extra"]["units_sent"]:
-                        total_sent_count += reports[rep]["extra"]["units_sent"][unit]
-                    for unit in reports[rep]["extra"]["units_losses"]:
-                        total_loss_count += reports[rep]["extra"]["units_losses"][unit]
-                    try:
-                        res = reports[rep]["extra"]["loot"]
-                        for r in res:
-                            loot[r] = loot[r] + int(res[r])
-                            t[r] = t[r] + int(res[r])
-                        num_attack.append(reports[rep])
-                    except:
-                        pass
+            for report in reports_by_dest.get(farm, []):
+                for unit in report["extra"]["units_sent"]:
+                    total_sent_count += report["extra"]["units_sent"][unit]
+                for unit in report["extra"]["units_losses"]:
+                    total_loss_count += report["extra"]["units_losses"][unit]
+                try:
+                    res = report["extra"]["loot"]
+                    for r in res:
+                        loot[r] = loot[r] + int(res[r])
+                        t[r] = t[r] + int(res[r])
+                    num_attack.append(report)
+                except:
+                    pass
             percentage_lost = 0
 
             if total_sent_count > 0:

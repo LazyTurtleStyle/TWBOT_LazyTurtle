@@ -206,11 +206,15 @@ class WebWrapper:
         automatically - no restart, and no blocking input() like start() uses on
         first run. Returns True when a valid game session is active afterwards.
         """
-        cookie_file = "cache/cookies.txt"
-        if not os.path.exists(cookie_file):
+        # Read through FileManager so the cookie file resolves to the active
+        # world's data dir (worlds/<name>/cache/cookies.txt), matching where the
+        # dashboard's cookie paste and start() write it. A raw relative open()
+        # here would look in the project-root cache/ and never find a
+        # per-world cookie, so live re-auth would silently fail.
+        raw = FileManager.read_file("cache/cookies.txt")
+        if not raw:
             return False
-        with open(cookie_file, 'r') as f:
-            cookies = self._parse_cookie_string(f.read())
+        cookies = self._parse_cookie_string(raw)
         if not cookies:
             return False
         self.web.cookies.clear()

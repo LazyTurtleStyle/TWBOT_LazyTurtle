@@ -581,12 +581,18 @@ class TroopManager:
 
         existing = Extractor.active_recruit_queue(data)
         if existing:
+            if not self.can_fix_queue:
+                # A pre-existing queue is the expected case when we're not
+                # allowed to touch it - log quietly instead of warning.
+                self.logger.debug(
+                    "Building Village %s %s recruitment queue already populated, leaving as-is"
+                    % (self.village_id, building)
+                )
+                return True
             self.logger.warning(
-                "Building Village %s %s recruitment queue out-of-sync"
+                "Building Village %s %s recruitment queue out-of-sync, clearing it"
                 % (self.village_id, building)
             )
-            if not self.can_fix_queue:
-                return True
             for entry in existing:
                 self.cancel(building=building, id=entry)
                 self.logger.info(
