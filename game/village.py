@@ -93,6 +93,7 @@ class Village:
             )
             if data:
                 self.game_data = Extractor.game_state(data)
+            if self.game_data:
                 self.logger = logging.getLogger(
                     "Village %s" % self.game_data["village"]["name"]
                 )
@@ -102,6 +103,16 @@ class Village:
                     "TWB_START",
                     "Starting run for village: %s" % self.game_data["village"]["name"],
                 )
+        if not self.game_data:
+            # Page didn't contain a valid game state (e.g. a login / redirect
+            # page after a re-auth). Don't crash here; let run() handle it.
+            if not self.logger:
+                self.logger = logging.getLogger("Village %s" % self.village_id)
+            self.logger.error(
+                "Could not read game state for village %s (got a non-game page)",
+                self.village_id,
+            )
+            return data
         if (
                 self.village_set_name
                 and self.game_data["village"]["name"] != self.village_set_name
@@ -550,6 +561,58 @@ class Village:
         # Window wraps past midnight (e.g. 23 -> 7).
         return hour >= start or hour < end
 
+    def _scavenge_target_option(self, hq_level):
+        """Highest scavenge option (1..4) this village should have unlocked
+        given its headquarters (main building) level. The per-option HQ
+        thresholds are configurable; 0 means nothing should be unlocked yet."""
+        thresholds = [
+            int(self.get_village_config(self.village_id, parameter="scavenge_unlock_hq_1", default=1)),
+            int(self.get_village_config(self.village_id, parameter="scavenge_unlock_hq_2", default=5)),
+            int(self.get_village_config(self.village_id, parameter="scavenge_unlock_hq_3", default=8)),
+            int(self.get_village_config(self.village_id, parameter="scavenge_unlock_hq_4", default=15)),
+        ]
+        target = 0
+        for option, needed in enumerate(thresholds, start=1):
+            if hq_level >= needed:
+                target = option
+        return target
+
+    def do_scavenge_unlock(self):
+        """Auto-unlock scavenging options based on headquarters level, before
+        the builder runs. Sets builder.hold_for_scavenge so building can be held
+        back while a wanted unlock is pending but unaffordable (when the village
+        prioritises unlocking over building). No-op on the first cycle, before
+        the builder/units exist."""
+        if not self.builder or not self.units:
+            return
+        if not self.get_village_config(
+            self.village_id, parameter="scavenge_unlock_enabled", default=False
+        ):
+            self.builder.hold_for_scavenge = False
+            return
+
+        target = self._scavenge_target_option(self.builder.get_level("main"))
+        if target < 1:
+            self.builder.hold_for_scavenge = False
+            return
+
+        # Skip the extra page fetch once everything we want is already unlocked,
+        # using last cycle's scavenge snapshot (recorded by the gather step).
+        snapshot = getattr(self.units, "scavenge_state", None)
+        if snapshot and all(
+            not o.get("locked") for o in snapshot if o.get("option", 0) <= target
+        ):
+            self.builder.hold_for_scavenge = False
+            return
+
+        status = self.units.unlock_scavenge(max_option=target)
+        prioritise = self.get_village_config(
+            self.village_id, parameter="prioritize_scavenge_unlock", default=False
+        )
+        self.builder.hold_for_scavenge = bool(
+            prioritise and status.get("pending") and not status.get("affordable", True)
+        )
+
     def do_gather(self):
         """
         Runs gathering if unlocked and active
@@ -641,6 +704,7 @@ class Village:
         self.setup_defence_manager(data=data)
         self.run_quest_actions(config=config)
 
+        self.do_scavenge_unlock()
         self.run_builder()
         self.units_get_template()
         self.set_unit_wanted_levels()

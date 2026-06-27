@@ -42,6 +42,11 @@ class BuildingManager:
 
     can_build_three_min = False
 
+    # Set by the village when a scavenge unlock is pending but unaffordable and
+    # the village prioritises unlocking over building: holds building this cycle
+    # so resources accumulate for the unlock.
+    hold_for_scavenge = False
+
     def __init__(self, wrapper, village_id):
         """
         Create the building manager
@@ -258,6 +263,10 @@ class BuildingManager:
         """
         Calculates the next best possible building action
         """
+        if self.hold_for_scavenge:
+            self.logger.info("Holding building: prioritising a pending scavenge unlock")
+            return False
+
         if index >= len(self.queue) or index >= self.max_lookahead:
             self.logger.debug("Not building anything because insufficient resources or index out of range")
             return False

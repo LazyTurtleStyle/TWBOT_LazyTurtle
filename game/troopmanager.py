@@ -385,6 +385,78 @@ class TroopManager:
                 return True
         self.logger.info("Research of %s not yet possible", unit_type)
 
+    @staticmethod
+    def _unlock_started(res):
+        """True when a start_unlock API response indicates the unlock began.
+        The game answers a successful unlock with the option's new state; a
+        rejected one (e.g. not enough resources) carries an error."""
+        if not res or not isinstance(res, dict):
+            return False
+        if res.get("error") or res.get("errors") or res.get("error_code"):
+            return False
+        return True
+
+    def unlock_scavenge(self, max_option=4):
+        """Auto-unlock scavenging options up to ``max_option`` (1..4), lowest
+        level first. Only one option can be unlocking at a time, so this starts
+        at most one unlock per call.
+
+        Returns a status dict:
+          ``pending``    - a wanted option is still locked and was not started
+                           this call (already unlocking, or unaffordable).
+          ``started``    - the option id we just began unlocking, else None.
+          ``affordable`` - False when a wanted option was skipped because the
+                           server rejected the unlock (insufficient resources).
+        Callers use ``pending`` + ``not affordable`` to decide whether to hold
+        building so resources can accumulate for the unlock."""
+        status = {"pending": False, "started": None, "affordable": True}
+        if max_option < 1:
+            return status
+
+        url = f"game.php?village={self.village_id}&screen=place&mode=scavenge"
+        result = self.wrapper.get_url(url=url)
+        village_data = Extractor.village_data(result)
+        options = (village_data or {}).get("options") or {}
+        if not options:
+            return status
+
+        # The game only allows one option to be unlocking at a time. If any is
+        # mid-unlock, there is nothing to start this cycle.
+        for opt, o in options.items():
+            if o and o.get("unlock_time"):
+                status["pending"] = True
+                return status
+
+        for opt in sorted(options.keys(), key=lambda x: int(x)):
+            if int(opt) > max_option:
+                break
+            o = options[opt] or {}
+            if not o.get("is_locked"):
+                continue
+            # Lowest locked option within target: try to unlock just this one.
+            payload = {
+                "village_id": self.village_id,
+                "option_id": str(int(opt)),
+                "h": self.wrapper.last_h,
+            }
+            res = self.wrapper.get_api_action(
+                action="start_unlock",
+                params={"screen": "scavenge_api"},
+                data=payload,
+                village_id=self.village_id,
+            )
+            if self._unlock_started(res):
+                self.logger.info("Started unlocking scavenge option %s", opt)
+                status["started"] = int(opt)
+            else:
+                self.logger.info(
+                    "Scavenge option %s not unlocked yet (insufficient resources?)", opt
+                )
+                status["pending"] = True
+                status["affordable"] = False
+            return status
+        return status
+
     def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=False):
         """
         Used for the gather resources functionality where it uses two options:

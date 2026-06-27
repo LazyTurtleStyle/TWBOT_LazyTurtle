@@ -175,6 +175,20 @@
                ~ sc.gather_night_start ~ '"> to <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="scavenge" data-param="gather_night_end" value="'
                ~ sc.gather_night_end ~ '">',
                'Hours (0–23) the night-consolidation runs, e.g. from 23 to 7. Wraps past midnight.') }}
+        <hr>
+        {{ row('Auto-unlock options (scavenge_unlock_enabled)',
+               toggle('scavenge', 'scavenge_unlock_enabled', sc.scavenge_unlock_enabled),
+               'Automatically unlock scavenging options (one at a time, lowest first) once the headquarters reaches the level set below for each option.') }}
+        {{ row('Prioritise unlock over building (prioritize_scavenge_unlock)',
+               toggle('scavenge', 'prioritize_scavenge_unlock', sc.prioritize_scavenge_unlock),
+               'When an unlock is wanted but unaffordable, hold off building so resources accumulate for the unlock.') }}
+        {{ row('HQ level per option (1 → 4)',
+               'Opt1 <input type="number" min="1" max="30" class="form-control form-control-sm d-inline-block" style="width:4rem" data-scope="scavenge" data-param="scavenge_unlock_hq_1" value="'
+               ~ sc.scavenge_unlock_hq_1 ~ '"> 2 <input type="number" min="1" max="30" class="form-control form-control-sm d-inline-block" style="width:4rem" data-scope="scavenge" data-param="scavenge_unlock_hq_2" value="'
+               ~ sc.scavenge_unlock_hq_2 ~ '"> 3 <input type="number" min="1" max="30" class="form-control form-control-sm d-inline-block" style="width:4rem" data-scope="scavenge" data-param="scavenge_unlock_hq_3" value="'
+               ~ sc.scavenge_unlock_hq_3 ~ '"> 4 <input type="number" min="1" max="30" class="form-control form-control-sm d-inline-block" style="width:4rem" data-scope="scavenge" data-param="scavenge_unlock_hq_4" value="'
+               ~ sc.scavenge_unlock_hq_4 ~ '">',
+               'Headquarters level at which each scavenge option becomes eligible to unlock (e.g. HQ 3 → option 1).') }}
       </div>
     </div>
   </div>

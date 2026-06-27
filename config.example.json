@@ -1,7 +1,7 @@
 {
   "build": {
     "name": "tw_bot",
-    "version": "2.2",
+    "version": "2.4",
     "author": "stefan2200"
   },
   "server": {
@@ -32,7 +32,10 @@
     "check_update": false,
     "incoming_check": true,
     "incoming_check_min": 300,
-    "incoming_check_max": 570
+    "incoming_check_max": 570,
+    "scheduled_attacks": true,
+    "sched_prestage_seconds": 15,
+    "sched_lead_seconds": 0.0
   },
   "building": {
     "manage_buildings": true,
@@ -66,6 +69,12 @@
     "gather_night_consolidate": false,
     "gather_night_start": 23,
     "gather_night_end": 7,
+    "scavenge_unlock_enabled": false,
+    "prioritize_scavenge_unlock": false,
+    "scavenge_unlock_hq_1": 1,
+    "scavenge_unlock_hq_2": 5,
+    "scavenge_unlock_hq_3": 8,
+    "scavenge_unlock_hq_4": 15,
     "snobs": 0,
     "evacuate_fragile_units_on_attack": false,
     "support_others": false,

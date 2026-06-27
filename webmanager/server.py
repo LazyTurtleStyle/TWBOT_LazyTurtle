@@ -324,6 +324,11 @@ def pre_process_village_config(village_id):
     merged = dict(template)
     if isinstance(vcfg, dict):
         merged.update(vcfg)
+    # Backfill keys added to the example template after this world's config was
+    # written (e.g. new scavenge unlock options) so they still render in
+    # settings before the bot's next config merge persists them.
+    for key, value in DataReader.example_village_template().items():
+        merged.setdefault(key, value)
     return render_grouped('village_template', 'village', merged, village_id)
 
 
@@ -370,6 +375,23 @@ def stop_bot():
     return jsonify(not bm.is_running(world))
 
 
+@app.route('/app/world/create', methods=['POST'])
+def world_create():
+    """Create a new world's config from the dashboard, optionally starting it."""
+    result = DataReader.create_world(
+        request.form.get("url", ""),
+        request.form.get("user_agent", ""),
+        request.form.get("cookie", ""),
+    )
+    if not result.get("ok"):
+        return jsonify(result)
+    start = str(request.form.get("start", "")).lower() in ("1", "true", "on", "yes")
+    if start:
+        bm.start(result["world"])
+    result["started"] = bool(start)
+    return jsonify(result)
+
+
 @app.route('/config', methods=['GET'])
 def get_config():
     return render_template('config.html', data=sync(), config=pre_process_config(),
@@ -380,7 +402,35 @@ def get_config():
 @app.route('/attacks', methods=['GET'])
 def attacks_page():
     data = sync()
-    return render_template('attacks.html', data=data, plan=AttackPlanner.build(data))
+    scheduled = sorted(
+        DataReader.schedule_grab(),
+        key=lambda c: (c.get("status") != "pending", c.get("send_ts") or 0),
+    )
+    return render_template('attacks.html', data=data,
+                           plan=AttackPlanner.build(data), scheduled=scheduled)
+
+
+@app.route('/app/attack/schedule', methods=['POST'])
+def attack_schedule():
+    """Queue a timed attack. Expects JSON: origin_id, target_x, target_y,
+    arrival (unix seconds), units {unit: count}."""
+    body = request.get_json(silent=True) or {}
+    entry, error = DataReader.schedule_create(
+        origin_id=body.get("origin_id"),
+        target_x=body.get("target_x"),
+        target_y=body.get("target_y"),
+        units=body.get("units") or {},
+        arrival_ts=body.get("arrival"),
+    )
+    if error:
+        return jsonify({"ok": False, "error": error})
+    return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/attack/schedule/cancel', methods=['GET', 'POST'])
+def attack_schedule_cancel():
+    cid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    return jsonify({"ok": DataReader.schedule_cancel(cid)})
 
 
 @app.route('/defense', methods=['GET'])
@@ -747,7 +797,10 @@ def quick_set():
 
 # Per-village scavenging parameters that the Farms page broadcasts account-wide.
 SCAVENGE_PARAMS = ("gather_enabled", "gather_selection", "advanced_gather",
-                   "gather_night_consolidate", "gather_night_start", "gather_night_end")
+                   "gather_night_consolidate", "gather_night_start", "gather_night_end",
+                   "scavenge_unlock_enabled", "prioritize_scavenge_unlock",
+                   "scavenge_unlock_hq_1", "scavenge_unlock_hq_2",
+                   "scavenge_unlock_hq_3", "scavenge_unlock_hq_4")
 
 
 @app.route('/app/scavenge/set', methods=['GET'])
@@ -794,6 +847,12 @@ def farm_settings_state():
         "gather_night_consolidate": bool(template.get("gather_night_consolidate", False)),
         "gather_night_start": template.get("gather_night_start", 23),
         "gather_night_end": template.get("gather_night_end", 7),
+        "scavenge_unlock_enabled": bool(template.get("scavenge_unlock_enabled", False)),
+        "prioritize_scavenge_unlock": bool(template.get("prioritize_scavenge_unlock", False)),
+        "scavenge_unlock_hq_1": template.get("scavenge_unlock_hq_1", 1),
+        "scavenge_unlock_hq_2": template.get("scavenge_unlock_hq_2", 5),
+        "scavenge_unlock_hq_3": template.get("scavenge_unlock_hq_3", 8),
+        "scavenge_unlock_hq_4": template.get("scavenge_unlock_hq_4", 15),
     }
     return {"farms": farms, "scavenge": scavenge, "villages": per_village}
 

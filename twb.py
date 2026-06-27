@@ -39,6 +39,7 @@ from core.filemanager import FileManager
 from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
+from game import attack_scheduler
 from manager import VillageManager
 from pages.overview import OverviewPage
 from core.exceptions import UnsupportedPythonVersion
@@ -460,6 +461,54 @@ class TWB:
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)
 
+    def scheduled_attack_runner(self, config):
+        """Background loop: fire timed attacks queued from the Attack tab.
+
+        Runs on its own clock (not the slow main cycle) so commands launch close
+        to their scheduled moment. We wake `prestage` seconds before a command's
+        send moment, then run the open+confirm steps and fire the final launch at
+        arrival - (server travel time) - network_lead for accuracy. Cookies are
+        reloaded from the cached session each time so a refreshed login is picked
+        up automatically.
+        """
+        logger = logging.getLogger("AttackScheduler")
+        sender = self._make_poller_wrapper(config)
+        # Timed sends must not incur the wrapper's 3-7s human-pacing delay, or the
+        # open->confirm->launch sequence lands the attack tens of seconds late.
+        sender.priority_mode = True
+        prestage = float(config["bot"].get(
+            "sched_prestage_seconds", attack_scheduler.PRESTAGE_SECONDS))
+        network_lead = float(config["bot"].get(
+            "sched_lead_seconds", attack_scheduler.NETWORK_LEAD))
+        last_prune = 0
+        while self.should_run:
+            try:
+                now = time.time()
+                if now - last_prune > 3600:
+                    attack_scheduler.prune()
+                    last_prune = now
+                next_send = attack_scheduler.next_send_ts()
+                if next_send is None:
+                    time.sleep(2)
+                    continue
+                wait = next_send - prestage - now
+                # Re-check the queue at least every 2s so new/cancelled commands
+                # are picked up; sleep until the pre-stage window when imminent.
+                if wait > 2:
+                    time.sleep(2)
+                    continue
+                if wait > 0:
+                    time.sleep(wait)
+                if not self.should_run:
+                    break
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    sender.web.cookies.update(session["cookies"])
+                attack_scheduler.run_due(sender, lead=prestage, network_lead=network_lead)
+            except Exception as exc:
+                logger.warning("Scheduled attack runner error: %s", exc)
+                time.sleep(2)
+
     def run(self):
         """
         Run the bot
@@ -517,6 +566,12 @@ class TWB:
                 int(config["bot"].get("incoming_check_min", 300)),
                 int(config["bot"].get("incoming_check_max", 570)),
             ))
+        if config["bot"].get("scheduled_attacks", True):
+            sched_thread = threading.Thread(
+                target=self.scheduled_attack_runner, args=(config,), daemon=True
+            )
+            sched_thread.start()
+            print("Scheduled-attack runner started")
         while self.should_run:
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
@@ -670,6 +725,9 @@ def main():
             t.wrapper.reporter.report(0, "TWB_EXCEPTION", str(e))
             print("I crashed :(   %s" % str(e))
             Notification.send("TWB crashed: %s" % str(e))
+            # Write the full traceback to the rotating log file (cache/twb.log)
+            # as well as stderr, so the crash survives the tmux pane / restart.
+            logging.getLogger("twb").exception("I crashed :( %s", str(e))
             traceback.print_exc()
 
     Notification.send("TWB has crashed 3 times, exiting")

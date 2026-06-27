@@ -1,12 +1,17 @@
 import collections
+import datetime
 import json
 import os
 import signal
+import uuid
 import subprocess
+import sys
 import threading
 import time
 
 import psutil
+
+from game import attack_scheduler
 
 try:
     from game.incomings import (
@@ -98,6 +103,60 @@ class DataReader:
         )
 
     @staticmethod
+    def create_world(url, user_agent="", cookie=""):
+        """Bootstrap a new world from the dashboard (no interactive prompt).
+
+        Parses the in-game URL, writes worlds/<name>/config.json from
+        config.example.json with the server endpoint/name and user agent set, and
+        optionally seeds a session cookie so the bot can run unattended. Returns
+        {"ok": True, "world": name} or {"ok": False, "error": msg}. Never
+        overwrites an existing world.
+        """
+        url = (url or "").strip()
+        if "://" not in url:
+            return {"ok": False, "error": "Enter the full game URL, e.g. "
+                    "https://nl99.tribalwars.nl/game.php?screen=overview"}
+        host = url.split("://", 1)[1].split("/")[0]
+        endpoint = url.split("?")[0]
+        name = os.path.basename(host.split(".")[0].lower().strip())
+        if not host or "." not in host or not name:
+            return {"ok": False, "error": "That does not look like a valid world URL."}
+
+        world_dir = os.path.join(DataReader.project_root(), "worlds", name)
+        config_path = os.path.join(world_dir, "config.json")
+        if os.path.exists(config_path):
+            return {"ok": False, "error": "World '%s' already exists." % name}
+
+        example_path = os.path.join(DataReader.project_root(), "config.example.json")
+        try:
+            with open(example_path) as f:
+                template = json.load(f, object_pairs_hook=collections.OrderedDict)
+        except (OSError, ValueError):
+            return {"ok": False, "error": "config.example.json is missing or invalid."}
+
+        template.setdefault("server", {})
+        template["server"]["endpoint"] = endpoint
+        template["server"]["server"] = name
+        ua = (user_agent or "").strip()
+        if len(ua) >= 10:
+            template.setdefault("bot", {})
+            template["bot"]["user_agent"] = ua
+
+        cache_dir = os.path.join(world_dir, "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(config_path, "w") as f:
+            json.dump(template, f, indent=2, sort_keys=False)
+
+        cookies = DataReader.parse_cookie_string(cookie)
+        if cookies:
+            with open(os.path.join(cache_dir, "session.json"), "w") as f:
+                json.dump({"endpoint": endpoint, "server": name, "cookies": cookies},
+                          f, indent=2)
+            with open(os.path.join(cache_dir, "cookies.txt"), "w") as f:
+                f.write((cookie or "").strip())
+        return {"ok": True, "world": name}
+
+    @staticmethod
     def data_path(*parts):
         """Resolve config.json / cache paths under the active world's data dir."""
         name = DataReader.active_world()
@@ -179,6 +238,132 @@ class DataReader:
             return {}
         with open(path, 'r') as f:
             return json.load(f)
+
+    SCHEDULE_REL = ("cache", "scheduled_attacks.json")
+
+    @staticmethod
+    def schedule_path():
+        """World-aware path of the queue file the bot reads/writes."""
+        return DataReader.data_path(*DataReader.SCHEDULE_REL)
+
+    @staticmethod
+    def schedule_grab():
+        """World-aware read of the scheduled-attacks queue (shared with the bot,
+        which reads the same per-world cache file). Always returns a list."""
+        return attack_scheduler.load_schedule(path=DataReader.schedule_path())
+
+    @staticmethod
+    def _forced_peace_conflict(arrival_ts):
+        """True if arrival_ts (unix seconds) falls inside a configured forced-peace
+        window. Mirrors game.village.check_forced_peace: an attack must not arrive
+        during forced peace. Windows are naive local-time strings, matching the
+        bot's own parsing."""
+        config = DataReader.config_grab()
+        windows = ((config.get("farms") or {}).get("forced_peace_times")) or []
+        arrival = datetime.datetime.fromtimestamp(arrival_ts)
+        for pair in windows:
+            try:
+                start = datetime.datetime.strptime(pair["start"], "%d.%m.%y %H:%M:%S")
+                end = datetime.datetime.strptime(pair["end"], "%d.%m.%y %H:%M:%S")
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start <= arrival <= end:
+                return True
+        return False
+
+    @staticmethod
+    def schedule_create(origin_id, target_x, target_y, units, arrival_ts):
+        """Queue a timed attack scheduled to LAND at arrival_ts (unix seconds).
+        The send moment is back-calculated from the slowest selected unit's
+        travel time. Returns (entry, error_message)."""
+        origin_id = str(origin_id)
+        managed = DataReader.cache_grab("managed")
+        origin = managed.get(origin_id) or {}
+        pub = origin.get("public") or {}
+        loc = pub.get("location")
+        if not loc or len(loc) != 2:
+            return None, "unknown origin village"
+        try:
+            tx, ty = int(target_x), int(target_y)
+        except (TypeError, ValueError):
+            return None, "invalid target coordinates"
+        try:
+            arrival_ts = int(float(arrival_ts))
+        except (TypeError, ValueError):
+            return None, "invalid arrival time"
+
+        selected = {}
+        for unit, count in (units or {}).items():
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                selected[unit] = count
+        if not selected:
+            return None, "no units selected"
+
+        if arrival_ts <= int(time.time()):
+            return None, "arrival time is in the past"
+        if DataReader._forced_peace_conflict(arrival_ts):
+            return None, "arrival falls inside a forced-peace window"
+
+        if not (field_distance and unit_travel_seconds):
+            return None, "travel-time helpers unavailable"
+        ws, us, speeds = DataReader.world_speeds()
+        distance = field_distance((loc[0], loc[1]), (tx, ty))
+        travels = [unit_travel_seconds(distance, speeds[u], ws, us)
+                   for u in selected if speeds.get(u)]
+        if not travels:
+            return None, "no travel speed for the selected units"
+        travel = max(travels)  # the slowest unit dictates arrival
+
+        if arrival_ts - travel <= int(time.time()):
+            return None, "troops can't reach the target by that arrival time"
+
+        target_name = None
+        for v in DataReader.cache_grab("villages").values():
+            vloc = v.get("location")
+            if vloc and len(vloc) == 2 and int(vloc[0]) == tx and int(vloc[1]) == ty:
+                nm = v.get("name")
+                target_name = nm if isinstance(nm, str) and nm else None
+                break
+
+        entry = {
+            "id": uuid.uuid4().hex[:12],
+            "origin_id": origin_id,
+            "origin_name": origin.get("name") or pub.get("name") or origin_id,
+            "target_x": tx, "target_y": ty,
+            "target_name": target_name,
+            "units": selected,
+            "arrival_ts": arrival_ts,
+            "send_ts": int(arrival_ts - travel),
+            "travel_seconds": int(travel),
+            "distance": round(distance, 1),
+            "status": "pending",
+            "created": int(time.time()),
+        }
+        # Append through the shared, locked, atomic store so the bot's concurrent
+        # status writes can't clobber this command (and vice versa).
+        attack_scheduler.add_command(entry, path=DataReader.schedule_path())
+        return entry, None
+
+    @staticmethod
+    def schedule_cancel(command_id):
+        return attack_scheduler.cancel_command(command_id, path=DataReader.schedule_path())
+
+    @staticmethod
+    def example_village_template():
+        """Default village_template from config.example.json. Used to backfill
+        settings keys added after a world's config.json was first written (e.g.
+        new scavenge options) so they still render in the dashboard before the
+        bot's next config merge persists them."""
+        path = os.path.join(os.path.dirname(__file__), "..", "config.example.json")
+        try:
+            with open(path, "r") as f:
+                return (json.load(f) or {}).get("village_template", {}) or {}
+        except Exception:
+            return {}
 
     @staticmethod
     def config_set(parameter, value):
@@ -294,6 +479,7 @@ class DataReader:
             "gather_enabled": True,
             "advanced_gather": True,
             "gather_selection": 4,
+            "scavenge_unlock_enabled": True,
             "farm_priority_pop_pct": 80,
         }
         config_file_path = DataReader.data_path("config.json")
@@ -970,6 +1156,8 @@ class AttackPlanner:
                 "name": vdata.get("name") or pub.get("name") or vid,
                 "coords": pub.get("location"),
                 "points": pub.get("points"),
+                # Troops standing in the village right now, for the schedule form.
+                "troops": {u: int(n) for u, n in (vdata.get("available_troops") or {}).items()},
             })
         origins.sort(key=lambda o: str(o["name"]))
 
@@ -1129,8 +1317,10 @@ class BotManager:
     def start(self, world=None):
         key = self._world_key(world)
         wd = os.path.join(os.path.dirname(__file__), "..")
-        cmd = "python twb.py" + (" --world %s" % key if key else "")
-        proc = subprocess.Popen(cmd, cwd=wd, shell=True)
+        # Use the interpreter running the web server (sys.executable) rather than
+        # a bare "python", which may not exist on systems that only ship python3.
+        cmd = [sys.executable, "twb.py"] + (["--world", key] if key else [])
+        proc = subprocess.Popen(cmd, cwd=wd)
         self._pids[key] = proc.pid
         print("Bot started successfully (%s)" % (key or "default"))
 

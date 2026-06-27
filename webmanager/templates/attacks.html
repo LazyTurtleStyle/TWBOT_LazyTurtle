@@ -96,6 +96,98 @@
 		</div>
 	</div>
 </div>
+
+<!-- ---------- Scheduled (timed) attacks ---------- -->
+<div class="row">
+	<div class="col-lg-5 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Schedule an attack</strong>
+				<small class="text-muted">— auto-sends so troops land at the chosen time</small></div>
+			<div class="card-body">
+				<p class="small text-muted mb-2">
+					Best-effort timing (within ~a second). The bot must be running. Precisely-timed
+					auto-sends carry more ban risk than farming — use with care.
+				</p>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Origin (your village)</label>
+					<select id="s_origin" class="form-control form-control-sm">
+						{% for o in plan.origins %}
+						{% if o.coords %}
+						<option value="{{ o.id }}" data-troops='{{ o.troops|tojson }}'
+							data-x="{{ o.coords[0] }}" data-y="{{ o.coords[1] }}">
+							{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
+						{% endif %}
+						{% else %}
+						<option value="">No managed villages found</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="form-row">
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target X</label>
+						<input id="s_tx" type="number" class="form-control form-control-sm" />
+					</div>
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target Y</label>
+						<input id="s_ty" type="number" class="form-control form-control-sm" />
+					</div>
+					<div class="form-group col-auto mb-2 d-flex align-items-end">
+						<button class="btn btn-outline-secondary btn-sm" onclick="copyPlanTarget()">⇐ planner</button>
+					</div>
+				</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Arrive at (date &amp; time)</label>
+					<input id="s_arrival" type="datetime-local" step="1" class="form-control form-control-sm" />
+				</div>
+				<label class="small mb-1">Units to send</label>
+				<div id="s_units" class="form-row"></div>
+				<div id="s_avail" class="small text-muted mb-2"></div>
+				<div id="s_preview" class="small mb-2"></div>
+				<button id="s_submit" class="btn btn-primary btn-sm">Schedule attack</button>
+				<div id="s_msg" class="small mt-2"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="col-lg-7 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Scheduled commands ({{ scheduled|length }})</strong></div>
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr>
+						<th>Target</th><th>Origin</th><th>Units</th>
+						<th class="text-right">Lands</th><th class="text-right">Sends in</th>
+						<th>Status</th><th></th>
+					</tr></thead>
+					<tbody>
+						{% for c in scheduled %}
+						<tr>
+							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
+								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
+							<td><small>{{ c.origin_name }}</small></td>
+							<td><small>{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</small></td>
+							<td class="text-right">{{ c.arrival_ts|ts }}</td>
+							<td class="text-right">
+								{% if c.status == 'pending' %}<span class="sched-eta" data-send="{{ c.send_ts }}">…</span>
+								{% else %}—{% endif %}</td>
+							<td>
+								{% if c.status == 'pending' %}<span class="badge badge-warning">pending</span>
+								{% elif c.status == 'sending' %}<span class="badge badge-info">sending</span>
+								{% elif c.status == 'sent' %}<span class="badge badge-success">sent</span>
+								{% elif c.status == 'cancelled' %}<span class="badge badge-secondary">cancelled</span>
+								{% else %}<span class="badge badge-danger" title="{{ c.result }}">failed</span>{% endif %}</td>
+							<td class="text-right">{% if c.status == 'pending' %}<button class="btn btn-outline-danger btn-sm py-0"
+								onclick="cancelSched('{{ c.id }}')">Cancel</button>{% endif %}</td>
+						</tr>
+						{% else %}
+						<tr><td colspan="7" class="text-muted">No scheduled commands.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -165,5 +257,113 @@ function planTarget(x, y) {
 ['origin','tx','ty','arrival'].forEach(id =>
 	document.getElementById(id).addEventListener('input', recompute));
 recompute();
+
+/* ---------- Scheduled attacks ---------- */
+function slowestTravelSec(dist, units) {
+	let max = 0;
+	Object.keys(units).forEach(u => {
+		if (units[u] > 0 && SPEEDS[u]) {
+			const sec = dist * SPEEDS[u] / (WORLD_SPEED*UNIT_SPEED) * 60;
+			if (sec > max) max = sec;
+		}
+	});
+	return max;
+}
+function selectedUnits() {
+	const out = {};
+	UNITS.forEach(u => {
+		const el = document.getElementById('su_'+u);
+		const n = parseInt(el && el.value, 10);
+		if (n > 0) out[u] = n;
+	});
+	return out;
+}
+function originOpt() { const s = document.getElementById('s_origin'); return s.options[s.selectedIndex]; }
+
+function buildUnitInputs() {
+	const wrap = document.getElementById('s_units');
+	wrap.innerHTML = UNITS.map(u =>
+		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+'</label>'+
+		'<input id="su_'+u+'" type="number" min="0" class="form-control form-control-sm" placeholder="0"></div>'
+	).join('');
+	UNITS.forEach(u => document.getElementById('su_'+u).addEventListener('input', schedPreview));
+}
+function updateAvail() {
+	const opt = originOpt();
+	let troops = {};
+	try { troops = JSON.parse(opt.getAttribute('data-troops') || '{}'); } catch(e) {}
+	const parts = Object.keys(troops).filter(u => troops[u] > 0).map(u => u+' '+troops[u]);
+	document.getElementById('s_avail').textContent = parts.length ? ('At home: ' + parts.join(', ')) : 'No troop snapshot for this village yet.';
+}
+function schedPreview() {
+	const opt = originOpt();
+	const ox = parseFloat(opt && opt.getAttribute('data-x')), oy = parseFloat(opt && opt.getAttribute('data-y'));
+	const tx = parseFloat(document.getElementById('s_tx').value), ty = parseFloat(document.getElementById('s_ty').value);
+	const av = document.getElementById('s_arrival').value;
+	const units = selectedUnits();
+	const el = document.getElementById('s_preview');
+	if ([ox,oy,tx,ty].some(isNaN) || !av || Object.keys(units).length === 0) {
+		el.textContent = ''; return;
+	}
+	const dist = Math.hypot(ox-tx, oy-ty);
+	const sec = slowestTravelSec(dist, units);
+	const arrive = new Date(av);
+	const send = new Date(arrive.getTime() - sec*1000);
+	const past = send < new Date();
+	el.innerHTML = 'Slowest travel '+fmtDur(sec)+' · send at <strong>'+fmtClock(send)+'</strong> '+
+		(past ? '<span class="text-danger">(already past — pick a later arrival)</span>'
+		      : '<span class="text-success">✓</span>');
+}
+function copyPlanTarget() {
+	document.getElementById('s_tx').value = document.getElementById('tx').value;
+	document.getElementById('s_ty').value = document.getElementById('ty').value;
+	schedPreview();
+}
+function cancelSched(id) {
+	if (!confirm('Cancel this scheduled attack?')) return;
+	fetch('/app/attack/schedule/cancel?id='+encodeURIComponent(id))
+		.then(r => r.json()).then(() => location.reload());
+}
+document.getElementById('s_submit').addEventListener('click', function() {
+	const opt = originOpt();
+	const av = document.getElementById('s_arrival').value;
+	const units = selectedUnits();
+	const msg = document.getElementById('s_msg');
+	if (!opt || !opt.value) { msg.innerHTML = '<span class="text-danger">Pick an origin.</span>'; return; }
+	if (!av) { msg.innerHTML = '<span class="text-danger">Pick an arrival time.</span>'; return; }
+	if (Object.keys(units).length === 0) { msg.innerHTML = '<span class="text-danger">Enter at least one unit.</span>'; return; }
+	const body = {
+		origin_id: opt.value,
+		target_x: parseInt(document.getElementById('s_tx').value, 10),
+		target_y: parseInt(document.getElementById('s_ty').value, 10),
+		arrival: Math.floor(new Date(av).getTime() / 1000),
+		units: units,
+	};
+	msg.textContent = 'Scheduling…';
+	fetch('/app/attack/schedule', {
+		method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+	}).then(r => r.json()).then(d => {
+		if (!d.ok) { msg.innerHTML = '<span class="text-danger">'+(d.error||'failed')+'</span>'; return; }
+		msg.innerHTML = '<span class="text-success">Scheduled.</span>';
+		setTimeout(() => location.reload(), 900);
+	}).catch(e => { msg.innerHTML = '<span class="text-danger">Error: '+e+'</span>'; });
+});
+
+document.getElementById('s_origin').addEventListener('change', function() { updateAvail(); schedPreview(); });
+['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', schedPreview));
+buildUnitInputs();
+updateAvail();
+
+/* Live "sends in" countdown for the scheduled-commands table. */
+setInterval(function() {
+	const now = Math.floor(Date.now()/1000);
+	document.querySelectorAll('.sched-eta').forEach(function(el) {
+		const at = parseInt(el.getAttribute('data-send'), 10);
+		if (!at) return;
+		const left = at - now;
+		el.textContent = left <= 0 ? 'now' : fmtDur(left);
+		if (left <= 0) el.classList.add('text-success');
+	});
+}, 1000);
 </script>
 {% endblock %}
