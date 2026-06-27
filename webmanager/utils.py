@@ -281,6 +281,34 @@ class DataReader:
         return applied
 
     @staticmethod
+    def apply_opening_strategy(village_id):
+        """Apply the day 1-5 'opening (into off)' preset to one village: the
+        spear-rush build + troop templates, scavenging on, and population-priority
+        farming. A one-time set-up for a world's first village - the templates
+        flow into the full game, so nothing needs switching off later. Returns
+        False if the village has no config entry.
+        """
+        preset = {
+            "building": "opening_into_off",
+            "units": "opening_into_off",
+            "gather_enabled": True,
+            "advanced_gather": True,
+            "gather_selection": 4,
+            "farm_priority_pop_pct": 80,
+        }
+        config_file_path = DataReader.data_path("config.json")
+        with open(config_file_path, 'r') as config_file:
+            template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
+        villages = template.get("villages", {})
+        vid = str(village_id)
+        if vid not in villages:
+            return False
+        villages[vid].update(preset)
+        with open(config_file_path, 'w') as newcf:
+            json.dump(template, newcf, indent=2, sort_keys=False)
+        return True
+
+    @staticmethod
     def broadcast_village_set(parameter, value):
         """
         Set a per-village parameter on every village plus the village_template,

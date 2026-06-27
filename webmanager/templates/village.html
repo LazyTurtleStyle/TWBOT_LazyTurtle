@@ -149,6 +149,7 @@
 	<div><span class="eyebrow">Configure this village</span>
 		<div class="faint" style="font-size:12px">Overrides the global template. Toggles save instantly; numbers/text use Save.</div></div>
 	<div class="flex" style="gap:8px">
+		<button id="apply_opening" class="btn btn-sm" title="Day 1-5 spear-rush + scavenging preset (build + troop templates, scavenging on, pop-priority farm). Best on a fresh first village.">Opening strategy into off</button>
 		<button id="apply_default" class="btn btn-sm" title="Overwrite this village's settings with the default template">Reset to default</button>
 		<button id="save_config" class="btn btn-ember btn-sm disabled">Save</button>
 	</div>
@@ -198,6 +199,10 @@
 		$('#apply_default').click(function() {
 			if (!confirm('Overwrite this village\'s settings with the default village template? Unsaved edits will be lost.')) return;
 			$.ajax({url: '/app/village/apply_template?village_id={{current_select}}', method: 'POST'}).done(function() { location.reload(); });
+		});
+		$('#apply_opening').click(function() {
+			if (!confirm('Apply the opening (into off) strategy to this village?\n\nSets the spear-rush build + troop templates, enables scavenging, and turns on population-priority farming. Best on a fresh first village.')) return;
+			$.ajax({url: '/app/village/apply_opening?village_id={{current_select}}', method: 'POST'}).done(function() { location.reload(); });
 		});
 	});
 </script>

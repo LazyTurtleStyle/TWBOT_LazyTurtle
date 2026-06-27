@@ -816,6 +816,17 @@ def village_apply_template():
     return jsonify({"ok": True, "applied": applied})
 
 
+@app.route('/app/village/apply_opening', methods=['POST'])
+def village_apply_opening():
+    """Apply the 'opening (into off)' spear-rush + scavenging preset to one village."""
+    vid = request.args.get("village_id")
+    if vid is None:
+        vid = (request.get_json(silent=True) or {}).get("village_id")
+    if not DataReader.apply_opening_strategy(vid):
+        return jsonify({"ok": False, "error": "village has no config entry"})
+    return jsonify({"ok": True})
+
+
 @app.route('/app/incoming/tag', methods=['POST'])
 def incoming_tag():
     command_id = request.form.get("command_id")
