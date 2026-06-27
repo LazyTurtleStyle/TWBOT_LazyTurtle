@@ -162,6 +162,8 @@
 	.pulse { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 	.pulse.on  { background: var(--moss); box-shadow: 0 0 0 0 rgba(147,165,106,.7); animation: pulse 2.4s infinite; }
 	.pulse.off { background: var(--ink-faint); }
+	.pulse.warn { background: var(--blood); box-shadow: 0 0 0 0 rgba(210,75,62,.7); animation: pulse 1.2s infinite; }
+	.bot-status.expired { border-color: rgba(210,75,62,.5); background: rgba(210,75,62,.08); }
 	@keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(147,165,106,0); } 100% { box-shadow: 0 0 0 0 rgba(147,165,106,0); } }
 	.bot-status .label { font-size: 12px; line-height: 1.25; }
 	.bot-status .label b { font-family: var(--display); letter-spacing: .03em; }
@@ -228,6 +230,8 @@
 
 	/* ---------- Troop columns (overview) ---------- */
 	.troop-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+	.troop-cols.troop-cols-4 { grid-template-columns: repeat(4, 1fr); gap: 14px; }
+	@media (max-width: 680px) { .troop-cols.troop-cols-4 { grid-template-columns: repeat(2, 1fr); } }
 	.troop-cols .tcol-head { font-family: var(--display); text-transform: uppercase; letter-spacing: .1em;
 		font-size: 11px; color: var(--ink-faint); font-weight: 600; border-bottom: 1px solid var(--line-soft);
 		padding-bottom: 6px; margin-bottom: 8px; }
@@ -325,6 +329,16 @@
 	.qc-row:hover { background: rgba(255,255,255,.02); }
 	.qc-row .qc-name { font-weight: 600; font-size: 14px; }
 	.qc-row .qc-sub { font-size: 11px; color: var(--ink-faint); margin-top: 1px; }
+	/* A sub-toggle nested under its parent (e.g. Night consolidate under Scavenging). */
+	.qc-row.qc-parent { border-bottom: none; }
+	.qc-row.qc-child { padding: 8px 2px 11px 20px; position: relative; }
+	.qc-row.qc-child .qc-name { font-weight: 500; font-size: 12.5px; color: var(--ink-dim); }
+	.qc-row.qc-child .qc-sub { font-size: 10px; }
+	.qc-row.qc-child::before { content: ""; position: absolute; left: 7px; top: -2px; height: 22px; width: 9px;
+		border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); border-bottom-left-radius: 5px; }
+	.qc-row.qc-child .toggle .track { width: 34px; height: 19px; }
+	.qc-row.qc-child .toggle .track::after { width: 13px; height: 13px; }
+	.qc-row.qc-child .toggle.on .track::after { left: 17px; }
 	.qc-caption { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px 12px;
 		border: 1px dashed var(--line); border-radius: var(--radius); color: var(--ink-dim); font-size: 12px; }
 	.quick-panel .qp-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 16px; }
@@ -475,9 +489,12 @@
 		</a>
 		{% endfor %}
 		{% endfor %}
-		<div class="bot-status world-switch" id="worldSwitch" onclick="this.classList.toggle('open')">
-			<span class="pulse {{ 'on' if bot_running else 'off' }}"></span>
-			<span class="label">Bot <b>{{ 'online' if bot_running else 'offline' }}</b><br>
+		<div class="bot-status world-switch{% if session_expired %} expired{% endif %}" id="worldSwitch" onclick="this.classList.toggle('open')">
+			<span class="pulse {{ 'warn' if (bot_running and session_expired) else ('on' if bot_running else 'off') }}"></span>
+			<span class="label">Bot
+				{% if bot_running and session_expired %}<b style="color:var(--blood)">session expired</b>
+				{% elif bot_running %}<b>online</b>
+				{% else %}<b>offline</b>{% endif %}<br>
 				<span class="faint">{{ active_world or 'default world' }}</span></span>
 			{% if worlds %}<span class="ws-caret">▾</span>{% endif %}
 		</div>
@@ -525,9 +542,9 @@
 	<div class="quick-panel">
 		<div class="qp-head"><h3>Quick controls</h3><button class="btn btn-sm" onclick="toggleQuick()">Close</button></div>
 		{% for t in quick_toggles %}
-		<div class="qc-row" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
+		<div class="qc-row{% if t.key == 'scavenge_night' %} qc-child{% elif t.key == 'scavenge' %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
 			<div><div class="qc-name">{{ t.label }}</div>
-				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops'}.get(t.key, '') }}</div></div>
+				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_night':'one long overnight run'}.get(t.key, '') }}</div></div>
 			<span class="toggle {{ 'on' if t.on else '' }}"><span class="track"></span></span>
 		</div>
 		{% endfor %}

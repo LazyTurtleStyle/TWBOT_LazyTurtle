@@ -15,26 +15,34 @@ from game.resources import ResourceManager
 SCAVENGE_LOOT_FACTOR = {1: 0.10, 2: 0.25, 3: 0.50, 4: 0.75}
 
 
-def log_scavenge_haul(village_id, option, carry_max):
-    """Record the expected loot of a dispatched scavenging squad.
-
-    The completed-scavenging reports carry no haul data, so we compute the
-    expected loot up front (carry_max * option loot factor) and accumulate it
-    into cache/scavenge_log.json for the dashboard's 24h / total figures.
-    """
+def scavenge_loot(option, carry_max):
+    """Expected loot for one dispatched squad = carry capacity * option ratio."""
     try:
-        loot = int(int(carry_max) * SCAVENGE_LOOT_FACTOR.get(int(option), 0))
+        return int(int(carry_max) * SCAVENGE_LOOT_FACTOR.get(int(option), 0))
     except (TypeError, ValueError):
-        return
+        return 0
+
+
+def log_scavenge_run(village_id, loot):
+    """Record one scavenging run (a full gather cycle for a village).
+
+    A run sends troops to every available option at once, so we count the cycle
+    as a single run and sum its options' expected loot. The completed-scavenging
+    reports carry no haul, so this dispatch-time figure is the loot source for
+    the dashboard's 24h / total numbers.
+    """
+    loot = int(loot or 0)
     if loot <= 0:
         return
     log = FileManager.load_json_file("cache/scavenge_log.json") or {}
     now = int(time.time())
-    log["total_loot"] = int(log.get("total_loot", 0)) + loot
     runs = log.get("runs", []) or []
-    runs.append({"when": now, "loot": loot, "option": int(option), "village": str(village_id)})
-    # Keep ~25h of individual runs for the 24h window; the all-time figure lives
-    # in total_loot so the list stays small.
+    # Backfill the all-time run counter from existing runs the first time.
+    log["total_runs"] = int(log.get("total_runs", len(runs))) + 1
+    log["total_loot"] = int(log.get("total_loot", 0)) + loot
+    runs.append({"when": now, "loot": loot, "village": str(village_id)})
+    # Keep ~25h of runs for the 24h window; the all-time figures live in the
+    # total_* counters so the list stays small.
     cutoff = now - 90000
     log["runs"] = [r for r in runs if r.get("when", 0) >= cutoff]
     FileManager.save_json_file(log, "cache/scavenge_log.json")
@@ -377,11 +385,15 @@ class TroopManager:
                 return True
         self.logger.info("Research of %s not yet possible", unit_type)
 
-    def gather(self, selection=1, disabled_units=[], advanced_gather=True):
+    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=False):
         """
         Used for the gather resources functionality where it uses two options:
         - Basic: all troops gather on the selected gather level
         - Advanced: troops are split
+
+        consolidate (night mode): override the split and send ALL troops into a
+        single run on the highest unlocked level <= selection. One long run to
+        cover an unattended night instead of several short split runs.
         """
         if not self.can_gather:
             return False
@@ -410,6 +422,7 @@ class TroopManager:
 
         sleep = 0
         available_selection = 0
+        cycle_haul = 0  # summed expected loot across this run's options
 
         self.troops = {}
 
@@ -434,7 +447,7 @@ class TroopManager:
 
         # ADVANCED GATHER: Goes from gather_selection to 1, trying the same time (approximately) for every gather. Active hours exclude LC and Axes, at night everything is used for gather (except Paladin)
 
-        if advanced_gather:
+        if advanced_gather and not consolidate:
             selection_map = [15, 21, 24,
                              26]  # Divider in order to split the total carrying capacity of the troops into pieces that can fit into pretty much the same time frame
 
@@ -507,7 +520,7 @@ class TroopManager:
                     sleep += random.randint(1, 5)
                     time.sleep(sleep)
                     self.last_gather = int(time.time())
-                    log_scavenge_haul(self.village_id, available_selection, curr_haul)
+                    cycle_haul += scavenge_loot(available_selection, curr_haul)
                     self.logger.info(f"Using troops for gather operation: {available_selection}")
                 else:
                     # Gathering already exists or locked, try next lower option
@@ -554,11 +567,17 @@ class TroopManager:
                             village_id=self.village_id,
                         )
                         self.last_gather = int(time.time())
-                        log_scavenge_haul(self.village_id, selection, total_carry)
+                        cycle_haul += scavenge_loot(selection, total_carry)
                         self.logger.info(f"Using troops for gather operation: {selection}")
+                        if consolidate:
+                            # Night mode: everything went into this single
+                            # highest-level run; don't feed the lower levels.
+                            break
                 else:
                     # Gathering already exists or locked, try next lower option
                     continue
+        # One run per gather cycle, with the cycle's options summed.
+        log_scavenge_run(self.village_id, cycle_haul)
         self.logger.info("All gather operations are underway.")
         return True
 

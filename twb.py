@@ -49,6 +49,39 @@ coloredlogs.install(
     fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
+
+def setup_file_logging():
+    """Persist the bot's output (and any crash) to a rotating log file in the
+    active world's cache dir, so it survives the tmux pane / a shutdown.
+
+    Must run after resolve_world_dir() so the path lands in worlds/<name>/cache/.
+    """
+    from logging.handlers import RotatingFileHandler
+    try:
+        log_path = FileManager._resolve("cache/twb.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        handler = RotatingFileHandler(
+            log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"))
+        logging.getLogger().addHandler(handler)
+
+        # Uncaught exceptions go to stderr by default (lost with the pane); also
+        # record them in the log so a crash always leaves a traceback on disk.
+        def _log_uncaught(exc_type, exc, tb):
+            if issubclass(exc_type, KeyboardInterrupt):
+                sys.__excepthook__(exc_type, exc, tb)
+                return
+            logging.getLogger("twb").critical(
+                "Uncaught exception - bot crashed", exc_info=(exc_type, exc, tb))
+        sys.excepthook = _log_uncaught
+
+        logging.getLogger("twb").info("Logging to %s (rotates at 2MB, keeps 3)", log_path)
+    except Exception as exc:  # never let logging setup stop the bot
+        logging.warning("Could not set up file logging: %s", exc)
+
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -268,7 +301,31 @@ class TWB:
         # stale state stops surfacing on the dashboard.
         config = self.prune_lost_villages(config)
 
+        # Cache account-wide "op pad" (moving) troops so the dashboard can split
+        # away troops into support (in other villages) vs in transit.
+        self.update_troop_movements()
+
         return overview_page, config
+
+    def update_troop_movements(self):
+        """Cache account-wide troop locations the snapshot can't tell apart:
+        'op pad' (moving / in transit) and 'elders' (support stationed in other
+        villages). Read straight from the game so the dashboard never has to
+        derive support from mismatched snapshots."""
+        if not self.found_villages:
+            return
+        vid = self.found_villages[0]
+        base = f"game.php?village={vid}&screen=overview_villages&mode=units&type="
+        try:
+            mv = self.wrapper.get_url(base + "moving")
+            sup = self.wrapper.get_url(base + "away")
+            FileManager.save_json_file({
+                "moving": Extractor.units_overview(mv) if mv else {},
+                "support": Extractor.units_overview(sup) if sup else {},
+                "when": int(time.time()),
+            }, "cache/troops_moving.json")
+        except Exception:
+            pass  # non-critical: the dashboard falls back to lumped "away"
 
     def add_village(self, village_id, template=None):
         """
@@ -569,7 +626,10 @@ class TWB:
                 dt_next = dtn + datetime.timedelta(0, sleep)
                 self.runs += 1
 
-                VillageManager.farm_manager(verbose=True)
+                VillageManager.farm_manager(
+                    verbose=True,
+                    prune_after_days=config["bot"].get("farm_prune_days", 0),
+                )
                 print(
                     "Dead for %.2f minutes (next run at: %s)"
                     % (sleep / 60, dt_next.time())
@@ -659,6 +719,7 @@ def self_config_test():
 
 if __name__ == "__main__":
     resolve_world_dir()  # must run before any config/cache access
+    setup_file_logging()  # persist output + crashes to worlds/<name>/cache/twb.log
     if "-i" in sys.argv:
         logging.info("Bot integrity check passed")
         check_conf = self_config_test()

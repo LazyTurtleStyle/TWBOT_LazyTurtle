@@ -290,6 +290,20 @@ class Village:
         self.builder.max_queue_len = self.get_config(
             section="building", parameter="max_queued_items", default=2
         )
+        # Population-priority farm: a per-village value >= 0 overrides the
+        # global building setting; -1 (or absent) inherits it. 0 = off.
+        farm_pop = self.get_config(
+            section="building", parameter="farm_priority_pop_pct", default=0
+        )
+        v_override = self.config.get("villages", {}).get(self.village_id, {}).get(
+            "farm_priority_pop_pct", -1
+        )
+        if isinstance(v_override, (int, float)) and v_override >= 0:
+            farm_pop = v_override
+        try:
+            self.builder.farm_priority_pop_pct = int(farm_pop or 0)
+        except (TypeError, ValueError):
+            self.builder.farm_priority_pop_pct = 0
         self.builder.start_update(
             build=self.get_config(
                 section="building", parameter="manage_buildings", default=True
@@ -513,6 +527,29 @@ class Village:
                     )
                     self.attack.run()
 
+    def _gather_night_consolidate(self):
+        """True when night-consolidation is enabled for this village and the
+        current hour is inside the configured night window. In that window all
+        scavenging troops go into one long run on the highest level instead of
+        being split - covering an unattended night. Turn it off (config or the
+        Scavenging quick-toggle) if you expect incoming, so troops do shorter
+        runs and return more often for defence."""
+        if not self.get_village_config(
+            self.village_id, parameter="gather_night_consolidate", default=False
+        ):
+            return False
+        start = int(self.get_village_config(
+            self.village_id, parameter="gather_night_start", default=23))
+        end = int(self.get_village_config(
+            self.village_id, parameter="gather_night_end", default=7))
+        if start == end:
+            return False
+        hour = datetime.now().hour
+        if start < end:
+            return start <= hour < end
+        # Window wraps past midnight (e.g. 23 -> 7).
+        return hour >= start or hour < end
+
     def do_gather(self):
         """
         Runs gathering if unlocked and active
@@ -526,7 +563,8 @@ class Village:
                     self.village_id, parameter="gather_selection", default=1
                 ),
                 disabled_units=self.disabled_units,
-                advanced_gather=self.get_village_config(self.village_id, parameter="advanced_gather", default=1)
+                advanced_gather=self.get_village_config(self.village_id, parameter="advanced_gather", default=1),
+                consolidate=self._gather_night_consolidate(),
             )
 
     def go_manage_market(self):

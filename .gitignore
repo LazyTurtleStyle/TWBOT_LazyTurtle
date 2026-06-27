@@ -134,3 +134,6 @@ dmypy.json
 
 # VSCode project settings
 .vscode/
+# Bot run logs
+twb.log
+twb.log.*

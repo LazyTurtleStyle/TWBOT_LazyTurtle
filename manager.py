@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 from core.filemanager import FileManager
 from game.attack import AttackCache
@@ -10,7 +11,7 @@ from game.reports import ReportCache
 
 class VillageManager:
     @staticmethod
-    def farm_manager(verbose=False, clean_reports=False):
+    def farm_manager(verbose=False, clean_reports=False, prune_after_days=0):
         logger = logging.getLogger("FarmManager")
         # Read through FileManager so the active world's config is found
         # (worlds/<name>/config.json), not just the project-root config.json.
@@ -56,8 +57,10 @@ class VillageManager:
                         loot[r] = loot[r] + int(res[r])
                         t[r] = t[r] + int(res[r])
                     num_attack.append(report)
-                except:
-                    pass
+                except (KeyError, ValueError, TypeError) as exc:
+                    # Malformed/partial loot (missing key, non-numeric value) -
+                    # skip this report but leave a trace instead of swallowing it.
+                    logger.debug("Skipping report with bad loot data on farm %s: %s", farm, exc)
             percentage_lost = 0
 
             if total_sent_count > 0:
@@ -111,6 +114,27 @@ class VillageManager:
 
         if verbose:
             logger.info("Total loot: %s" % t)
+
+        # Opt-in cleanup of farm targets we have not attacked in a long time
+        # (out of range, superseded, etc). Off by default (0). A still-valid
+        # target just gets a fresh cache entry next time it is attacked, so this
+        # only sheds dead weight - never targets parked as unsafe, which must
+        # stay so the bot does not re-engage a dangerous village.
+        if prune_after_days:
+            cutoff = int(time.time()) - int(prune_after_days) * 86400
+            pruned = 0
+            for farm, data in attacks.items():
+                if data.get("safe", True) is False:
+                    continue
+                last = data.get("last_attack", 0)
+                if last and last < cutoff:
+                    AttackCache.remove(farm)
+                    pruned += 1
+            if pruned:
+                logger.info(
+                    "Pruned %d stale farm target(s) with no attack in %d+ days",
+                    pruned, int(prune_after_days),
+                )
 
         if clean_reports:
             reports_dir = FileManager._resolve("cache/reports")

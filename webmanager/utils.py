@@ -106,6 +106,19 @@ class DataReader:
         return os.path.join(base, *parts)
 
     @staticmethod
+    def session_logged_out():
+        """True when the incoming poller last recorded a logged-out session for
+        the active world (cookie expired). World-aware read for the web process."""
+        try:
+            p = DataReader.data_path("cache", "world", "incoming_session.json")
+            if os.path.exists(p):
+                with open(p) as f:
+                    return bool((json.load(f) or {}).get("logged_out"))
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def world_speeds():
         """(world_speed, unit_speed, {unit: base_speed}) for the active world.
 
@@ -361,6 +374,25 @@ class DataReader:
         # Keep the raw fallback in sync with what was just pasted.
         with open(os.path.join(cache_dir, "cookies.txt"), 'w') as cookie_file:
             cookie_file.write((raw or "").strip())
+
+        # Optimistically clear the incoming poller's logged-out flag so the
+        # dashboard banner reflects the fresh cookie right away instead of
+        # waiting for the next successful poll. If the new cookie is also dead
+        # the poller re-sets the flag on its next failed scrape. notified_at is
+        # preserved so re-notification throttling carries over.
+        state_path = DataReader.data_path("cache", "world", "incoming_session.json")
+        if os.path.exists(state_path):
+            try:
+                with open(state_path, 'r') as state_file:
+                    state = json.load(state_file) or {}
+            except (ValueError, OSError):
+                state = {}
+            state["logged_out"] = False
+            try:
+                with open(state_path, 'w') as state_file:
+                    json.dump(state, state_file, indent=2)
+            except OSError:
+                pass
         return True
 
 
@@ -637,11 +669,10 @@ class OverviewBuilder:
 
         # Whether the incoming poller is currently logged out (cookie expired).
         # When true the incomings panel is blind, so the dashboard must show that
-        # explicitly instead of an empty "all clear".
-        incoming_logged_out = False
-        if incoming_session_state:
-            session_state = incoming_session_state()
-            incoming_logged_out = bool(session_state and session_state.get("logged_out"))
+        # explicitly instead of an empty "all clear". Read via DataReader so it
+        # resolves to the active world's dir (incoming_session_state() uses the
+        # bot's FileManager, which isn't world-selected in the web context).
+        incoming_logged_out = bool(DataReader.session_logged_out())
 
         # The live incoming cache is authoritative only when the poller is active
         # and logged in. Otherwise (poller disabled, or logged out and blind) we
@@ -769,6 +800,25 @@ class OverviewBuilder:
         # = total owned minus what is currently sitting at home, per unit.
         troops_away = {u: max(0, total_troops.get(u, 0) - home_troops.get(u, 0))
                        for u in total_troops}
+        # Split "away" into in-transit ("op pad") and support (stationed in other
+        # villages). Both are read straight from the game and cached by the bot
+        # (cache/troops_moving.json); we do NOT derive support by subtraction
+        # because the snapshots are taken at different moments and that leaves
+        # phantom troops. If the cache is missing, fall back to lumped "away".
+        cache = {}
+        try:
+            mpath = DataReader.data_path("cache", "troops_moving.json")
+            if os.path.exists(mpath):
+                with open(mpath) as f:
+                    cache = json.load(f) or {}
+        except Exception:
+            cache = {}
+        has_cache = isinstance(cache, dict) and ("moving" in cache or "support" in cache)
+        troops_moving = {u: cls._to_int(c) for u, c in (cache.get("moving", {}) or {}).items() if cls._to_int(c)}
+        if has_cache:
+            troops_support = {u: cls._to_int(c) for u, c in (cache.get("support", {}) or {}).items() if cls._to_int(c)}
+        else:
+            troops_support = troops_away  # no live split yet: show the lumped total
 
         # Last-24h and all-time counters over the FULL report cache (sync() only
         # passes the newest ~100, which is enough for the feed but not for totals).
@@ -797,10 +847,6 @@ class OverviewBuilder:
                     if recent:
                         farm_runs_24h += 1
                         farm_loot_24h += lt
-            elif rtype == "ScavengingCompletedReport":
-                scav_runs_total += 1
-                if recent:
-                    scav_runs_24h += 1
             elif rtype == "ReportTrade":
                 trades_total += 1
                 if recent:
@@ -824,11 +870,15 @@ class OverviewBuilder:
                     scav_log = json.load(f) or {}
         except Exception:
             scav_log = {}
+        # Scavenging runs + loot both come from the dispatch log so they stay
+        # consistent: a run is counted when it's sent (it produces no completed
+        # report until hours later, and those reports carry no haul anyway).
+        scav_runs = scav_log.get("runs", []) or []
+        recent_runs = [r for r in scav_runs if cls._to_int(r.get("when")) >= cutoff]
         scav_loot_total = cls._to_int(scav_log.get("total_loot"))
-        scav_loot_24h = sum(
-            cls._to_int(r.get("loot")) for r in (scav_log.get("runs", []) or [])
-            if cls._to_int(r.get("when")) >= cutoff
-        )
+        scav_loot_24h = sum(cls._to_int(r.get("loot")) for r in recent_runs)
+        scav_runs_total = cls._to_int(scav_log.get("total_runs")) or len(scav_runs)
+        scav_runs_24h = len(recent_runs)
 
         return {
             "summary": {
@@ -854,6 +904,8 @@ class OverviewBuilder:
                 "troops": total_troops,
                 "troops_home": home_troops,
                 "troops_away": troops_away,
+                "troops_support": troops_support,
+                "troops_moving": troops_moving,
                 "loot_recent": loot_recent,
                 "last_activity": last_activity,
             },

@@ -38,7 +38,8 @@
     "manage_buildings": true,
     "default": "purple_predator",
     "max_lookahead": 2,
-    "max_queued_items": 2
+    "max_queued_items": 2,
+    "farm_priority_pop_pct": 0
   },
   "units": {
     "recruit": true,
@@ -52,6 +53,7 @@
   "village_template": {
     "building": "purple_predator",
     "units": "basic",
+    "farm_priority_pop_pct": -1,
     "managed": true,
     "scout_first": false,
     "additional_farms": [],
@@ -61,6 +63,9 @@
     "gather_enabled": false,
     "gather_selection": 1,
     "advanced_gather": true,
+    "gather_night_consolidate": false,
+    "gather_night_start": 23,
+    "gather_night_end": 7,
     "snobs": 0,
     "evacuate_fragile_units_on_attack": false,
     "support_others": false,

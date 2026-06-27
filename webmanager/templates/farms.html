@@ -167,6 +167,14 @@
         {{ row('Advanced split (advanced_gather)',
                toggle('scavenge', 'advanced_gather', sc.advanced_gather),
                'Split troops across runs so they finish at roughly the same time for a better total yield.') }}
+        {{ row('Night consolidate (gather_night_consolidate)',
+               toggle('scavenge', 'gather_night_consolidate', sc.gather_night_consolidate),
+               'During the window below, send ALL troops into one long run on the highest level instead of splitting — to cover an unattended night. Turn off if you expect incoming attacks.') }}
+        {{ row('Night window (hours)',
+               'From <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="scavenge" data-param="gather_night_start" value="'
+               ~ sc.gather_night_start ~ '"> to <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="scavenge" data-param="gather_night_end" value="'
+               ~ sc.gather_night_end ~ '">',
+               'Hours (0–23) the night-consolidation runs, e.g. from 23 to 7. Wraps past midnight.') }}
       </div>
     </div>
   </div>
@@ -176,7 +184,7 @@
       <div class="card-header">Per-village scavenging</div>
       <div class="card-body p-0">
         <table class="table table-sm table-striped mb-0">
-          <thead><tr><th>Village</th><th>Enabled</th><th>Runs</th><th>Advanced</th></tr></thead>
+          <thead><tr><th>Village</th><th>Enabled</th><th>Runs</th><th>Advanced</th><th>Night</th></tr></thead>
           <tbody>
             {% for v in farms.villages %}
             <tr>
@@ -184,9 +192,10 @@
               <td>{% if v.gather_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</td>
               <td>{{ v.gather_selection }}</td>
               <td>{% if v.advanced_gather %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</td>
+              <td>{% if v.gather_night_consolidate %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="text-muted">No villages yet.</td></tr>
+            <tr><td colspan="5" class="text-muted">No villages yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>

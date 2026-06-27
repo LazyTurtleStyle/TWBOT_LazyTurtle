@@ -20,6 +20,11 @@ class BuildingManager:
     # Increasing this will gain massive points but lack of resources
     max_lookahead = 2
 
+    # Proactively queue a farm once population usage reaches this percent
+    # (e.g. 80 = at 80% full / 20% free). 0 disables it, leaving only the
+    # reactive "next building does not fit" behaviour.
+    farm_priority_pop_pct = 0
+
     queue = []
     waits = []
     waits_building = []
@@ -262,7 +267,21 @@ class BuildingManager:
             self.logger.debug("Not building because of queued items: %s", self.waits)
             return False
 
-        if self.resman and self.resman.in_need_of("pop"):
+        # Farm gets bumped to the front of the queue either reactively (the next
+        # building does not fit the remaining population) or proactively once
+        # population usage crosses farm_priority_pop_pct (0 = off).
+        need_farm = bool(self.resman and self.resman.in_need_of("pop"))
+        reason = "low on pop"
+        if not need_farm and self.farm_priority_pop_pct:
+            pop = self.game_state["village"].get("pop", 0)
+            pop_max = self.game_state["village"].get("pop_max", 0)
+            if pop_max and (pop / pop_max) * 100 >= self.farm_priority_pop_pct:
+                need_farm = True
+                reason = "pop %d/%d at/over %d%% threshold" % (
+                    pop, pop_max, self.farm_priority_pop_pct
+                )
+
+        if need_farm:
             build_data = "farm:%d" % (int(self.levels["farm"]) + 1)
             if (
                     len(self.queue)
@@ -271,7 +290,7 @@ class BuildingManager:
                     and int(self.levels["farm"]) != 30
             ):
                 self.queue.insert(0, build_data)
-                self.logger.info("Adding farm in front of queue because low on pop")
+                self.logger.info("Adding farm in front of queue (%s)", reason)
                 return self.get_next_building_action(0)
 
         if len(self.queue):

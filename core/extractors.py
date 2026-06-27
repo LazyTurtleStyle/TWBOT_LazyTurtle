@@ -168,6 +168,42 @@ class Extractor:
         return builder.group(1).count('<a class="btn btn-cancel"')
 
     @staticmethod
+    def units_overview(res):
+        """
+        Sum the per-unit troop counts across every village row of an
+        overview_villages?mode=units table (e.g. type=moving "op pad", or
+        type=away). Returns {unit: count}. Unit column order is read from the
+        table header so worlds without archers/paladins parse correctly.
+        """
+        if type(res) != str:
+            res = res.text
+        m = re.search(r'(?s)<table id="units_table".*?</table>', res)
+        if not m:
+            return {}
+        table = m.group(0)
+        units = []
+        for a, b in re.findall(r'unit-item-(\w+)|unit_(\w+)\b', table):
+            unit = a or b
+            if unit not in units:
+                units.append(unit)
+        if not units:
+            return {}
+        out = {u: 0 for u in units}
+        # Each data row: <td>village (x|y)</td><td>status</td> + one <td> per unit.
+        for row in re.findall(r'(?s)<tr.*?</tr>', table):
+            cells = re.findall(r'(?s)<td[^>]*>(.*?)</td>', row)
+            if len(cells) < 2 + len(units):
+                continue
+            texts = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+            if not re.search(r'\(\d+\|\d+\)', texts[0] or ''):
+                continue
+            for i, unit in enumerate(units):
+                digits = re.sub(r'\D', '', texts[2 + i] or '')
+                if digits:
+                    out[unit] += int(digits)
+        return {u: c for u, c in out.items() if c}
+
+    @staticmethod
     def active_recruit_queue(res):
         """
         Detects active recruitment entries

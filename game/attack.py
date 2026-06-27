@@ -499,6 +499,12 @@ class AttackCache:
         return FileManager.save_json_file(entry, f"cache/attacks/{village_id}.json")
 
     @staticmethod
+    def remove(village_id):
+        """Drop a farm target's cache entry. A still-valid target is simply
+        re-added with a fresh entry the next time it is attacked."""
+        return FileManager.remove_file(f"cache/attacks/{village_id}.json")
+
+    @staticmethod
     def cache_grab():
         output = {}
 

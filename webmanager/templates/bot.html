@@ -80,14 +80,15 @@
 			<div class="panel-body">
 				{% set unit_order = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','knight','snob'] %}
 				{% set cols = [
-					('Total owned', overview.summary.troops),
-					('At home', overview.summary.troops_home),
-					('Support / away', overview.summary.troops_away),
+					('Total', overview.summary.troops, 'every unit you own'),
+					('Home', overview.summary.troops_home, 'sitting in your villages'),
+					('Support', overview.summary.troops_support, 'stationed in other villages'),
+					('Moving', overview.summary.troops_moving, 'in transit (op pad)'),
 				] %}
-				<div class="troop-cols">
-					{% for label, troops in cols %}
+				<div class="troop-cols troop-cols-4">
+					{% for label, troops, hint in cols %}
 					<div>
-						<div class="tcol-head">{{ label }}</div>
+						<div class="tcol-head" title="{{ hint }}">{{ label }}</div>
 						{% set ns = namespace(any=false) %}
 						{% for u in unit_order %}{% set c = troops.get(u, 0) %}{% if c %}
 						<div class="trow"><img class="ticon" src="/static/images/unit_{{ u }}.png" alt="{{ u }}" title="{{ u }}"><span class="tn">{{ c|comma }}</span></div>
@@ -214,7 +215,7 @@
 		</div>
 
 		<div class="panel">
-			<div class="panel-head"><h3>Session</h3><span class="coord">{{ session.endpoint }}</span></div>
+			<div class="panel-head"><h3>Session</h3><span class="coord">{{ active_world or 'default' }} &middot; {{ session.endpoint }}</span></div>
 			<div class="panel-body">
 				<textarea id="session_data" rows="3" class="field mono" style="font-size:12px"
 					placeholder="Paste your full browser cookie string here">{{ session.raw }}</textarea>
@@ -222,7 +223,7 @@
 					<button class="btn btn-ember btn-sm" onclick="set_session_data()">Update session</button>
 					<span id="session_status" class="faint"></span>
 				</div>
-				<small class="faint" style="display:block; margin-top:6px">Saved straight to the bot's session — takes effect the next time the bot starts.</small>
+				<small class="faint" style="display:block; margin-top:6px">Saving to world <strong>{{ active_world or 'default' }}</strong> &mdash; check the world switcher matches the bot you're refreshing. Applies on that bot's next start or re-auth.</small>
 			</div>
 		</div>
 	</div>
@@ -283,7 +284,7 @@ function set_session_data() {
 	status.removeClass('text-success text-danger').text('Saving...');
 	$.post('/app/session/set', {session: raw})
 		.done(function(resp) {
-			status.text(resp && resp.ok ? 'Saved ✓' : 'No valid cookies found in that string');
+			status.text(resp && resp.ok ? 'Saved ✓ to {{ active_world or "default" }}' : 'No valid cookies found in that string');
 		})
 		.fail(function() { status.text('Error saving session'); });
 }

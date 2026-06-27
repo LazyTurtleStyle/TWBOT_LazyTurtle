@@ -42,6 +42,7 @@ def _inject_worlds():
         "active_world": DataReader.active_world(),
         "worlds": DataReader.list_worlds(),
         "bot_running": bm.is_running(DataReader.active_world()),
+        "session_expired": DataReader.session_logged_out(),
         "quick_toggles": quick_settings_state(),
     }
 
@@ -309,12 +310,21 @@ def pre_process_setup():
 
 
 def pre_process_village_config(village_id):
-    config = sync()['config']['villages']
-    if village_id in config:
-        config = config[village_id]
+    config = sync()['config']
+    template = config.get('village_template', {}) or {}
+    villages = config['villages']
+    if village_id in villages:
+        vcfg = villages[village_id]
     else:
-        config = config[list(config.keys())[0]]
-    return render_grouped('village_template', 'village', config, village_id)
+        vcfg = villages[list(villages.keys())[0]]
+    # Display-only merge: show every template field, using the village's own
+    # value where it has one. Lets template keys added after a village was
+    # saved (e.g. farm_priority_pop_pct) still render. Nothing is persisted
+    # until the user actually edits a field.
+    merged = dict(template)
+    if isinstance(vcfg, dict):
+        merged.update(vcfg)
+    return render_grouped('village_template', 'village', merged, village_id)
 
 
 def sync():
@@ -521,7 +531,10 @@ def pre_process_overrides(data):
             })
             continue
 
-        diff = [k for k in compare_keys if vcfg.get(k) != template.get(k)]
+        # Only fields the village explicitly carries count as overrides; a
+        # missing key means it inherits the template (e.g. a setting added
+        # after the village was saved), not that it diverges from it.
+        diff = [k for k in compare_keys if k in vcfg and vcfg.get(k) != template.get(k)]
         is_override = bool(diff)
         if is_override:
             overriding += 1
@@ -699,7 +712,12 @@ QUICK_TOGGLES = {
     "build": ("Building", "building.manage_buildings"),
     "trade": ("Trading", "market.auto_trade"),
     "scavenge": ("Scavenging", "village_template.gather_enabled"),
+    "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
 }
+
+# Per-village quick toggles are broadcast to every village (not a global section).
+PER_VILLAGE_TOGGLES = {"scavenge": "gather_enabled",
+                       "scavenge_night": "gather_night_consolidate"}
 
 
 def quick_settings_state():
@@ -719,16 +737,17 @@ def quick_set():
     value = request.args.get("value")
     if key not in QUICK_TOGGLES:
         return jsonify({"ok": False, "error": "unknown toggle"})
-    if key == "scavenge":
+    if key in PER_VILLAGE_TOGGLES:
         # Per-village setting: apply everywhere so the toggle is account-wide.
-        DataReader.broadcast_village_set("gather_enabled", value)
+        DataReader.broadcast_village_set(PER_VILLAGE_TOGGLES[key], value)
     else:
         DataReader.config_set(parameter=QUICK_TOGGLES[key][1], value=value)
     return jsonify({"ok": True})
 
 
 # Per-village scavenging parameters that the Farms page broadcasts account-wide.
-SCAVENGE_PARAMS = ("gather_enabled", "gather_selection", "advanced_gather")
+SCAVENGE_PARAMS = ("gather_enabled", "gather_selection", "advanced_gather",
+                   "gather_night_consolidate", "gather_night_start", "gather_night_end")
 
 
 @app.route('/app/scavenge/set', methods=['GET'])
@@ -762,6 +781,7 @@ def farm_settings_state():
             "gather_enabled": bool(vcfg.get("gather_enabled", False)),
             "gather_selection": vcfg.get("gather_selection", template.get("gather_selection", 1)),
             "advanced_gather": bool(vcfg.get("advanced_gather", template.get("advanced_gather", True))),
+            "gather_night_consolidate": bool(vcfg.get("gather_night_consolidate", template.get("gather_night_consolidate", False))),
         })
     per_village.sort(key=lambda v: str(v["name"]))
 
@@ -771,6 +791,9 @@ def farm_settings_state():
         "gather_enabled": bool(template.get("gather_enabled", False)),
         "gather_selection": template.get("gather_selection", 1),
         "advanced_gather": bool(template.get("advanced_gather", True)),
+        "gather_night_consolidate": bool(template.get("gather_night_consolidate", False)),
+        "gather_night_start": template.get("gather_night_start", 23),
+        "gather_night_end": template.get("gather_night_end", 7),
     }
     return {"farms": farms, "scavenge": scavenge, "villages": per_village}
 
