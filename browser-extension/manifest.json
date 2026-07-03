@@ -1,0 +1,27 @@
+{
+	"manifest_version": 3,
+	"name": "TWB Session Restore",
+	"version": "1.0",
+	"description": "One click: pull the bot's TribalWars session from the TWB webmanager and open the game logged in.",
+	"permissions": ["cookies", "storage"],
+	"host_permissions": [
+		"*://*.tribalwars.nl/*",
+		"http://localhost/*",
+		"http://127.0.0.1/*",
+		"http://*/*",
+		"https://*/*"
+	],
+	"action": {
+		"default_title": "Open TribalWars with bot session"
+	},
+	"background": {
+		"service_worker": "background.js"
+	},
+	"content_scripts": [
+		{
+			"matches": ["http://localhost:5000/*"],
+			"js": ["content.js"]
+		}
+	],
+	"options_page": "options.html"
+}

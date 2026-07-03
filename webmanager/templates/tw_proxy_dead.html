@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Session expired · TWB proxy</title>
+	<style>
+		body { background:#15130E; color:#F1EAD9; font-family:"IBM Plex Sans",system-ui,sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+		.card { background:#211D17; border:1px solid #322E28; border-radius:8px; padding:32px; max-width:480px; text-align:center; }
+		h2 { font-size:20px; margin-bottom:8px; }
+		p { color:#C0B7A5; font-size:14px; line-height:1.6; margin-bottom:16px; }
+		a.btn { display:inline-block; background:#E07B2C; color:#fff; text-decoration:none; padding:8px 18px; border-radius:6px; font-weight:600; font-size:13px; }
+	</style>
+</head>
+<body>
+<div class="card">
+	<h2>Bot session expired</h2>
+	<p>TW redirected to <code>{{ redirect_url }}</code> — the bot's cookies are no longer valid for <strong>{{ domain }}</strong>.</p>
+	<p>Paste fresh cookies into the bot's Session panel to reconnect, then try again.</p>
+	<a class="btn" href="/">Go to dashboard</a>
+</div>
+</body>
+</html>

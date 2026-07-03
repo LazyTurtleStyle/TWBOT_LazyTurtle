@@ -1,0 +1,171 @@
+{% extends "shell.html" %}
+{% block title %}Bot logs{% endblock %}
+
+{% block topbar_meta %}
+<div class="run-meta">
+	<div class="t"><div class="k">World</div><div class="v">{{ world }}</div></div>
+	<div class="t"><div class="k">Bot</div>
+		<div class="v {{ 'good' if bot_running }}">{{ 'running' if bot_running else 'stopped' }}</div></div>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+.log-wrap {
+	background: #0d0d0b;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 0;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	height: calc(100vh - 200px);
+	min-height: 320px;
+}
+.log-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 14px;
+	border-bottom: 1px solid var(--line);
+	background: var(--surface-2);
+	flex-shrink: 0;
+}
+.log-toolbar .path {
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--ink-faint);
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.log-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 10px 14px;
+}
+.log-line {
+	font-family: var(--mono);
+	font-size: 12px;
+	line-height: 1.6;
+	white-space: pre-wrap;
+	word-break: break-all;
+	color: #b8b0a0;
+}
+.log-line.err  { color: #ef6e62; }
+.log-line.warn { color: #e0a04a; }
+.log-line.info { color: #8fb87a; }
+.log-empty {
+	font-family: var(--mono);
+	font-size: 13px;
+	color: var(--ink-faint);
+	padding: 32px 0;
+	text-align: center;
+}
+#autoScroll { accent-color: var(--ember); }
+#liveDot {
+	display: inline-block;
+	width: 7px; height: 7px;
+	border-radius: 50%;
+	background: var(--ink-faint);
+	margin-right: 4px;
+	vertical-align: middle;
+}
+#liveDot.live { background: #8fb87a; box-shadow: 0 0 4px #8fb87a88; }
+</style>
+
+<div class="section-head" style="margin-bottom:14px">
+	<h2 style="margin:0">Bot logs</h2>
+	<div class="flex" style="gap:8px;align-items:center">
+		<span id="liveDot"></span>
+		<label class="faint" style="font-size:12px;cursor:pointer">
+			<input type="checkbox" id="autoScroll" checked> auto-scroll
+		</label>
+		<select id="lineCount" class="field" style="width:auto;padding:3px 8px;font-size:12px">
+			<option value="50">50 lines</option>
+			<option value="100">100 lines</option>
+			<option value="200" selected>200 lines</option>
+			<option value="500">500 lines</option>
+		</select>
+		<button class="btn btn-sm" onclick="fetchLog()">Refresh</button>
+	</div>
+</div>
+
+<div class="log-wrap">
+	<div class="log-toolbar">
+		<span class="path" id="logPath">{{ log_path }}</span>
+	</div>
+	<div class="log-body" id="logBody">
+		<div class="log-empty" id="logEmpty">Loading…</div>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var _lastLines = null;
+var _polling = null;
+
+function classForLine(line) {
+	var l = line.toLowerCase();
+	if (l.includes(' error') || l.includes('exception') || l.includes('traceback')) return 'err';
+	if (l.includes(' warning') || l.includes(' warn')) return 'warn';
+	if (l.includes(' info')) return 'info';
+	return '';
+}
+
+function fetchLog() {
+	var n = document.getElementById('lineCount').value;
+	fetch('/bot/log?n=' + n)
+		.then(function(r){ return r.json(); })
+		.then(function(data) {
+			var dot = document.getElementById('liveDot');
+			dot.classList.add('live');
+			setTimeout(function(){ dot.classList.remove('live'); }, 400);
+
+			var body = document.getElementById('logBody');
+			var empty = document.getElementById('logEmpty');
+			if (data.path) document.getElementById('logPath').textContent = data.path;
+
+			if (data.missing || !data.lines || data.lines.length === 0) {
+				body.innerHTML = '';
+				var msg = data.missing
+					? 'No log file found at ' + (data.path || '?') + '.<br><span class="faint">Log files are created when you start the bot via the web UI. Bots started from the terminal log to the terminal instead.</span>'
+					: 'Log file is empty.';
+				empty.innerHTML = msg;
+				body.appendChild(empty);
+				_lastLines = null;
+				return;
+			}
+
+			var joined = data.lines.join('\n');
+			if (joined === _lastLines) return;
+			_lastLines = joined;
+
+			body.innerHTML = '';
+			data.lines.forEach(function(line) {
+				var div = document.createElement('div');
+				div.className = 'log-line ' + classForLine(line);
+				div.textContent = line;
+				body.appendChild(div);
+			});
+
+			var autoScroll = document.getElementById('autoScroll');
+			if (autoScroll && autoScroll.checked) {
+				body.scrollTop = body.scrollHeight;
+			}
+		})
+		.catch(function() {
+			document.getElementById('liveDot').classList.remove('live');
+		});
+}
+
+function startPolling() {
+	fetchLog();
+	_polling = setInterval(fetchLog, 4000);
+}
+
+document.addEventListener('DOMContentLoaded', startPolling);
+</script>
+{% endblock %}
