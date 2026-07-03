@@ -66,6 +66,7 @@
     "gather_enabled": false,
     "gather_selection": 1,
     "advanced_gather": true,
+    "gather_exclude_units": [],
     "gather_night_consolidate": false,
     "gather_night_start": 23,
     "gather_night_end": 7,
@@ -86,7 +87,7 @@
   "farms": {
     "farm": true,
     "min_points": 0,
-    "max_points": 50,
+    "max_points": 5000,
     "find_player_owned": false,
     "search_radius": 100,
     "default_away_time": 3600,

@@ -1,3 +1,21 @@
+"""Timed, coordinated multi-attack chains ("trains"/precision snipes).
+
+STATUS: WIP prototype, intentionally kept for later — NOT wired into the run loop
+(nothing imports this module). The finished timed-send path today is
+`game/attack_scheduler.py`; this is the earlier sketch of the same idea (schedule
+waves, then launch them at an exact moment back-to-back).
+
+TODO: revive/integrate. Before it can run, fix the known bugs that show it never
+executed:
+  - `self.village_id` is referenced (attack/prepare/send) but never defined.
+  - `prepare()` uses `self.map` but the attribute is `self.game_map`.
+  - `send_attack_chain` sleeps `1000 / min_sleep_amount_millis` s (10 s at the
+    default 100), contradicting the intended millisecond spacing.
+  - `troops={}` mutable default arg.
+Also collapse its `attack`/`prepare` open→confirm→launch copies into the shared
+helper from CODE_REVIEW.md section 2 item 1 when that extraction happens.
+"""
+
 import datetime
 import logging
 import time
