@@ -137,3 +137,12 @@ dmypy.json
 # Bot run logs
 twb.log
 twb.log.*
+
+# Local scratch / debug dumps / screenshots (not part of the project)
+/bot
+/bot_output.txt
+/debug_overview.html
+/TWB.zip
+/pane*.txt
+/Screenshot*.png
+templates/builder/sdfsdf.txt
