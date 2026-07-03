@@ -45,6 +45,16 @@ for w in "${WORLDS[@]}"; do
     fi
 done
 
+# Stop bots for these worlds still running outside tmux (web-panel starts,
+# leftovers from a killed session) so they don't run twice.
+for w in "${WORLDS[@]}"; do
+    if [ -n "$w" ]; then
+        pkill -f "twb.py --world $w\$" 2>/dev/null
+    else
+        pkill -f "python3 twb.py\$" 2>/dev/null
+    fi
+done
+
 # First world creates the session window; the rest get their own panes.
 tmux new-session -d -s "$SESSION" -n bot "$(botcmd "${WORLDS[0]}")"
 for w in "${WORLDS[@]:1}"; do
@@ -52,7 +62,9 @@ for w in "${WORLDS[@]:1}"; do
     tmux select-layout -t "$SESSION:bot" tiled >/dev/null
 done
 
-# One shared web panel for all worlds.
+# One shared web panel for all worlds. Kill any stray panel left over from
+# manual restarts first, or the new one dies with "address already in use".
+pkill -f "python3 server.py $PORT" 2>/dev/null && sleep 1
 tmux split-window -t "$SESSION:bot" "cd webmanager && python3 server.py $PORT $HOST"
 tmux select-layout -t "$SESSION:bot" tiled >/dev/null
 

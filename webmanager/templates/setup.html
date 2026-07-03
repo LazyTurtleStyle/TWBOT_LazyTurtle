@@ -35,6 +35,38 @@
 	<b>what the world is</b>, <b>how the bot runs</b>, and <b>what each feature does</b>.
 	Toggles and dropdowns save instantly; numbers and text save with the bar below.</p>
 
+{# ---------- Tier 0 — Worlds ---------- #}
+<div class="tier once" id="worlds">
+	<div class="tier-head">
+		<span class="tnum">0</span>
+		<div class="th-text">
+			<h3>Worlds</h3>
+			<div class="desc">Each world the bot plays has its own <code>worlds/&lt;name&gt;/</code> config. Add a new one here instead of the command line.</div>
+		</div>
+	</div>
+	<div class="tier-body">
+		<div class="subhead">Configured worlds</div>
+		<div style="margin:6px 0 16px">
+			<a class="badge {{ 'ember' if not active_world else 'dim' }}" href="/world/select?world=__default__">default{% if not active_world %} · active{% endif %}</a>
+			{% for w in worlds %}<a class="badge {{ 'ember' if active_world == w else 'dim' }}" href="/world/select?world={{ w }}" style="margin-left:6px">{{ w }}{% if active_world == w %} · active{% endif %}</a>{% endfor %}
+		</div>
+		<div class="subhead">Add a world</div>
+		<div style="max-width:560px;margin-top:8px">
+			<label style="display:block;margin-bottom:8px">Game URL
+				<input type="text" id="nw_url" class="field" placeholder="https://nl99.tribalwars.nl/game.php?screen=overview"></label>
+			<label style="display:block;margin-bottom:8px">Browser user agent
+				<input type="text" id="nw_ua" class="field" placeholder="Mozilla/5.0 … (search &quot;what is my user agent&quot;)"></label>
+			<label style="display:block;margin-bottom:8px">Login cookie <span class="faint">(optional — lets the bot run without prompting)</span>
+				<textarea id="nw_cookie" rows="2" class="field mono" style="font-size:12px" placeholder="Paste your full browser cookie string here"></textarea></label>
+			<label class="faint" style="display:block;margin-bottom:8px"><input type="checkbox" id="nw_start" checked> Start the bot right after creating</label>
+			<div class="flex" style="gap:10px;align-items:center">
+				<button class="btn btn-ember btn-sm" onclick="createWorld()">Create world</button>
+				<span id="nw_status" class="faint"></span>
+			</div>
+		</div>
+	</div>
+</div>
+
 {# ---------- Tier 1 — World configuration (set-once, receded) ---------- #}
 <div class="tier once">
 	<div class="tier-head">
@@ -171,5 +203,30 @@
 		});
 		$('[data-toggle="tooltip"]').tooltip();
 	});
+
+	function createWorld() {
+		var status = document.getElementById('nw_status');
+		var url = document.getElementById('nw_url').value.trim();
+		if (!url) { status.textContent = 'Enter the game URL first'; return; }
+		status.textContent = 'Creating…';
+		var body = new URLSearchParams({
+			url: url,
+			user_agent: document.getElementById('nw_ua').value,
+			cookie: document.getElementById('nw_cookie').value,
+			start: document.getElementById('nw_start').checked ? '1' : '0'
+		});
+		fetch('/app/world/create', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+			body: body
+		}).then(function(r){ return r.json(); }).then(function(resp){
+			if (resp.ok) {
+				status.textContent = 'Created ' + resp.world + (resp.started ? ' and started ✓' : ' ✓') + ' — switching…';
+				setTimeout(function(){ location.href = '/world/select?world=' + encodeURIComponent(resp.world); }, 900);
+			} else {
+				status.textContent = resp.error || 'Failed to create world';
+			}
+		}).catch(function(){ status.textContent = 'Error creating world'; });
+	}
 </script>
 {% endblock %}

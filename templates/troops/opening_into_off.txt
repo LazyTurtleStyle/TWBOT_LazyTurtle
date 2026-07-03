@@ -122,7 +122,8 @@
     "level": 12,
     "upgrades": {
       "axe": 10,
-      "light": 10
+      "light": 10,
+      "ram": 1
     },
     "build": {
       "barracks": {
@@ -132,6 +133,9 @@
       "stable": {
         "spy": 300,
         "light": 1200
+      },
+      "garage": {
+        "ram": 100
       }
     },
     "farm": [
