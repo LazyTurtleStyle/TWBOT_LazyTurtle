@@ -114,6 +114,19 @@ class TWB:
     # Set by get_overview when the overview comes back as a login page; the run
     # loop skips the cycle instead of treating every village as unavailable.
     session_logged_out = False
+    # One-shot: compare the host clock to the game server's time once per startup
+    # and warn if they diverge (forced-peace windows + scheduled attacks are timed
+    # against the host clock, so a skew silently offsets them).
+    _clock_checked = False
+    # Warn when the host clock differs from server time by more than this (seconds).
+    CLOCK_SKEW_WARN_SECONDS = 300
+    # True after an overview came back logged-in but with zero parseable villages
+    # (a parse failure, not an empty account). Used to notify once per transition.
+    _village_parse_failed = False
+    # Troop-movement data is dashboard-only and doesn't need per-cycle freshness.
+    # Refresh it at most this often to avoid two extra full-page GETs every cycle
+    # (cuts request volume and the bot-like request count).
+    TROOP_MOVE_REFRESH_SECONDS = 900
 
     @staticmethod
     def internet_online():
@@ -284,12 +297,44 @@ class TWB:
         if was_logged_out:
             print("Session restored - resuming normal operation")
 
+        self.check_server_clock(overview_page)
+
         # Prefer the already-parsed villages_data (BS4-based, position-stable).
         # Fall back to the regex extractor if the table parse returned nothing.
         if overview_page.villages_data:
-            self.found_villages = list(overview_page.villages_data.keys())
+            parsed = list(overview_page.villages_data.keys())
         else:
-            self.found_villages = Extractor.village_ids_from_overview(overview_page.result_get.text)
+            parsed = Extractor.village_ids_from_overview(overview_page.result_get.text)
+
+        if parsed:
+            if self._village_parse_failed:
+                print("Overview parsing recovered - villages read again")
+                self._village_parse_failed = False
+            self.found_villages = parsed
+        else:
+            # Logged in (valid game state) but not a single village parsed. A
+            # logged-in player always owns at least one village, so this is a
+            # parse failure (e.g. the overview markup changed), not an empty
+            # account. Overwriting found_villages with [] would make the run loop
+            # skip every village as "not available anymore" while the bot looks
+            # healthy. Keep the previous list and warn; retry next cycle. The
+            # per-village run re-fetches each village's own page independently, so
+            # continuing to manage the known villages is safe.
+            was_failed = self._village_parse_failed
+            self._village_parse_failed = True
+            logging.getLogger("twb").warning(
+                "Overview parsed zero villages while logged in - treating as a "
+                "parse failure and keeping the previous %d village(s). The "
+                "overview page markup may have changed.", len(self.found_villages)
+            )
+            if not was_failed:
+                Notification.send(
+                    "TWB: could not read any villages from the overview while "
+                    "logged in (possible page change). Keeping the known village "
+                    "list and retrying; villages are NOT lost."
+                )
+            # found_villages is intentionally left unchanged; skip prune below too.
+            return overview_page, config
         if config["bot"].get("add_new_villages", False):
             for found_vid in self.found_villages:
                 if found_vid not in config["villages"]:
@@ -308,12 +353,54 @@ class TWB:
 
         return overview_page, config
 
+    def check_server_clock(self, overview_page):
+        """Warn once if the host clock diverges from the game server's time.
+
+        Forced-peace windows (game.village.check_forced_peace) and scheduled
+        attacks are timed against the host's local clock. When the host runs in a
+        different timezone or its clock has drifted, those windows and launches
+        land at the wrong moment. TribalWars exposes its own time in the page
+        game data (time_generated, milliseconds); compare it to the host once per
+        startup so a skew is surfaced instead of silently misfiring.
+        """
+        if self._clock_checked:
+            return
+        game_data = Extractor.game_state(overview_page.result_get)
+        generated = (game_data or {}).get("time_generated")
+        if not generated:
+            return  # no server timestamp on this page; try again next cycle
+        self._clock_checked = True
+        try:
+            server_ts = float(generated) / 1000.0
+        except (TypeError, ValueError):
+            return
+        skew = time.time() - server_ts
+        if abs(skew) > self.CLOCK_SKEW_WARN_SECONDS:
+            msg = (
+                "Host clock differs from the game server by %d seconds (%.1f min). "
+                "Forced-peace windows and scheduled attacks are timed against the "
+                "host clock and will be offset by this amount - set the host's "
+                "timezone/clock to match the server." % (int(skew), skew / 60.0)
+            )
+            logging.getLogger("twb").warning(msg)
+            Notification.send("TWB: " + msg)
+        else:
+            logging.getLogger("twb").info(
+                "Host clock is within %ds of server time (skew %ds)",
+                self.CLOCK_SKEW_WARN_SECONDS, int(skew)
+            )
+
     def update_troop_movements(self):
         """Cache account-wide troop locations the snapshot can't tell apart:
         'op pad' (moving / in transit) and 'elders' (support stationed in other
         villages). Read straight from the game so the dashboard never has to
         derive support from mismatched snapshots."""
         if not self.found_villages:
+            return
+        # Skip the two extra GETs while the cached split is still fresh; the
+        # dashboard tolerates slightly stale movement data.
+        existing = FileManager.load_json_file("cache/troops_moving.json")
+        if existing and int(time.time()) - int(existing.get("when", 0) or 0) < self.TROOP_MOVE_REFRESH_SECONDS:
             return
         vid = self.found_villages[0]
         base = f"game.php?village={vid}&screen=overview_villages&mode=units&type="
@@ -325,8 +412,10 @@ class TWB:
                 "support": Extractor.units_overview(sup) if sup else {},
                 "when": int(time.time()),
             }, "cache/troops_moving.json")
-        except Exception:
-            pass  # non-critical: the dashboard falls back to lumped "away"
+        except Exception as exc:
+            # Non-critical: the dashboard falls back to lumped "away". Still log
+            # at debug so a persistent parse/markup regression is visible.
+            logging.getLogger("twb").debug("update_troop_movements failed: %s", exc)
 
     def add_village(self, village_id, template=None):
         """
@@ -407,8 +496,15 @@ class TWB:
         Allows the bot to run more productive during an active session and ensure stealth at night
         """
         active_h = [int(hour) for hour in config["bot"]["active_hours"].split("-")]
+        start, end = active_h[0], active_h[1]
         get_h = time.localtime().tm_hour
-        return get_h in range(active_h[0], active_h[1])
+        if start <= end:
+            # Same-day window; the end hour is inclusive ("6-23" is active
+            # 06:00-23:59, matching how a user reads "6 to 23").
+            return start <= get_h <= end
+        # Overnight window that wraps past midnight (e.g. "22-6"): active from
+        # the start hour through the end hour inclusive.
+        return get_h >= start or get_h <= end
 
     def _make_poller_wrapper(self, config):
         """A separate, GET-only web session for the incoming-attack poller.
@@ -573,6 +669,13 @@ class TWB:
             sched_thread.start()
             print("Scheduled-attack runner started")
         while self.should_run:
+            # Heartbeat: proof the main loop is still turning, independent of the
+            # incoming-attack poller and scheduler threads, which run on their own
+            # non-blocking wrappers and keep logging even when this loop is stuck
+            # (e.g. waiting out a captcha in WebWrapper._await_captcha_clear).
+            # OverviewBuilder uses staleness here as a generic "bot stalled" signal.
+            FileManager.save_json_file_atomic(
+                {"ts": int(time.time()), "runs": self.runs}, "cache/heartbeat.json")
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
                 sleep = 0
@@ -722,7 +825,11 @@ def main():
             t.start()
         except Exception as e:
             t.should_run = False  # signal this instance's background poller to stop
-            t.wrapper.reporter.report(0, "TWB_EXCEPTION", str(e))
+            # An early failure (bad config, etc.) can crash before self.wrapper is
+            # assigned; guard it so the except block doesn't raise a secondary
+            # AttributeError that escapes the retry loop and skips the notification.
+            if t.wrapper and t.wrapper.reporter:
+                t.wrapper.reporter.report(0, "TWB_EXCEPTION", str(e))
             print("I crashed :(   %s" % str(e))
             Notification.send("TWB crashed: %s" % str(e))
             # Write the full traceback to the rotating log file (cache/twb.log)

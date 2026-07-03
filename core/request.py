@@ -35,15 +35,25 @@ class WebWrapper:
     auth_endpoint = None
     reporter = None
     delay = 1.0
-    # When False, get_url returns the bot-protection page instead of blocking on
-    # input() for a manual captcha solve. Used by background pollers that have no
-    # interactive console.
+    # When False, get_url returns the bot-protection page instead of waiting for
+    # a manual captcha solve. Used by background pollers that have no interactive
+    # console.
     block_on_captcha = True
+    # While bot-protection ("forced" captcha) is active, the main loop re-checks
+    # the page on this cadence until the captcha is solved (in a browser on the
+    # same session) and auto-resumes - no console keypress or restart needed.
+    CAPTCHA_POLL_SECONDS = 20
+    CAPTCHA_BLOCK_FILE = "cache/captcha_block.json"
     # Only the wrapper that owns the login (the main loop) persists its rotated
     # cookies back to cache/session.json. Background pollers read that file but
     # must never write it, or two sessions would fight over the session id.
     is_session_owner = False
     _last_persisted_cookies = None
+    # One-shot diagnostic: capture the daily-login-bonus data the first time any
+    # page the bot fetches contains it, so the daily-bonus feature can be built
+    # from the real structure (no extra requests, no session conflict). Class-level
+    # so it fires once per process run. Remove once the blob is captured.
+    _daily_bonus_captured = False
 
     def __init__(self, url, server=None, endpoint=None, reporter_enabled=False, reporter_constr=None):
         """
@@ -72,6 +82,26 @@ class WebWrapper:
             self.last_h = get_h.group(1)
         if self.is_session_owner:
             self.persist_session()
+        self._capture_daily_bonus(response.text)
+
+    def _capture_daily_bonus(self, text):
+        """One-shot: if a page the bot already loaded contains the daily-login
+        bonus data, dump the full page + log the init blob so the daily-bonus
+        feature can be built from the real structure. No extra requests are made;
+        this only inspects text we already fetched. Fires at most once per run."""
+        if WebWrapper._daily_bonus_captured or "DailyBonus" not in text:
+            return
+        WebWrapper._daily_bonus_captured = True
+        try:
+            path = FileManager._resolve("cache/daily_bonus_capture.html")
+            with open(path, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(text)
+            m = re.search(r'DailyBonus\.init\((.+?)\);', text, re.DOTALL)
+            blob = (m.group(1)[:1500] if m else "(init(...) not matched - see the html file)")
+            self.logger.warning(
+                "DAILY BONUS PAGE CAPTURED -> %s | init blob: %s", path, blob)
+        except Exception as e:
+            self.logger.warning("Daily bonus capture failed: %s", e)
 
     def persist_session(self):
         """Write the live cookie jar back to cache/session.json.
@@ -111,16 +141,55 @@ class WebWrapper:
                 self.logger.warning("Bot protection hit during background poll, skipping")
                 return res
             if 'data-bot-protect="forced"' in res.text:
-                self.logger.warning("Bot protection hit! cannot continue")
-                self.reporter.report(
-                    0, "TWB_RECAPTCHA", "Stopping bot, press any key once captcha has been solved")
-                Notification.send("Bot protection hit! cannot continue")
-                input("Press any key...")
-                return self.get_url(url, headers)
+                return self._await_captcha_clear(url, headers)
             return res
         except Exception as e:
             self.logger.warning("GET %s: %s", url, str(e))
             return None
+
+    def _await_captcha_clear(self, url, headers):
+        """Wait out a bot-protection ("forced" captcha) block on the main loop.
+
+        Instead of blocking on input() forever - which needs a keypress in the
+        bot's own console and cannot see a solve done in a browser - poll the page
+        until the captcha is gone (solved in a browser on the *same* session) and
+        resume automatically. A cache/captcha_block.json marker drives the
+        dashboard "bot stalled" banner and is removed the moment the block clears,
+        so the message goes away on its own with no restart. Deleting that marker
+        externally (e.g. a dashboard "Resume" action) just triggers an immediate
+        re-check; if the page is still forced the marker is re-armed so the banner
+        stays honest.
+        """
+        self.logger.warning(
+            "Bot protection hit! Solve the captcha in a browser on the same "
+            "session - the bot will auto-resume when it clears.")
+        self.reporter.report(
+            0, "TWB_RECAPTCHA",
+            "Bot protection hit. Solve the captcha in a browser on the same "
+            "session; the bot resumes automatically.")
+        Notification.send(
+            "Bot protection hit! Solve the captcha in a browser on the same "
+            "session - the bot auto-resumes when it clears.")
+        FileManager.save_json_file_atomic(
+            {"since": int(time.time())}, self.CAPTCHA_BLOCK_FILE)
+        while True:
+            time.sleep(self.CAPTCHA_POLL_SECONDS)
+            try:
+                res = self.web.get(url=url, headers=self.headers)
+                self.post_process(res)
+            except Exception as e:
+                self.logger.warning("Captcha re-check failed: %s", e)
+                continue
+            if 'data-bot-protect="forced"' not in res.text:
+                FileManager.remove_file(self.CAPTCHA_BLOCK_FILE)
+                self.logger.info("Captcha cleared - resuming.")
+                Notification.send("Captcha cleared, bot resumed.")
+                return res
+            # Still blocked: keep the banner marker present even if it was cleared
+            # manually before the captcha was actually solved.
+            if FileManager.load_json_file(self.CAPTCHA_BLOCK_FILE) is None:
+                FileManager.save_json_file_atomic(
+                    {"since": int(time.time())}, self.CAPTCHA_BLOCK_FILE)
 
     def post_url(self, url, data, headers=None):
         """
@@ -256,11 +325,15 @@ class WebWrapper:
         payload = f"game.php?{urlencode(req)}"
         url = urljoin(self.endpoint, payload)
         res = self.get_url(url, headers=custom)
-        if res.status_code == 200:
+        # res is None when the underlying request failed (network error, or a
+        # captcha page from a background poller). Treat it as "no data" instead
+        # of crashing on res.status_code, so the caller retries next cycle.
+        if res is not None and res.status_code == 200:
             try:
                 return res.json()
             except:
                 return res
+        return None
 
     def post_api_data(self, village_id, action, params={}, data={}):
         """
@@ -281,11 +354,14 @@ class WebWrapper:
         if 'h' not in data:
             data['h'] = self.last_h
         res = self.post_url(url, data=data, headers=custom)
-        if res.status_code == 200:
+        # A failed post_url returns None; guard so the action fails soft (retried
+        # next cycle) instead of raising AttributeError on res.status_code.
+        if res is not None and res.status_code == 200:
             try:
                 return res.json()
             except:
                 return res
+        return None
 
     def get_api_action(self, village_id, action, params={}, data={}):
         """
@@ -306,7 +382,9 @@ class WebWrapper:
         if 'h' not in data:
             data['h'] = self.last_h
         res = self.post_url(url, data=data, headers=custom)
-        if res.status_code == 200:
+        # A failed post_url returns None; guard so the action fails soft (retried
+        # next cycle) instead of raising AttributeError on res.status_code.
+        if res is not None and res.status_code == 200:
             try:
                 return res.json()
             except:
