@@ -21,6 +21,7 @@ exactly one caller even if two run at once.
 import json
 import logging
 import os
+import random
 import time
 import uuid
 
@@ -152,13 +153,24 @@ def next_send_ts(path=None):
 
 def claim_due(path=None, lead=0.0, now=None):
     """Atomically move every due pending command to 'sending' and return them, so
-    a command is claimed by exactly one caller (no double-send)."""
+    a command is claimed by exactly one caller (no double-send).
+
+    A command already in 'sending' whose claim is older than STALE_SENDING_SECONDS
+    is treated as abandoned (the process that claimed it crashed mid-launch) and
+    is reclaimed too — otherwise it would stay 'sending' forever, never retried
+    (only 'pending' is normally claimed) and never pruned."""
     now = now if now is not None else time.time()
     claimed = []
 
     def mut(commands):
         for c in commands:
-            if c.get("status") == "pending" and float(c.get("send_ts", 0)) - lead <= now:
+            status = c.get("status")
+            due = float(c.get("send_ts", 0)) - lead <= now
+            stale = (
+                status == "sending"
+                and now - int(c.get("claimed_at", 0)) > STALE_SENDING_SECONDS
+            )
+            if (status == "pending" and due) or stale:
                 c["status"] = "sending"
                 c["claimed_at"] = int(time.time())
                 claimed.append(dict(c))  # copy: caller reads it after the lock releases
@@ -180,11 +192,25 @@ def _set_status(command_id, status, path=None, **extra):
 # its send moment, so only the final fast launch request remains to time. Must
 # comfortably exceed the open+confirm round-trips.
 PRESTAGE_SECONDS = 15
+# A command legitimately sits in 'sending' only for the brief pre-stage + launch
+# window (a few seconds beyond PRESTAGE_SECONDS). Past this many seconds it must
+# be a leftover from a crashed launch, so claim_due may reclaim and retry it.
+STALE_SENDING_SECONDS = 120
 # Compensation (seconds) for the launch request's own one-way latency: fire this
 # much before the computed launch moment so troops actually leave on time. Tune
 # to roughly your ping to the game server (observed near-zero on a fast host, so
 # 0.0 lands on target; raise it if attacks land late, lower if they land early).
 NETWORK_LEAD = 0.0
+# Human-pacing gap (seconds) inserted BETWEEN the open and confirm prep steps of a
+# timed send. Timed sends run on a priority_mode wrapper, which strips the normal
+# 3-7s pacing so the final launch can fire instantly; without this, open+confirm
+# would hit the server back-to-back with only network latency between them - an
+# unnatural signature bot detection watches for on the (heavily-scrutinised)
+# attack path. This gap runs entirely inside the pre-stage window, well before the
+# launch, so it NEVER affects arrival accuracy - only the launch request is
+# time-critical. Keep the max comfortably under PRESTAGE_SECONDS.
+PREP_JITTER_MIN = 0.4
+PREP_JITTER_MAX = 1.8
 
 
 def prepare_command(wrapper, origin_id, x, y, units):
@@ -205,6 +231,13 @@ def prepare_command(wrapper, origin_id, x, y, units):
     pre_data = {k: v for k, v in Extractor.attack_form(pre)}
     pre_data.update({str(u): str(n) for u, n in units.items()})
     pre_data.update({"x": x, "y": y, "target_type": "coord", "attack": "Aanvallen"})
+
+    # Human-pacing gap between opening the rally point and confirming it. Only
+    # needed when the wrapper is in priority_mode (timed sends), where its built-in
+    # 3-7s pacing is off - a normal wrapper already spaces these two requests. This
+    # runs during the pre-stage window, so it does not delay the launch.
+    if getattr(wrapper, "priority_mode", False):
+        time.sleep(random.uniform(PREP_JITTER_MIN, PREP_JITTER_MAX))
 
     # 2) Confirm step: returns the launch form (fresh token), the server's exact
     # travel duration, and an error box if the target/troops are invalid.

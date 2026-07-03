@@ -6,10 +6,47 @@ import json
 import re
 
 
+# Precompiled regexes (patterns copied verbatim from the inline versions).
+# Python's re module already caches compiled literals, so the win is small, but
+# compiling once up front is cleaner and avoids the per-call cache lookup - it
+# matters most for the patterns used inside the units_overview row loop.
+_RE_VILLAGE_DATA = re.compile(r'var village = (.+);')
+_RE_GAME_STATE = re.compile(r'TribalWars\.updateGameData\((.+?)\);')
+_RE_BUILDING_DATA = re.compile(r'(?s)BuildingMain.buildings = (\{.+?\});')
+_RE_QUESTS = re.compile(r'Quests.setQuestData\((\{.+?\})\);')
+_RE_QUEST_REWARDS = re.compile(r'RewardSystem\.setRewards\(\s*(\[\{.+?\}\]),')
+_RE_MAP_DATA = re.compile(r'(?s)TWMap.sectorPrefech = (\[(.+?)\]);')
+_RE_SMITH_DATA = re.compile(r'(?s)BuildingSmith.techs = (\{.+?\});')
+_RE_PREMIUM_DATA = re.compile(r'(?s)PremiumExchange.receiveData\((.+?)\);')
+_RE_RECRUIT_DATA = re.compile(r'(?s)unit_managers.units = (\{.+?\});')
+_RE_QUOTE_KEYS = re.compile(r'([\{\s,])(\w+)(:)')
+_RE_UNITS_HOME = re.compile(r'<table id="units_home".*?</tr>(.*?)</tr>', re.DOTALL)
+_RE_UNIT_ITEMS_HOME = re.compile(r'class=\'unit-item unit-item-(.*?)\'[^>]*>(\d+)</td>')
+_RE_TOOLTIP = re.compile(r'\s*tooltip\s*')
+_RE_BUILD_QUEUE = re.compile('(?s)<table id="build_queue"(.+?)</table>')
+_RE_UNITS_TABLE = re.compile(r'(?s)<table id="units_table".*?</table>')
+_RE_UNIT_HEADER = re.compile(r'unit-item-(\w+)|unit_(\w+)\b')
+_RE_TR = re.compile(r'(?s)<tr.*?</tr>')
+_RE_TD = re.compile(r'(?s)<td[^>]*>(.*?)</td>')
+_RE_TAG = re.compile(r'<[^>]+>')
+_RE_COORD = re.compile(r'\(\d+\|\d+\)')
+_RE_NONDIGIT = re.compile(r'\D')
+_RE_RECRUIT_QUEUE = re.compile(r'(?s)TrainOverview\.cancelOrder\((\d+)\)')
+_RE_VILLAGE_IDS = re.compile(r'<span class="quickedit-vn" data-id="(\w+)"')
+_RE_VILLAGE_ANCHOR = re.compile(r'(?s)<span class="village_anchor.+?</tr>')
+_RE_UNITS_TOTAL = re.compile(r'(?s)class=\Wunit-item unit-item-([a-z]+)\W.+?(\d+)</td>')
+_RE_ATTACK_FORM = re.compile(r'(?s)<input.+?name="(.+?)".+?value="(.*?)"')
+_RE_ATTACK_DURATION = re.compile(r'<span class="relative_time" data-duration="(\d+)"')
+_RE_REPORT_TABLE = re.compile(r'(?s)class="report-link" data-id="(\d+)"')
+_RE_FARM_ICON = re.compile(
+    r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>')
+_RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
+_RE_DAILY = re.compile(r'DailyBonus.init\((\s+\{.*\}),')
+
+
 class Extractor:
     """
-    Defines various non-compiled regexes for data retrieval
-    TODO: use compiled various for CPU efficiency
+    Defines various regexes for data retrieval (precompiled at module level).
     """
     @staticmethod
     def village_data(res):
@@ -18,7 +55,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        grabber = re.search(r'var village = (.+);', res)
+        grabber = _RE_VILLAGE_DATA.search(res)
         if grabber:
             data = grabber.group(1)
             return json.loads(data, strict=False)
@@ -30,7 +67,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        grabber = re.search(r'TribalWars\.updateGameData\((.+?)\);', res)
+        grabber = _RE_GAME_STATE.search(res)
         if grabber:
             data = grabber.group(1)
             return json.loads(data, strict=False)
@@ -42,7 +79,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        dre = re.search(r'(?s)BuildingMain.buildings = (\{.+?\});', res)
+        dre = _RE_BUILDING_DATA.search(res)
         if dre:
             return json.loads(dre.group(1), strict=False)
 
@@ -55,7 +92,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        get_quests = re.search(r'Quests.setQuestData\((\{.+?\})\);', res)
+        get_quests = _RE_QUESTS.search(res)
         if get_quests:
             result = json.loads(get_quests.group(1), strict=False)
             for quest in result:
@@ -71,7 +108,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        get_rewards = re.search(r'RewardSystem\.setRewards\(\s*(\[\{.+?\}\]),', res)
+        get_rewards = _RE_QUEST_REWARDS.search(res)
         rewards = []
         if get_rewards:
             result = json.loads(get_rewards.group(1), strict=False)
@@ -88,7 +125,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.search(r'(?s)TWMap.sectorPrefech = (\[(.+?)\]);', res)
+        data = _RE_MAP_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
             return result
@@ -100,7 +137,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.search(r'(?s)BuildingSmith.techs = (\{.+?\});', res)
+        data = _RE_SMITH_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
             return result
@@ -113,7 +150,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.search(r'(?s)PremiumExchange.receiveData\((.+?)\);', res)
+        data = _RE_PREMIUM_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
             return result
@@ -126,11 +163,10 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.search(r'(?s)unit_managers.units = (\{.+?\});', res)
+        data = _RE_RECRUIT_DATA.search(res)
         if data:
             raw = data.group(1)
-            quote_keys_regex = r'([\{\s,])(\w+)(:)'
-            processed = re.sub(quote_keys_regex, r'\1"\2"\3', raw)
+            processed = _RE_QUOTE_KEYS.sub(r'\1"\2"\3', raw)
             result = json.loads(processed, strict=False)
             return result
 
@@ -141,13 +177,13 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        matches = re.search(r'<table id="units_home".*?</tr>(.*?)</tr>', res, re.DOTALL)
+        matches = _RE_UNITS_HOME.search(res)
         # We get the start of the table and grab the 2nd row (Where "From this village" troops are located)
         if matches:
             table_content = matches.group(1)
-            unit_matches = re.findall(r'class=\'unit-item unit-item-(.*?)\'[^>]*>(\d+)</td>', table_content)
+            unit_matches = _RE_UNIT_ITEMS_HOME.findall(table_content)
             # Find all the tuples (name, quantity) under the class "unit-item unit-item-*troop_name*"
-            units = [(re.sub(r'\s*tooltip\s*', '', unit_name), unit_quantity) for unit_name, unit_quantity in
+            units = [(_RE_TOOLTIP.sub('', unit_name), unit_quantity) for unit_name, unit_quantity in
                      unit_matches if int(unit_quantity) > 0]
             # Filter units with quantity = 0, also for the Paladin,
             # the name would be "knight tooltip", so we had to remove that.
@@ -161,7 +197,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        builder = re.search('(?s)<table id="build_queue"(.+?)</table>', res)
+        builder = _RE_BUILD_QUEUE.search(res)
         if not builder:
             return 0
 
@@ -177,12 +213,12 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        m = re.search(r'(?s)<table id="units_table".*?</table>', res)
+        m = _RE_UNITS_TABLE.search(res)
         if not m:
             return {}
         table = m.group(0)
         units = []
-        for a, b in re.findall(r'unit-item-(\w+)|unit_(\w+)\b', table):
+        for a, b in _RE_UNIT_HEADER.findall(table):
             unit = a or b
             if unit not in units:
                 units.append(unit)
@@ -190,15 +226,15 @@ class Extractor:
             return {}
         out = {u: 0 for u in units}
         # Each data row: <td>village (x|y)</td><td>status</td> + one <td> per unit.
-        for row in re.findall(r'(?s)<tr.*?</tr>', table):
-            cells = re.findall(r'(?s)<td[^>]*>(.*?)</td>', row)
+        for row in _RE_TR.findall(table):
+            cells = _RE_TD.findall(row)
             if len(cells) < 2 + len(units):
                 continue
-            texts = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-            if not re.search(r'\(\d+\|\d+\)', texts[0] or ''):
+            texts = [_RE_TAG.sub('', c).strip() for c in cells]
+            if not _RE_COORD.search(texts[0] or ''):
                 continue
             for i, unit in enumerate(units):
-                digits = re.sub(r'\D', '', texts[2 + i] or '')
+                digits = _RE_NONDIGIT.sub('', texts[2 + i] or '')
                 if digits:
                     out[unit] += int(digits)
         return {u: c for u, c in out.items() if c}
@@ -210,7 +246,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        builder = re.findall(r'(?s)TrainOverview\.cancelOrder\((\d+)\)', res)
+        builder = _RE_RECRUIT_QUEUE.findall(res)
         return builder
 
     @staticmethod
@@ -220,7 +256,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        villages = re.findall(r'<span class="quickedit-vn" data-id="(\w+)"', res)
+        villages = _RE_VILLAGE_IDS.findall(res)
         return list(set(villages))
 
     @staticmethod
@@ -231,8 +267,8 @@ class Extractor:
         if type(res) != str:
             res = res.text
         # hide units from other villages
-        res = re.sub(r'(?s)<span class="village_anchor.+?</tr>', '', res)
-        data = re.findall(r'(?s)class=\Wunit-item unit-item-([a-z]+)\W.+?(\d+)</td>', res)
+        res = _RE_VILLAGE_ANCHOR.sub('', res)
+        data = _RE_UNITS_TOTAL.findall(res)
         return data
 
     @staticmethod
@@ -243,7 +279,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.findall(r'(?s)<input.+?name="(.+?)".+?value="(.*?)"', res)
+        data = _RE_ATTACK_FORM.findall(res)
         return data
 
     @staticmethod
@@ -253,7 +289,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.search(r'<span class="relative_time" data-duration="(\d+)"', res)
+        data = _RE_ATTACK_DURATION.search(res)
         if data:
             return int(data.group(1))
         return 0
@@ -265,7 +301,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        data = re.findall(r'(?s)class="report-link" data-id="(\d+)"', res)
+        data = _RE_REPORT_TABLE.findall(res)
         return data
 
     @staticmethod
@@ -281,14 +317,11 @@ class Extractor:
         if type(res) != str:
             res = res.text
         result = {}
-        for match in re.finditer(
-                r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>',
-                res,
-        ):
+        for match in _RE_FARM_ICON.finditer(res):
             attrs, vid, kind = match.group(1), match.group(2), match.group(3)
             disabled = "farm_icon_disabled" in attrs
             forecast = None
-            forecast_match = re.search(r'data-units-forecast="([^"]*)"', attrs)
+            forecast_match = _RE_FORECAST.search(attrs)
             if forecast_match:
                 raw = forecast_match.group(1).replace("&quot;", '"')
                 forecast = json.loads(raw, strict=False)
@@ -305,7 +338,7 @@ class Extractor:
         """
         if type(res) != str:
             res = res.text
-        get_daily = re.search(r'DailyBonus.init\((\s+\{.*\}),', res)
+        get_daily = _RE_DAILY.search(res)
         res = json.loads(get_daily.group(1))
         reward_count_unlocked = str(res["reward_count_unlocked"])
         if reward_count_unlocked and res["chests"][reward_count_unlocked]["is_collected"]:
