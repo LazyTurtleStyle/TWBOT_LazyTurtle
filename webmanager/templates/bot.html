@@ -17,7 +17,18 @@
 {% set soonest = arrivals|min if arrivals else None %}
 
 <!-- Situation bar (signature) -->
-{% if overview.incoming_logged_out %}
+{% if overview.summary.watchdog.stalled %}
+<div class="situation critical">
+	<div>
+		<div class="sit-state">&#9888; Bot stalled</div>
+		{% if overview.summary.watchdog.reason == 'captcha' %}
+		<div class="sit-sub">Blocked on a captcha prompt{% if overview.summary.watchdog.since %} since {{ overview.summary.watchdog.since|ago }}{% endif %} — solve it in a browser on the same session and the bot resumes on its own within ~20s (no restart needed). Background pollers are still running, which is why the process looks alive.</div>
+		{% else %}
+		<div class="sit-sub">No heartbeat from the main loop for {{ overview.summary.watchdog.heartbeat_age|dur }} — it may be hung. Background pollers are still running, which is why the process looks alive.</div>
+		{% endif %}
+	</div>
+</div>
+{% elif overview.incoming_logged_out %}
 <div class="situation critical">
 	<div>
 		<div class="sit-state">&#9888; Session expired — tracking offline</div>
@@ -34,6 +45,13 @@
 	<div class="threat">
 		<div class="t"><div class="v blood">{{ overview.incoming_total }}</div><div class="k">incoming</div></div>
 		{% if soonest %}<div class="t"><div class="v blood inc-eta" data-arrival="{{ soonest }}">…</div><div class="k">soonest lands</div></div>{% endif %}
+	</div>
+</div>
+{% elif overview.summary.watchdog.farm_stall.stalled %}
+<div class="situation alert">
+	<div>
+		<div class="sit-state">&#9888; Farming stalled</div>
+		<div class="sit-sub">The main loop is running, but no attack or scout report has come in for {{ overview.summary.watchdog.farm_stall.age|dur }} during active hours — the "silent stall" signature, usually a degraded session that stopped report reading. Try reconnecting in the Session panel below, or restart the bot.</div>
 	</div>
 </div>
 {% else %}
@@ -215,7 +233,15 @@
 		</div>
 
 		<div class="panel">
-			<div class="panel-head"><h3>Session</h3><span class="coord">{{ active_world or 'default' }} &middot; {{ session.endpoint }}</span></div>
+			<div class="panel-head"><h3>Session</h3>
+				<div class="flex" style="gap:8px;align-items:center">
+					<span class="coord">{{ active_world or 'default' }} &middot; {{ session.endpoint }}</span>
+					{% if session.endpoint and session.endpoint != 'None' %}
+					<a class="btn btn-sm btn-ember" href="#" onclick="open_game_ext(); return false"
+					   title="Open the game in a new tab using the bot's session (needs the TWB Session Restore extension)">Open game</a>
+					{% endif %}
+				</div>
+			</div>
 			<div class="panel-body">
 				<textarea id="session_data" rows="3" class="field mono" style="font-size:12px"
 					placeholder="Paste your full browser cookie string here">{{ session.raw }}</textarea>
@@ -224,6 +250,20 @@
 					<span id="session_status" class="faint"></span>
 				</div>
 				<small class="faint" style="display:block; margin-top:6px">Saving to world <strong>{{ active_world or 'default' }}</strong> &mdash; check the world switcher matches the bot you're refreshing. Applies on that bot's next start or re-auth.</small>
+
+				<div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft)">
+					<div class="flex between" style="margin-bottom:6px">
+						<span style="font-size:12px;font-weight:600;color:var(--ink-dim)">Portal cookies <span class="faint">(www.tribalwars.nl)</span></span>
+						<span id="portal_saved_badge" class="badge {{ 'moss' if portal_saved else 'dim' }}">{{ 'saved' if portal_saved else 'not set' }}</span>
+					</div>
+					<textarea id="portal_data" rows="2" class="field mono" style="font-size:12px"
+						placeholder="While on www.tribalwars.nl — open DevTools (F12) → Application → Cookies → copy all values here"></textarea>
+					<div class="flex" style="margin-top:8px">
+						<button class="btn btn-sm" style="background:var(--surface-2);border:1px solid var(--line);color:var(--ink-dim)" onclick="set_portal_cookies()">Save portal cookies</button>
+						<span id="portal_status" class="faint"></span>
+					</div>
+					<small class="faint" style="display:block;margin-top:6px">Stored once — used by the Cookie Editor export so you can log back in next boot without creating a new session.</small>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -278,6 +318,17 @@ function saveTag(commandId) {
 		})
 		.fail(function() { if (status) status.textContent = 'Error saving tag'; });
 }
+function open_game_ext() {
+	if (document.documentElement.hasAttribute('data-twb-ext')) {
+		// TWB Session Restore extension is installed — it injects the bot's
+		// cookies and opens the game tab itself.
+		window.postMessage({type: 'twb-open-game', world: {{ (active_world or "")|tojson }}}, '*');
+	} else {
+		// Not installed (or extension copy predates the dashboard bridge) —
+		// go to the helper page with install instructions.
+		window.open('/app/tw-open', '_blank');
+	}
+}
 function set_session_data() {
 	var raw = $('#session_data').val();
 	var status = $('#session_status');
@@ -287,6 +338,21 @@ function set_session_data() {
 			status.text(resp && resp.ok ? 'Saved ✓ to {{ active_world or "default" }}' : 'No valid cookies found in that string');
 		})
 		.fail(function() { status.text('Error saving session'); });
+}
+function set_portal_cookies() {
+	var raw = $('#portal_data').val();
+	var status = $('#portal_status');
+	status.text('Saving...');
+	$.post('/app/portal-cookies/set', {cookies: raw})
+		.done(function(resp) {
+			if (resp && resp.ok) {
+				status.text('Saved ✓');
+				$('#portal_saved_badge').text('saved').removeClass('dim').addClass('moss');
+			} else {
+				status.text('No valid cookies found');
+			}
+		})
+		.fail(function() { status.text('Error saving'); });
 }
 </script>
 {% endblock %}

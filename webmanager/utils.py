@@ -1,5 +1,6 @@
 import collections
 import datetime
+import glob
 import json
 import os
 import signal
@@ -176,6 +177,55 @@ class DataReader:
         except Exception:
             pass
         return False
+
+    # Main loop is considered stalled once its heartbeat is older than this, on
+    # top of whatever cycle delay is configured (background threads keep the
+    # process and its logs alive on their own schedules even when the main loop
+    # is blocked, e.g. waiting out a captcha - see core/request.py).
+    HEARTBEAT_GRACE_SECONDS = 900
+
+    @staticmethod
+    def watchdog_state():
+        """Is the bot's main loop actually turning, or stuck?
+
+        Returns {"stalled": bool, "reason": "captcha"|"heartbeat"|None,
+        "since": unix ts or None, "heartbeat_age": seconds or None}.
+        A captcha_block.json marker (written by WebWrapper._await_captcha_clear
+        while it polls for the solve) is the precise signal, and is removed the
+        moment the captcha clears; heartbeat staleness is a generic fallback for
+        any other way the main loop could get stuck.
+        """
+        captcha = DataReader.data_path("cache", "captcha_block.json")
+        if os.path.exists(captcha):
+            try:
+                with open(captcha) as f:
+                    since = int((json.load(f) or {}).get("since") or 0)
+            except Exception:
+                since = None
+            return {"stalled": True, "reason": "captcha", "since": since,
+                    "heartbeat_age": None}
+
+        heartbeat = DataReader.data_path("cache", "heartbeat.json")
+        if not os.path.exists(heartbeat):
+            return {"stalled": False, "reason": None, "since": None, "heartbeat_age": None}
+        try:
+            with open(heartbeat) as f:
+                ts = int((json.load(f) or {}).get("ts") or 0)
+        except Exception:
+            return {"stalled": False, "reason": None, "since": None, "heartbeat_age": None}
+
+        try:
+            cfg = DataReader.config_grab().get("bot", {}) or {}
+            cycle_delay = max(
+                int(cfg.get("active_delay", 0) or 0),
+                int(cfg.get("inactive_delay", 0) or 0),
+            )
+        except Exception:
+            cycle_delay = 0
+        age = int(time.time()) - ts
+        threshold = cycle_delay + DataReader.HEARTBEAT_GRACE_SECONDS
+        return {"stalled": age > threshold, "reason": "heartbeat" if age > threshold else None,
+                "since": ts, "heartbeat_age": age}
 
     @staticmethod
     def world_speeds():
@@ -609,6 +659,33 @@ class DataReader:
                 pass
         return True
 
+    @staticmethod
+    def portal_cookies_set(raw):
+        cookies = DataReader.parse_cookie_string(raw)
+        if not cookies:
+            return False
+        cache_dir = DataReader.data_path("cache")
+        with open(os.path.join(cache_dir, "portal_cookies.json"), 'w') as f:
+            json.dump({"domain": "www.tribalwars.nl", "cookies": cookies}, f, indent=2)
+        return True
+
+    @staticmethod
+    def portal_cookies_get():
+        p = DataReader.data_path("cache", "portal_cookies.json")
+        if not os.path.exists(p):
+            # Portal cookies are account-level (www.tribalwars.nl), not
+            # world-level — fall back to the newest copy from any world.
+            candidates = glob.glob(os.path.join(
+                DataReader.project_root(), "worlds", "*", "cache", "portal_cookies.json"))
+            if not candidates:
+                return {}
+            p = max(candidates, key=os.path.getmtime)
+        try:
+            with open(p) as f:
+                return json.load(f).get("cookies", {})
+        except (ValueError, OSError):
+            return {}
+
 
 class BuildingTemplateManager:
 
@@ -798,6 +875,116 @@ class OverviewBuilder:
 
     # Report types that represent real bot activity worth showing in the feed.
     ACTIVITY_TYPES = ("attack", "scout")
+
+    # Silent-stall detector: if farming is on and it's active hours but no
+    # attack/scout report has been ingested for this long while the main loop is
+    # still turning, flag a likely stall (e.g. a degraded session that stopped
+    # report reading). Farm runs happen every ~25-45 min and scouts return within
+    # a couple of hours, so several hours of nothing is anomalous.
+    FARM_STALL_SECONDS = 3 * 3600
+
+    # Memo for the full-report scan used by the 24h/all-time counters: a tuple of
+    # (signature, compact_records). The signature is a cheap fingerprint of the
+    # reports dir, so the O(all reports) JSON parse only reruns when a report is
+    # actually added/changed - not on every dashboard refresh.
+    _reports_memo = None
+
+    @staticmethod
+    def _reports_signature():
+        """Cheap fingerprint of the active world's reports dir: (path, file_count,
+        newest_mtime). Statting the files is far cheaper than parsing them, and
+        the path keeps the memo correct across a world switch."""
+        rpath = DataReader.data_path("cache", "reports")
+        if not os.path.isdir(rpath):
+            return (rpath, 0, 0.0)
+        count = 0
+        newest = 0.0
+        try:
+            with os.scandir(rpath) as it:
+                for e in it:
+                    if not e.name.endswith(".json"):
+                        continue
+                    count += 1
+                    try:
+                        m = e.stat().st_mtime
+                    except OSError:
+                        continue
+                    if m > newest:
+                        newest = m
+        except OSError:
+            return (rpath, 0, 0.0)
+        return (rpath, count, newest)
+
+    @classmethod
+    def _farm_trade_records(cls):
+        """Compact (type, when, loot_sum) tuples for every report on disk, memoised
+        by _reports_signature so the full JSON parse only reruns when the reports
+        change. The time-windowed counters are summed from these in memory against
+        the current cutoff each build (cheap), keeping 24h totals second-accurate."""
+        sig = cls._reports_signature()
+        memo = cls._reports_memo
+        if memo is not None and memo[0] == sig:
+            return memo[1]
+        try:
+            all_reports = DataReader.cache_grab("reports") or {}
+        except Exception:
+            all_reports = {}
+        records = []
+        for r in all_reports.values():
+            rtype = (r or {}).get("type")
+            ex = (r or {}).get("extra", {}) or {}
+            when = cls._to_int(ex.get("when"))
+            loot_sum = 0
+            if rtype == "attack":
+                loot_sum = sum(cls._to_int(v) for v in (ex.get("loot", {}) or {}).values())
+            records.append((rtype, when, loot_sum))
+        cls._reports_memo = (sig, records)
+        return records
+
+    @staticmethod
+    def _in_active_hours(spec):
+        """True if the current local hour falls in the bot's active_hours window.
+        Mirrors twb.py is_active_hours (end-inclusive, handles overnight wrap).
+        Unset/malformed -> treated as always active."""
+        if not spec:
+            return True
+        try:
+            start, end = [int(h) for h in str(spec).split("-")]
+        except (ValueError, TypeError):
+            return True
+        h = time.localtime().tm_hour
+        if start <= end:
+            return start <= h <= end
+        return h >= start or h <= end
+
+    @classmethod
+    def _farm_stall_state(cls, newest_combat_ts, watchdog):
+        """Detect the 'silent stall': the main loop is alive during active hours
+        and farming is on, but no attack/scout report has been ingested for
+        FARM_STALL_SECONDS. This is the nl99 signature - a degraded session that
+        keeps the loop turning (fresh heartbeat) while report reading is dead.
+        Returns {"stalled": bool, "since": ts, "age": secs}."""
+        idle = {"stalled": False, "since": None, "age": None}
+        # A captcha/heartbeat stall is already surfaced as critical; don't stack.
+        if watchdog.get("stalled"):
+            return idle
+        try:
+            cfg = DataReader.config_grab() or {}
+        except Exception:
+            return idle
+        # Only meaningful when farming is on (that's what produces these reports)...
+        if not (cfg.get("farms", {}) or {}).get("farm"):
+            return idle
+        # ...and during active hours, when the bot should be actively farming.
+        if not cls._in_active_hours((cfg.get("bot", {}) or {}).get("active_hours")):
+            return idle
+        # No baseline yet (fresh world, no attack/scout reports) -> don't cry wolf.
+        if not newest_combat_ts:
+            return idle
+        age = int(time.time()) - int(newest_combat_ts)
+        if age > cls.FARM_STALL_SECONDS:
+            return {"stalled": True, "since": int(newest_combat_ts), "age": age}
+        return idle
 
     @staticmethod
     def _to_int(value):
@@ -1036,31 +1223,26 @@ class OverviewBuilder:
 
         # Last-24h and all-time counters over the FULL report cache (sync() only
         # passes the newest ~100, which is enough for the feed but not for totals).
-        # A farm run = an attack report that returned loot. Scavenging/trade 24h
-        # rely on the report timestamp, which the bot now records on every report
-        # (older reports without it simply don't count toward the 24h figure).
-        try:
-            all_reports = DataReader.cache_grab("reports") or {}
-        except Exception:
-            all_reports = {}
+        # A farm run = an attack report that returned loot. The full parse is
+        # memoised (_farm_trade_records) so it only reruns when reports change;
+        # the windowed sums below are cheap in-memory arithmetic against `cutoff`.
         cutoff = int(time.time()) - 86400
         farm_runs_total = farm_runs_24h = 0
         farm_loot_total = farm_loot_24h = 0
         scav_runs_total = scav_runs_24h = 0
         trades_total = trades_24h = 0
-        for r in all_reports.values():
-            rtype = (r or {}).get("type")
-            ex = r.get("extra", {}) or {}
-            when = cls._to_int(ex.get("when"))
+        newest_combat = 0  # newest attack/scout report time, for the stall detector
+        for rtype, when, loot_sum in cls._farm_trade_records():
             recent = when and when >= cutoff
+            if rtype in cls.ACTIVITY_TYPES and when and when > newest_combat:
+                newest_combat = when
             if rtype == "attack":
-                lt = sum(cls._to_int(v) for v in (ex.get("loot", {}) or {}).values())
-                if lt > 0:  # a farm haul
+                if loot_sum > 0:  # a farm haul
                     farm_runs_total += 1
-                    farm_loot_total += lt
+                    farm_loot_total += loot_sum
                     if recent:
                         farm_runs_24h += 1
-                        farm_loot_24h += lt
+                        farm_loot_24h += loot_sum
             elif rtype == "ReportTrade":
                 trades_total += 1
                 if recent:
@@ -1094,6 +1276,9 @@ class OverviewBuilder:
         scav_runs_total = cls._to_int(scav_log.get("total_runs")) or len(scav_runs)
         scav_runs_24h = len(recent_runs)
 
+        _watchdog = DataReader.watchdog_state()
+        _watchdog["farm_stall"] = cls._farm_stall_state(newest_combat, _watchdog)
+
         return {
             "summary": {
                 "villages": len(managed),
@@ -1122,6 +1307,7 @@ class OverviewBuilder:
                 "troops_moving": troops_moving,
                 "loot_recent": loot_recent,
                 "last_activity": last_activity,
+                "watchdog": _watchdog,
             },
             "villages": villages,
             "activity": activity[:20],
@@ -1316,13 +1502,24 @@ class BotManager:
 
     def start(self, world=None):
         key = self._world_key(world)
-        wd = os.path.join(os.path.dirname(__file__), "..")
-        # Use the interpreter running the web server (sys.executable) rather than
-        # a bare "python", which may not exist on systems that only ship python3.
+        if self.is_running(world):
+            print("Bot already running (%s), skipping start" % (key or "default"))
+            return
+        wd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        log_name = ("bot_%s.log" % key) if key else "bot.log"
+        log_path = os.path.join(wd, "worlds", key, log_name) if key else os.path.join(wd, log_name)
         cmd = [sys.executable, "twb.py"] + (["--world", key] if key else [])
-        proc = subprocess.Popen(cmd, cwd=wd)
+        with open(log_path, "a") as log_fh:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=wd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                start_new_session=True,   # detach from web server's process group
+            )
         self._pids[key] = proc.pid
-        print("Bot started successfully (%s)" % (key or "default"))
+        print("Bot started (pid=%d, log=%s)" % (proc.pid, log_path))
 
     def stop(self, world=None):
         key = self._world_key(world)

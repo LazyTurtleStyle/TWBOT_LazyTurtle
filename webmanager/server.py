@@ -1,9 +1,10 @@
+import collections
 import json
 import os
 import sys
 sys.path.insert(0, "../")
 
-from flask import Flask, jsonify, send_from_directory, request, render_template, redirect
+from flask import Flask, jsonify, request, render_template, redirect, Response
 
 try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
@@ -23,7 +24,11 @@ from html import escape as html_escape
 bm = BotManager()
 
 app = Flask(__name__)
-app.config["DEBUG"] = True
+# Debug is enabled ONLY for local binds (see the __main__ block below). The
+# Werkzeug interactive debugger runs arbitrary code on any unhandled exception,
+# so it must never be on when the panel is reachable off-host - the dashboard
+# has no authentication.
+app.config["DEBUG"] = False
 
 # Cookie holding the selected world ("" / absent = the default world).
 WORLD_COOKIE = "twb_world"
@@ -31,8 +36,10 @@ WORLD_COOKIE = "twb_world"
 
 @app.before_request
 def _select_active_world():
-    """Point DataReader at the world chosen via the navbar switcher (cookie)."""
-    DataReader.set_active_world(request.cookies.get(WORLD_COOKIE))
+    """Point DataReader at the world chosen via the navbar switcher (cookie).
+    A ?world= query param overrides the cookie so cookie-less clients
+    (the session-restore browser extension) can target a world."""
+    DataReader.set_active_world(request.args.get("world") or request.cookies.get(WORLD_COOKIE))
 
 
 @app.context_processor
@@ -798,6 +805,7 @@ def quick_set():
 # Per-village scavenging parameters that the Farms page broadcasts account-wide.
 SCAVENGE_PARAMS = ("gather_enabled", "gather_selection", "advanced_gather",
                    "gather_night_consolidate", "gather_night_start", "gather_night_end",
+                   "gather_exclude_units",
                    "scavenge_unlock_enabled", "prioritize_scavenge_unlock",
                    "scavenge_unlock_hq_1", "scavenge_unlock_hq_2",
                    "scavenge_unlock_hq_3", "scavenge_unlock_hq_4")
@@ -844,6 +852,10 @@ def farm_settings_state():
         "gather_enabled": bool(template.get("gather_enabled", False)),
         "gather_selection": template.get("gather_selection", 1),
         "advanced_gather": bool(template.get("advanced_gather", True)),
+        # Units NOT to send scavenging (e.g. keep light cav for farming). Stored as
+        # an exclude list; the UI shows the inverse ("scavenge with these units").
+        "gather_exclude_units": list(template.get("gather_exclude_units", []) or []),
+        "archers_enabled": bool((config.get("world", {}) or {}).get("archers_enabled", False)),
         "gather_night_consolidate": bool(template.get("gather_night_consolidate", False)),
         "gather_night_start": template.get("gather_night_start", 23),
         "gather_night_end": template.get("gather_night_end", 7),
@@ -906,19 +918,245 @@ def session_set():
     return jsonify({"ok": DataReader.session_set(raw)})
 
 
+@app.route('/app/portal-cookies/set', methods=['POST'])
+def portal_cookies_set():
+    raw = request.form.get("cookies", "")
+    return jsonify({"ok": DataReader.portal_cookies_set(raw)})
+
+
+@app.route('/app/tw-open', methods=['GET'])
+def tw_open():
+    from urllib.parse import urlparse
+    session = DataReader.get_session()
+    endpoint = session.get("endpoint") or ""
+    domain = urlparse(endpoint).hostname or ""
+    return render_template('tw_open.html', endpoint=endpoint, domain=domain)
+
+
+@app.route('/app/tw-cookies-export', methods=['GET'])
+def tw_cookies_export():
+    import time
+    from urllib.parse import urlparse
+    session = DataReader.get_session()
+    game_cookies = session.get("cookies") or {}
+    if not game_cookies:
+        # No world selected (e.g. extension fetch without the dashboard's
+        # world cookie) — fall back to the most recently active world.
+        import glob
+        candidates = glob.glob(os.path.join(
+            DataReader.project_root(), "worlds", "*", "cache", "session.json"))
+        if candidates:
+            newest = max(candidates, key=os.path.getmtime)
+            world_name = os.path.basename(os.path.dirname(os.path.dirname(newest)))
+            DataReader.set_active_world(world_name)
+            session = DataReader.get_session()
+            game_cookies = session.get("cookies") or {}
+    endpoint = session.get("endpoint") or ""
+    portal_cookies = DataReader.portal_cookies_get()
+    game_domain = urlparse(endpoint).hostname or ""
+    expiry = int(time.time()) + 60 * 60 * 24 * 30
+
+    def make_entries(cookies, domain):
+        return [
+            {
+                "name": k, "value": v,
+                "domain": domain, "hostOnly": True,
+                "path": "/", "secure": True, "httpOnly": True,
+                "sameSite": "no_restriction", "session": False,
+                "expirationDate": expiry,
+            }
+            for k, v in cookies.items()
+        ]
+
+    cookie_list = make_entries(game_cookies, game_domain)
+    if portal_cookies:
+        cookie_list += make_entries(portal_cookies, "www.tribalwars.nl")
+
+    resp = jsonify(cookie_list)
+    resp.headers["Content-Disposition"] = (
+        'attachment; filename="tw-cookies-%s.json"' % (game_domain or "export")
+    )
+    return resp
+
+
+@app.route('/app/tw-extension.zip', methods=['GET'])
+def tw_extension_zip():
+    import io
+    import zipfile
+    ext_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'browser-extension')
+    if not os.path.isdir(ext_dir):
+        return "Extension folder not found on server.", 404
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fname in sorted(os.listdir(ext_dir)):
+            fpath = os.path.join(ext_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            if fname == "background.js":
+                # Bake in this server's address and the selected world so the
+                # extension works out of the box, no Options needed.
+                with open(fpath) as f:
+                    code = f.read()
+                code = code.replace(
+                    'const DEFAULT_SERVER = "http://localhost:5000";',
+                    'const DEFAULT_SERVER = %s;' % json.dumps(request.host_url.rstrip('/')))
+                code = code.replace(
+                    'const DEFAULT_WORLD = "";',
+                    'const DEFAULT_WORLD = %s;' % json.dumps(DataReader.active_world() or ""))
+                zf.writestr(fname, code)
+            elif fname == "manifest.json":
+                # Point the content script at this server so the dashboard's
+                # "Open game" button can talk to the extension, and put the
+                # world in the name so multiple copies are distinguishable.
+                with open(fpath) as f:
+                    manifest = json.load(f)
+                match = request.host_url.rstrip('/') + "/*"
+                for cs in manifest.get("content_scripts", []):
+                    if match not in cs["matches"]:
+                        cs["matches"].append(match)
+                world = DataReader.active_world()
+                if world:
+                    manifest["name"] += " (%s)" % world
+                    manifest["action"]["default_title"] = \
+                        "Open TribalWars %s with bot session" % world
+                zf.writestr(fname, json.dumps(manifest, indent=2))
+            else:
+                zf.write(fpath, fname)
+    buf.seek(0)
+    zip_name = "twb-session-extension-%s.zip" % (DataReader.active_world() or "default")
+    return Response(buf.read(), content_type='application/zip',
+                    headers={'Content-Disposition': 'attachment; filename="%s"' % zip_name})
+
+
+@app.route('/app/tw-proxy', methods=['GET'])
+@app.route('/app/tw-proxy/<path:subpath>', methods=['GET'])
+def tw_proxy(subpath=''):
+    import requests as _req
+    import re
+    from urllib.parse import urlparse
+
+    session = DataReader.get_session()
+    cookies = session.get("cookies") or {}
+    endpoint = session.get("endpoint") or ""
+    if not endpoint or endpoint == "None":
+        return "No game endpoint configured — run the bot first.", 503
+
+    parsed = urlparse(endpoint)
+    base = "%s://%s" % (parsed.scheme, parsed.netloc)
+
+    if subpath:
+        url = base + "/" + subpath
+        qs = request.query_string.decode()
+        if qs:
+            url += "?" + qs
+    else:
+        url = endpoint
+
+    config = DataReader.config_grab()
+    ua = (config.get("bot") or {}).get("user_agent") or "Mozilla/5.0"
+
+    try:
+        tw_resp = _req.get(url, cookies=cookies,
+                           headers={"User-Agent": ua,
+                                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                                    "Accept-Language": "nl,en;q=0.5"},
+                           allow_redirects=True, timeout=20)
+    except Exception as e:
+        return "Proxy request failed: %s" % str(e), 502
+
+    # If TW redirected us off the game domain the session is invalid
+    final_host = urlparse(tw_resp.url).hostname or ""
+    if final_host != parsed.hostname:
+        return render_template("tw_proxy_dead.html", redirect_url=tw_resp.url,
+                               domain=parsed.hostname), 401
+
+    ct = tw_resp.headers.get("Content-Type", "text/html")
+    if "text/html" not in ct:
+        return Response(tw_resp.content, content_type=ct)
+
+    html = tw_resp.text
+
+    # Strip ALL JavaScript — TW's JS detects the wrong hostname and redirects.
+    # The overview HTML is fully server-rendered so this gives a clean read-only snapshot.
+    html = re.sub(r'<script\b[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<noscript\b[^>]*>.*?</noscript>', '', html, flags=re.DOTALL | re.IGNORECASE)
+
+    # Point assets (CSS, images) directly at TW so they load without auth
+    base_tag = '<base href="%s/">' % base
+
+    banner = (
+        '<div style="position:fixed;top:0;left:0;right:0;z-index:99999;'
+        'background:#E07B2C;color:#fff;padding:7px 16px;font:600 13px/1 sans-serif;'
+        'display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.5)">'
+        '<span>&#128065; TWB read-only snapshot &mdash; JS disabled, navigation limited</span>'
+        '<span style="margin-left:auto;display:flex;gap:12px">'
+        '<a href="/app/tw-proxy" style="color:#fff;text-decoration:underline">Refresh</a>'
+        '<a href="/" style="color:#fff;text-decoration:underline">Dashboard</a>'
+        '</span></div><div style="padding-top:38px">'
+    )
+
+    html_lower = html.lower()
+    head_idx = html_lower.find("<head>")
+    if head_idx != -1:
+        insert_at = head_idx + len("<head>")
+        html = html[:insert_at] + "\n" + base_tag + "\n" + html[insert_at:]
+
+    body_idx = html_lower.find("<body")
+    if body_idx != -1:
+        end = html.index(">", body_idx) + 1
+        html = html[:end] + "\n" + banner + html[end:]
+        html = html.replace("</body>", "</div></body>", 1)
+
+    return Response(html, content_type="text/html; charset=utf-8")
+
+
 @app.route('/', methods=['GET'])
 def get_home():
     session = DataReader.get_session()
     data = sync()
     return render_template('bot.html', data=data, session=session,
                            overview=OverviewBuilder.build(data),
-                           quick=quick_settings_state())
+                           quick=quick_settings_state(),
+                           portal_saved=bool(DataReader.portal_cookies_get()))
 
 
-@app.route('/app/js', methods=['GET'])
-def get_js():
-    urlpath = os.path.join(os.path.dirname(__file__), "public")
-    return send_from_directory(urlpath, "js.v2.js")
+def _bot_log_path(world):
+    """Return the bot's live rotating log (cache/twb.log) for a world.
+
+    This is the file setup_file_logging() writes via Python logging, so it stays
+    current no matter how the bot was launched - tmux, start.sh, or the dashboard's
+    own BotManager.start(). The old bot_<world>.log only captured stdout from a
+    dashboard-initiated start, so it went stale (showing a days-old "last report")
+    whenever the bot was started another way.
+    """
+    wd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    key = os.path.basename(str(world).strip()) if world and str(world).strip() else ""
+    if key:
+        return os.path.join(wd, "worlds", key, "cache", "twb.log")
+    return os.path.join(wd, "cache", "twb.log")
+
+
+@app.route('/logs', methods=['GET'])
+def get_logs():
+    world = DataReader.active_world()
+    return render_template('logs.html', data=sync(), world=world or 'default',
+                           log_path=_bot_log_path(world))
+
+
+@app.route('/bot/log', methods=['GET'])
+def get_bot_log():
+    """Return the last N lines of the bot's log file as JSON."""
+    world = DataReader.active_world()
+    path = _bot_log_path(world)
+    n = min(int(request.args.get('n', 200)), 500)
+    if not os.path.exists(path):
+        return jsonify({'lines': [], 'missing': True, 'path': path})
+    try:
+        with open(path, 'r', errors='replace') as fh:
+            lines = list(collections.deque(fh, maxlen=n))
+        return jsonify({'lines': [l.rstrip('\n') for l in lines], 'missing': False, 'path': path})
+    except Exception as e:
+        return jsonify({'lines': [], 'missing': True, 'error': str(e), 'path': path})
 
 
 @app.route('/app/config/set', methods=['GET'])
@@ -935,12 +1173,24 @@ def config_set():
     return jsonify(sync())
 
 
+def _is_local_host(host):
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
 if len(sys.argv) > 1:
     # Pass a second argument to bind on all interfaces, e.g.:
     #   python server.py 5000 0.0.0.0
     # so the dashboard becomes reachable from other devices on your network.
     # Leave it off (host stays localhost) to keep it local-only.
     host = sys.argv[2] if len(sys.argv) > 2 else "localhost"
-    app.run(host=host, port=sys.argv[1])
+    debug = _is_local_host(host)
+    if not debug:
+        print(
+            "WARNING: dashboard bound to %s with no authentication - the "
+            "interactive debugger is disabled, but do not expose this panel to "
+            "untrusted networks." % host
+        )
+    app.run(host=host, port=sys.argv[1], debug=debug)
 else:
-    app.run()
+    # Default no-arg run binds localhost only, so the debugger is safe here.
+    app.run(debug=True)

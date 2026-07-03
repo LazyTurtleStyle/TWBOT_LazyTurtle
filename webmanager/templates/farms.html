@@ -167,6 +167,19 @@
         {{ row('Advanced split (advanced_gather)',
                toggle('scavenge', 'advanced_gather', sc.advanced_gather),
                'Split troops across runs so they finish at roughly the same time for a better total yield.') }}
+        {% set scav_units = [('spear','Spear'), ('sword','Sword'), ('axe','Axe'), ('heavy','Heavy cav'), ('light','Light cav')] %}
+        {% if sc.archers_enabled %}{% set scav_units = scav_units + [('archer','Archer'), ('marcher','Mounted archer')] %}{% endif %}
+        <div class="fs-setting">
+          <div class="config-row">
+            <div class="config-row-label"><span class="config-row-name">Scavenge with these units (gather_exclude_units)</span></div>
+            <div class="config-row-control">
+              {% for u, lbl in scav_units %}
+              <label class="scav-unit-lbl mr-3 mb-1" style="font-weight:normal"><input type="checkbox" class="scav-unit-cb" value="{{ u }}"{% if u not in sc.gather_exclude_units %} checked{% endif %}> {{ lbl }}</label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="fs-help text-muted">Only checked units are sent scavenging; unchecked ones stay home (e.g. keep Light cav for farming). Paladin is never sent.</div>
+        </div>
         {{ row('Night consolidate (gather_night_consolidate)',
                toggle('scavenge', 'gather_night_consolidate', sc.gather_night_consolidate),
                'During the window below, send ALL troops into one long run on the highest level instead of splitting — to cover an unattended night. Turn off if you expect incoming attacks.') }}
@@ -246,6 +259,15 @@
     $('input[data-param], select[data-param]').change(function () {
       var t = $(this);
       persist(t.attr('data-scope'), t.attr('data-param'), t.val());
+    });
+
+    // Scavenge unit picker: store the UNCHECKED units as the exclude list.
+    $('.scav-unit-cb').change(function () {
+      var excluded = [];
+      $('.scav-unit-cb').each(function () {
+        if (!$(this).is(':checked')) excluded.push($(this).val());
+      });
+      persist('scavenge', 'gather_exclude_units', JSON.stringify(excluded));
     });
   });
 </script>
