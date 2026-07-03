@@ -760,7 +760,7 @@ class TroopManager:
             params={"screen": building, "mode": "train"},
             data={"units[%s]" % unit_type: str(amount)},
         )
-        if "game_data" in result:
+        if result and "game_data" in result:
             self.resman.update(result["game_data"])
             self.wait_for[self.village_id][building] = int(time.time()) + (
                     amount * int(resources["build_time"])

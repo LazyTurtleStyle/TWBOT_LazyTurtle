@@ -15,7 +15,7 @@ to talk to the game itself.
 possible unit: a flight slower than a ram must contain a noble, a very fast
 flight is probably a fake. The game tags by picking "the slowest detected unit,
 based on the remaining travel time and the assumption that the command was just
-sent" - which is exactly what suggest_tag() reproduces.
+sent"; slowest_floor() is our estimator for that.
 """
 
 import logging
@@ -89,23 +89,6 @@ def travel_table(distance, unit_speeds, world_speed, unit_speed):
         unit: unit_travel_seconds(distance, base, world_speed, unit_speed)
         for unit, base in unit_speeds.items()
     }
-
-
-def suggest_tag(table, remaining_seconds):
-    """Deprecated: kept for backwards compatibility. See slowest_floor().
-
-    The old "slowest unit that fits the remaining time" rule almost always
-    returned the noble, because the noble is the slowest unit in the game and the
-    time remaining is usually larger than even its travel time. slowest_floor()
-    is the correct estimator.
-    """
-    candidates = [
-        (unit, secs) for unit, secs in table.items()
-        if 0 < secs <= remaining_seconds
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item[1])[0]
 
 
 def slowest_floor(table, remaining_seconds):

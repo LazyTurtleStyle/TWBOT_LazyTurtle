@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import re
 from typing import Dict, Optional, Tuple
 
@@ -295,8 +296,13 @@ class OverviewPage:
                     village_id, name, coordinates, continent, points, storage, farm
                 )
                 self.villages_data[village_id] = village
-            except Exception:
-                pass
+            except Exception as exc:
+                # Skip a single malformed row rather than abort the whole table,
+                # but log it: a markup change that breaks every row otherwise
+                # yields a silently empty village list.
+                logging.getLogger("twb").debug(
+                    "Skipped an overview production row: %s", exc
+                )
 
     def parse_header_info(self) -> None:
         """Parse header information to get world options."""

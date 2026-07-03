@@ -189,6 +189,9 @@ class Village:
         self.def_man.support_factor = self.get_village_config(
             self.village_id, "support_others_factor", default=0.25
         )
+        self.def_man.support_max_villages = self.get_village_config(
+            self.village_id, "support_others_max_villages", default=2
+        )
 
         self.def_man.allow_support_send = self.get_village_config(
             self.village_id, parameter="support_others", default=False
@@ -356,8 +359,8 @@ class Village:
             end_dt = datetime.strptime(time_pairs["end"], "%d.%m.%y %H:%M:%S")
             now = datetime.now()
             if start_dt.date() == datetime.today().date():
-                forced_peace_today = True
-                forced_peace_today_start = start_dt
+                self.forced_peace_today = True
+                self.forced_peace_today_start = start_dt
             if start_dt < now < end_dt:
                 self.logger.debug("Currently in a forced peace time! No attacks will be send.")
                 self.forced_peace = True
@@ -544,7 +547,11 @@ class Village:
         scavenging troops go into one long run on the highest level instead of
         being split - covering an unattended night. Turn it off (config or the
         Scavenging quick-toggle) if you expect incoming, so troops do shorter
-        runs and return more often for defence."""
+        runs and return more often for defence.
+
+        gather_night_min_hours (default 5): don't start a new consolidation run
+        if fewer than this many hours remain until gather_night_end. Prevents a
+        late-night run that overruns into active morning hours."""
         if not self.get_village_config(
             self.village_id, parameter="gather_night_consolidate", default=False
         ):
@@ -557,9 +564,21 @@ class Village:
             return False
         hour = datetime.now().hour
         if start < end:
-            return start <= hour < end
-        # Window wraps past midnight (e.g. 23 -> 7).
-        return hour >= start or hour < end
+            in_window = start <= hour < end
+        else:
+            # Window wraps past midnight (e.g. 23 -> 6).
+            in_window = hour >= start or hour < end
+        if not in_window:
+            return False
+        # Don't start a new consolidation run if morning is too close.
+        min_hours = int(self.get_village_config(
+            self.village_id, parameter="gather_night_min_hours", default=5
+        ))
+        if min_hours > 0:
+            hours_left = (24 - hour + end) if hour >= start else (end - hour)
+            if hours_left < min_hours:
+                return False
+        return True
 
     def _scavenge_target_option(self, hq_level):
         """Highest scavenge option (1..4) this village should have unlocked
@@ -621,11 +640,15 @@ class Village:
             self.village_id, parameter="gather_enabled", default=False
         )
         if not self.def_man or not self.def_man.under_attack:
+            extra_exclude = self.get_village_config(
+                self.village_id, parameter="gather_exclude_units", default=[]
+            )
+            disabled = list(self.disabled_units) + [u for u in extra_exclude if u not in self.disabled_units]
             self.units.gather(
                 selection=self.get_village_config(
                     self.village_id, parameter="gather_selection", default=1
                 ),
-                disabled_units=self.disabled_units,
+                disabled_units=disabled,
                 advanced_gather=self.get_village_config(self.village_id, parameter="advanced_gather", default=1),
                 consolidate=self._gather_night_consolidate(),
             )
@@ -688,16 +711,14 @@ class Village:
 
         self.set_world_config()
 
-        if not self.get_config(section="villages", parameter=self.village_id):
+        vdata = self.get_config(section="villages", parameter=self.village_id)
+        if not vdata:
             raise VillageInitException
 
-        vdata = self.get_config(section="villages", parameter=self.village_id)
         if not self.get_village_config(
                 self.village_id, parameter="managed", default=False
         ):
             return False
-        if not self.game_data:
-            raise InvalidGameStateException
 
         self.update_pre_run()
 
@@ -715,6 +736,9 @@ class Village:
         self.do_recruit()
         self.manage_local_resources()
 
+        # Refresh forced-peace state before farming so run_farming() can skip
+        # sending attacks during (or arriving into) a configured peace window.
+        self.check_forced_peace()
         self.run_farming()
 
         self.do_gather()
@@ -764,6 +788,11 @@ class Village:
             village_id=self.village_id,
             params={"screen": 'new_quests', "tab": "main-tab", "quest": 0},
         )
+        # A failed request (None) or a response without the expected dialog means
+        # there is nothing to collect this cycle; bail instead of crashing.
+        if not isinstance(result, dict) or "dialog" not in (result.get("response") or {}):
+            self.logger.debug("No quest reward dialog returned")
+            return False
         # The data is escaped for JS, so unescape it before sending it to the extractor.
         rewards = Extractor.get_quest_rewards(decode(result["response"]["dialog"], 'unicode-escape'))
         for reward in rewards:

@@ -254,9 +254,10 @@ class ResourceManager:
         """
         if self.actual["pop"] == 0:
             self.logger.info("Can't recruit, no room for pops!")
-            for x in self.requested:
-                if "recruitment" in x:
-                    del self.requested[x]
+            # Iterate a copy of the keys: deleting from self.requested while
+            # looping over it raises "dictionary changed size during iteration".
+            for x in [key for key in self.requested if "recruitment" in key]:
+                del self.requested[x]
             return False
 
         for x in self.requested:
@@ -443,10 +444,10 @@ class ResourceManager:
                     return
 
                 if how_many > self.max_trade_amount:
-                    how_many = self.max_trade_amount
                     self.logger.debug(
                         "Lowering trade amount of %d to %d because of limitation", how_many, self.max_trade_amount
                     )
+                    how_many = self.max_trade_amount
                 biased = int(how_many * self.trade_bias)
                 if self.actual[plenty] < biased:
                     self.logger.debug("Cannot trade because insufficient resources")

@@ -301,8 +301,11 @@ class DefenceManager:
             confirm_data[k] = v
         new_data = {"h": self.wrapper.last_h}
         confirm_data.update(new_data)
-        if x not in confirm_data:
-            confirm_data[x] = x
+        # Match the farm/scheduler path: the extractor drops the empty cb value
+        # and mistakes it for x, so re-add the literal "x" key (not the coord
+        # value) with the x coordinate.
+        if "x" not in confirm_data:
+            confirm_data["x"] = x
         result = self.wrapper.get_api_action(
             village_id=self.village_id,
             action="popup_command",

@@ -47,10 +47,14 @@ class VillageManager:
             total_loss_count = 0
             total_sent_count = 0
             for report in reports_by_dest.get(farm, []):
-                for unit in report["extra"]["units_sent"]:
-                    total_sent_count += report["extra"]["units_sent"][unit]
-                for unit in report["extra"]["units_losses"]:
-                    total_loss_count += report["extra"]["units_losses"][unit]
+                # A partial/malformed report may lack the unit tables entirely
+                # (only populated when the attacker unit sub-tables parsed), so
+                # default to {} instead of KeyError-ing out of the whole loop.
+                extra = report.get("extra", {})
+                for unit, count in (extra.get("units_sent") or {}).items():
+                    total_sent_count += count
+                for unit, count in (extra.get("units_losses") or {}).items():
+                    total_loss_count += count
                 try:
                     res = report["extra"]["loot"]
                     for r in res:
