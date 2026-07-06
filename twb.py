@@ -40,6 +40,9 @@ from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
 from game import attack_scheduler
+from game import csnipe
+from game import snipe
+from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
 from core.exceptions import UnsupportedPythonVersion
@@ -615,6 +618,93 @@ class TWB:
                 logger.warning("Scheduled attack runner error: %s", exc)
                 time.sleep(2)
 
+    def csnipe_runner(self, config):
+        """Background loop: execute armed cancel-snipes from the Defense tab.
+
+        A snipe occupies its runner from the send until the cancel (up to ~10
+        minutes), so it gets its own thread and wrapper instead of sharing the
+        scheduled-attack runner - a c-snipe must never delay a timed attack or
+        vice versa. Same wake-up pattern as the scheduler otherwise, and
+        priority_mode for the same reason: millisecond sends can't afford the
+        wrapper's human-pacing delay.
+        """
+        logger = logging.getLogger("CSnipe")
+        sender = self._make_poller_wrapper(config)
+        sender.priority_mode = True
+        network_lead = float(config["bot"].get(
+            "sched_lead_seconds", attack_scheduler.NETWORK_LEAD))
+        last_prune = 0
+        while self.should_run:
+            try:
+                now = time.time()
+                if now - last_prune > 3600:
+                    csnipe.prune()
+                    last_prune = now
+                next_start = csnipe.next_start_ts()
+                if next_start is None or next_start - now > 2:
+                    time.sleep(2)
+                    continue
+                if next_start > now:
+                    time.sleep(next_start - now)
+                if not self.should_run:
+                    break
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    sender.web.cookies.update(session["cookies"])
+                csnipe.run_due(sender, network_lead=network_lead)
+            except Exception as exc:
+                logger.warning("C-snipe runner error: %s", exc)
+                time.sleep(2)
+
+    def snipe_runner(self, config):
+        """Background loop: execute armed support-snipes from the Defense tab.
+
+        Mirrors the c-snipe runner: its own thread + wrapper (a snipe occupies
+        the runner from claim to send, and must never delay a timed attack),
+        priority_mode so the ms-precise launch skips the human-pacing delay.
+        """
+        logger = logging.getLogger("Snipe")
+        sender = self._make_poller_wrapper(config)
+        sender.priority_mode = True
+        network_lead = float(config["bot"].get(
+            "sched_lead_seconds", attack_scheduler.NETWORK_LEAD))
+        last_prune = 0
+        while self.should_run:
+            try:
+                now = time.time()
+                if now - last_prune > 3600:
+                    snipe.prune()
+                    last_prune = now
+                next_start = snipe.next_start_ts()
+                if next_start is None or next_start - now > 2:
+                    time.sleep(2)
+                    continue
+                if next_start > now:
+                    time.sleep(next_start - now)
+                if not self.should_run:
+                    break
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    sender.web.cookies.update(session["cookies"])
+                snipe.run_due(sender, network_lead=network_lead)
+            except Exception as exc:
+                logger.warning("Snipe runner error: %s", exc)
+                time.sleep(2)
+
+    def run_player_farms(self, config):
+        """One player-farm pass (curated hit list, report-driven auto-stop).
+
+        With farms.player_farm_priority (default on) this runs BEFORE the
+        village loop, so the hit list gets first claim on the light cavalry -
+        player farms are the more consistent income, barbs are contested."""
+        if not config.get("farms", {}).get("player_farm", True):
+            return
+        try:
+            PlayerFarmManager(wrapper=self.wrapper, config=config).run()
+        except Exception as exc:
+            logging.getLogger("PlayerFarm").warning(
+                "Player farm pass failed: %s", exc)
+
     def run(self):
         """
         Run the bot
@@ -678,6 +768,18 @@ class TWB:
             )
             sched_thread.start()
             print("Scheduled-attack runner started")
+        if config["bot"].get("csnipe", True):
+            csnipe_thread = threading.Thread(
+                target=self.csnipe_runner, args=(config,), daemon=True
+            )
+            csnipe_thread.start()
+            print("Cancel-snipe runner started")
+        if config["bot"].get("snipe", True):
+            snipe_thread = threading.Thread(
+                target=self.snipe_runner, args=(config,), daemon=True
+            )
+            snipe_thread.start()
+            print("Support-snipe runner started")
         while self.should_run:
             # Heartbeat: proof the main loop is still turning, independent of the
             # incoming-attack poller and scheduler threads, which run on their own
@@ -736,6 +838,9 @@ class TWB:
                         v = Village(wrapper=self.wrapper, village_id=vid)
                         self.villages.append(copy.deepcopy(v))
 
+                if config.get("farms", {}).get("player_farm_priority", True):
+                    self.run_player_farms(config)
+
                 village_number = 1
                 for village in self.villages:
                     if village.village_id not in self.found_villages:
@@ -781,6 +886,9 @@ class TWB:
                     for village in self.villages:
                         print("Syncing attack states")
                         village.def_man.my_other_villages = defense_states
+
+                if not config.get("farms", {}).get("player_farm_priority", True):
+                    self.run_player_farms(config)
 
                 sleep = 0
                 if self.is_active_hours(config=config):

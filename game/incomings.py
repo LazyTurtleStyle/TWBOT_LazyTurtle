@@ -18,6 +18,7 @@ based on the remaining travel time and the assumption that the command was just
 sent"; slowest_floor() is our estimator for that.
 """
 
+import json
 import logging
 import math
 import re
@@ -49,6 +50,12 @@ UNIT_ORDER = [
 
 WORLD_CONFIG_CACHE = "cache/world/config.json"
 WORLD_UNITS_CACHE = "cache/world/unit_info.json"
+# The player's in-game village groups (manual + dynamic) with their current
+# member villages; the snipe tab filters its source villages by these.
+GROUPS_CACHE = "cache/world/groups.json"
+# When the group menu response cannot be parsed, the raw payload is dumped
+# here so the parser can be adapted to what the server actually sends.
+GROUPS_RAW_DUMP = "cache/world/groups_raw.json"
 INCOMINGS_DIR = "cache/incomings"
 # The in-game "rename incoming attack" request, captured from the live incomings
 # page so we replicate exactly what the browser does instead of guessing.
@@ -60,6 +67,8 @@ SESSION_STATE_CACHE = "cache/world/incoming_session.json"
 
 # How long a cached copy of the world speed data is considered fresh.
 WORLD_CACHE_TTL = 24 * 3600
+# Group membership changes (dynamic groups especially), so refresh hourly.
+GROUPS_CACHE_TTL = 3600
 # While the session stays logged out, re-send the warning at most this often.
 SESSION_RENOTIFY_TTL = 6 * 3600
 
@@ -156,6 +165,23 @@ def _parse_countdown(text):
     return seconds
 
 
+def _parse_arrival_clock(text):
+    """Extract (hour, minute, second, millis|None) from an arrival cell.
+
+    The incomings overview renders arrivals as e.g. 'vandaag om 23:20:43:387'
+    (the trailing :387 being milliseconds when the world shows them) or with a
+    date prefix like 'op 05.07. om 23:20:43'. Only the H:MM:SS(:mmm) clock is
+    matched; the dotted date can never satisfy the colon-separated pattern.
+    """
+    match = re.search(r"(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?", text or "")
+    if not match:
+        return None
+    return (
+        int(match.group(1)), int(match.group(2)), int(match.group(3)),
+        int(match.group(4)) if match.group(4) is not None else None,
+    )
+
+
 class IncomingManager:
     """Scrapes incoming attacks and keeps cache/incomings up to date."""
 
@@ -168,6 +194,7 @@ class IncomingManager:
         """Refresh world speeds (if needed) and the incoming-command cache."""
         FileManager.create_directories([INCOMINGS_DIR, "cache/world"])
         self.ensure_world_data()
+        self.ensure_groups()
         return self.update_incomings()
 
     # -- world speed data ---------------------------------------------------
@@ -194,6 +221,13 @@ class IncomingManager:
             data = {
                 "speed": float(root.findtext("speed") or 1),
                 "unit_speed": float(root.findtext("unit_speed") or 1),
+                # Cancel-snipe needs these: how long after sending a command may
+                # still be cancelled, and whether the world displays milliseconds
+                # on arrival times (all modern worlds do).
+                "command_cancel_time": int(float(
+                    root.findtext("commands/command_cancel_time") or 600)),
+                "millis_arrival": int(float(
+                    root.findtext("commands/millis_arrival") or 0)),
                 "_fetched": int(time.time()),
             }
             FileManager.save_json_file(data, WORLD_CONFIG_CACHE)
@@ -210,17 +244,111 @@ class IncomingManager:
         try:
             root = ET.fromstring(response.text)
             speeds = {}
+            carry = {}
             for unit in root:
                 speed = unit.findtext("speed")
                 if speed is not None:
                     speeds[unit.tag] = float(speed)
+                haul = unit.findtext("carry")
+                if haul is not None:
+                    carry[unit.tag] = float(haul)
             if speeds:
                 FileManager.save_json_file(
-                    {"speeds": speeds, "_fetched": int(time.time())},
+                    {"speeds": speeds, "carry": carry,
+                     "_fetched": int(time.time())},
                     WORLD_UNITS_CACHE,
                 )
         except ET.ParseError as exc:
             self.logger.warning("Could not parse unit info: %s", exc)
+
+    # -- village groups -------------------------------------------------------
+
+    def ensure_groups(self):
+        """Fetch + cache the in-game village groups (manual and dynamic) with
+        their current member villages, at most once per GROUPS_CACHE_TTL.
+
+        The group list comes from the group menu's ajax endpoint; membership
+        from the villages overview filtered on each group - both GETs the
+        browser itself makes, so no new endpoint shapes are guessed."""
+        cached = FileManager.load_json_file(GROUPS_CACHE)
+        if cached and (time.time() - cached.get("_fetched", 0)) < GROUPS_CACHE_TTL:
+            return
+        try:
+            res = self.wrapper.get_url(
+                f"game.php?village={self.village_id}&screen=groups"
+                "&ajax=load_group_menu")
+            if not res:
+                return  # network hiccup: keep any older cache, retry next TTL
+            groups = self._parse_group_menu(res.text)
+            if groups is None:
+                return  # unparseable: raw payload dumped, keep any older cache
+            for group in groups:
+                group["villages"] = self._group_villages(group["id"])
+            FileManager.save_json_file(
+                {"groups": groups, "_fetched": int(time.time())}, GROUPS_CACHE)
+            self.logger.info("Cached %d village group(s)", len(groups))
+        except Exception as exc:
+            self.logger.warning("Could not fetch village groups: %s", exc)
+
+    def _parse_group_menu(self, text):
+        """The group-menu ajax payload -> [{id, name, type}], skipping the
+        built-in 'all villages' pseudo group. Returns None (and dumps the raw
+        payload) when the shape is not recognised."""
+        try:
+            payload = json.loads(text or "{}")
+        except ValueError:
+            payload = None
+        raw = None
+        if isinstance(payload, dict):
+            for key in ("result", "groups"):
+                for container in (payload, payload.get("response") or {}):
+                    if isinstance(container, dict) \
+                            and isinstance(container.get(key), list):
+                        raw = container[key]
+                        break
+                if raw is not None:
+                    break
+        if raw is None:
+            try:
+                FileManager.save_json_file(
+                    {"raw": (text or "")[:4000]}, GROUPS_RAW_DUMP)
+            except Exception:
+                pass
+            self.logger.warning(
+                "Unrecognised group menu payload - raw copy in %s",
+                GROUPS_RAW_DUMP)
+            return None
+        groups = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            gid = str(entry.get("group_id", "") or "")
+            gtype = entry.get("type")
+            if not gid or gid == "0" or gtype not in ("static", "dynamic"):
+                continue
+            groups.append({
+                "id": gid,
+                "name": str(entry.get("name") or gid),
+                "type": gtype,
+            })
+        return groups
+
+    def _group_villages(self, group_id):
+        """Village ids currently in a group, from the villages overview page
+        filtered on that group (page=-1 lists everything on one page)."""
+        res = self.wrapper.get_url(
+            f"game.php?village={self.village_id}&screen=overview_villages"
+            f"&mode=combined&group={group_id}&page=-1")
+        if not res:
+            return []
+        # Row village names carry quickedit spans whose data-id is the village
+        # id; fall back to the row links when the markup changes.
+        ids = re.findall(
+            r'class="quickedit-vn[^"]*"[^>]*data-id="(\d+)"', res.text)
+        if not ids:
+            ids = re.findall(
+                r'village=(\d+)&(?:amp;)?screen=overview(?![_a-z])', res.text)
+        return sorted(set(ids), key=int)
 
     # -- incoming commands --------------------------------------------------
 
@@ -436,6 +564,19 @@ class IncomingManager:
         countdown = _parse_countdown(cells[6].get_text())
         arrival = now + countdown if countdown is not None else None
 
+        # Millisecond-precise arrival, needed for cancel-sniping. The countdown
+        # pins the arrival to within a couple of seconds; the wall clock in the
+        # arrival column then pins the exact second via its second-of-minute
+        # (timezone-proof, so we never need to know the server's TZ) and
+        # contributes the millisecond part.
+        arrival_ms = None
+        clock = _parse_arrival_clock(cells[5].get_text())
+        if arrival is not None and clock:
+            _h, _m, second, millis = clock
+            arrival += (second - arrival % 60 + 30) % 60 - 30
+            if millis is not None:
+                arrival_ms = arrival * 1000 + millis
+
         distance = None
         if origin_coords and target_coords:
             distance = round(field_distance(origin_coords, target_coords), 2)
@@ -451,15 +592,20 @@ class IncomingManager:
             "player_name": player_name,
             "distance": distance,
             "arrival": arrival,
+            "arrival_ms": arrival_ms,
             "game_label": game_label,
         }
 
     def _store_command(self, command, now):
         path = f"{INCOMINGS_DIR}/{command['command_id']}.json"
         existing = FileManager.load_json_file(path) or {}
-        # Preserve the original detection moment and any user-set tag.
+        # Preserve the original detection moment and any user-set tag. A poll
+        # that failed to read the millisecond part must not wipe one we already
+        # captured (the c-snipe planner depends on it).
         command["first_seen"] = existing.get("first_seen", now)
         command["tag"] = existing.get("tag")
+        if command.get("arrival_ms") is None and existing.get("arrival_ms"):
+            command["arrival_ms"] = existing["arrival_ms"]
         command["last_seen"] = now
         FileManager.save_json_file(command, path)
 
@@ -477,6 +623,13 @@ class IncomingManager:
             arrival = entry.get("arrival")
             if arrival is None or arrival <= now:
                 FileManager.remove_file(f"{INCOMINGS_DIR}/{name}")
+
+
+def load_groups():
+    """Cached in-game village groups: [{id, name, type, villages}]."""
+    data = FileManager.load_json_file(GROUPS_CACHE) or {}
+    groups = data.get("groups")
+    return groups if isinstance(groups, list) else []
 
 
 def load_label_endpoint():

@@ -55,6 +55,13 @@
   <span class="ml-2 text-muted">Master switch — turns farming on/off account-wide.</span>
 </div>
 
+<ul class="nav nav-tabs mb-3" id="farm-tabs">
+  <li class="nav-item"><a class="nav-link active" href="#settings" data-pane="settings">Barbs &amp; scavenging</a></li>
+  <li class="nav-item"><a class="nav-link" href="#players" data-pane="players">Player farms
+    {% if playerfarms.farms %}<span class="badge badge-dark">{{ playerfarms.farms|length }}</span>{% endif %}</a></li>
+</ul>
+
+<div id="pane-settings">
 <div class="alert alert-secondary fs-intro" role="alert">
   This page mirrors <code>readme/farm_checklist.md</code>. The bot picks an attack per target
   by report freshness: <strong>A</strong> = re-scout (no/old report), <strong>B</strong> =
@@ -231,6 +238,173 @@
   </div>
 </div>
 
+</div><!-- /pane-settings -->
+
+<div id="pane-players" style="display:none">
+<div class="alert alert-secondary fs-intro" role="alert">
+  A curated hit list of <strong>player villages you know are cleared</strong>. Each target has its own
+  sending village, troop package and cadence, and the bot judges every report: it stops the target and
+  pings you when a run dies (red), a unit type is wiped, defenders show up in the report, or the loot no
+  longer beats {{ playerfarms.profit_factor }}&times; the resource value of the losses. A stopped target
+  only resumes when <em>you</em> re-enable it. Targets the game refuses to attack (points protection —
+  grey on the map) stop themselves after two rejected sends.
+  {% if playerfarms.night_skip %}Runs hold fire between 23:00–08:00.{% endif %}
+  {% if not playerfarms.enabled %}<br><strong class="text-danger">farms.player_farm is disabled in config —
+  nothing will be sent.</strong>{% endif %}
+</div>
+
+<div class="card config-card">
+  <div class="card-header">Options</div>
+  <div class="card-body">
+    {{ row('Player farming (player_farm)',
+           toggle('farm', 'player_farm', playerfarms.enabled),
+           'Master switch for the hit list below.') }}
+    {{ row('Prioritize over barb farming (player_farm_priority)',
+           toggle('farm', 'player_farm_priority', playerfarms.priority),
+           'Send player-farm runs <strong>before</strong> the villages run their barb farming and
+            scavenging, so the hit list gets first claim on the light cavalry — player farms are the
+            more consistent income, barbs are contested.') }}
+    {{ row('Skip nights (player_farm_night_skip)',
+           toggle('farm', 'player_farm_night_skip', playerfarms.night_skip),
+           'Hold fire between 23:00–08:00, like the barb loop does for player-owned targets.') }}
+    {{ row('Interval jitter (player_farm_jitter)',
+           num('farm', 'player_farm_jitter', playerfarms.jitter, '0.01', '0.10'),
+           'Attacking on an exact clock is a bot signature. Each run reschedules at the interval
+            &plusmn; this fraction, freshly drawn every time: <code>0.10</code> turns
+            &ldquo;every 100 min&rdquo; into 90&ndash;110 min.') }}
+  </div>
+</div>
+
+<div class="card config-card">
+  <div class="card-header">Hit list</div>
+  <div class="card-body p-0">
+    <table class="table table-sm table-striped mb-0">
+      <thead><tr>
+        <th>Status</th><th>Target</th><th>From</th><th>Troops</th>
+        <th>Every</th><th>Next run</th><th>Economy</th><th>Last report</th><th>Totals</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for pf in playerfarms.farms %}
+        {% set badge = {'active': 'success', 'paused': 'secondary', 'stopped': 'danger'} %}
+        <tr>
+          <td>
+            <span class="badge badge-{{ badge.get(pf.status, 'dark') }}">{{ pf.status }}</span>
+            {% if pf.stop_reason %}<small class="d-block text-danger">{{ pf.stop_reason }}</small>{% endif %}
+          </td>
+          <td><strong>{{ pf.target_name }}</strong>
+            <small class="text-muted d-block">{{ pf.target_x }}|{{ pf.target_y }}
+              {% if pf.distance %}&middot; {{ pf.distance }} fields{% endif %}</small></td>
+          <td>{{ pf.source_name }}</td>
+          <td><small>{% for u, n in pf.units.items() %}{{ u }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}</small></td>
+          <td>{{ pf.interval_min }}m</td>
+          <td>
+            {% if pf.status == 'active' %}
+              {% if pf.due_now %}<span class="badge badge-warning">due</span>
+              {% else %}<span class="pf-eta" data-ts="{{ pf.next_due }}">…</span>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="small">
+            {% if pf.economy %}
+              ~{{ pf.economy.hourly_total|comma }}/h
+              <span class="badge badge-{{ 'warning' if (pf.units.light or 0) < pf.economy.suggested_light else 'success' }}"
+                title="light cavalry needed to carry one interval of production">&ge;{{ pf.economy.suggested_light }} lc</span>
+              {% if pf.economy.est_now_total is not none %}
+              <small class="d-block text-muted">~{{ pf.economy.est_now_total|comma }} inside
+                (scouted {{ pf.economy.scouted_hours_ago }}h ago)</small>
+              {% endif %}
+            {% else %}<span class="text-muted">no scout intel</span>{% endif %}
+          </td>
+          <td class="small">
+            {% if pf.last_report %}
+              <span class="badge badge-{{ 'success' if pf.last_report.verdict == 'ok' else 'danger' }}">{{ pf.last_report.verdict }}</span>
+              loot {{ pf.last_report.loot|comma }}
+              {% if pf.last_report.loss_cost %}<span class="text-danger">−{{ pf.last_report.loss_cost|comma }} losses</span>{% endif %}
+              <span class="text-muted pf-ago" data-ts="{{ pf.last_report.when }}"></span>
+              {% if pf.last_report.detail %}<small class="d-block text-muted">{{ pf.last_report.detail }}</small>{% endif %}
+            {% else %}<span class="text-muted">no report yet</span>{% endif %}
+          </td>
+          <td class="small">{{ pf.totals.sends }} runs<br>
+            <span class="text-success">{{ pf.totals.loot|comma }}</span>
+            {% if pf.totals.loss_cost %} / <span class="text-danger">−{{ pf.totals.loss_cost|comma }}</span>{% endif %}</td>
+          <td class="text-right" style="white-space:nowrap">
+            <button class="btn btn-sm btn-outline-{{ 'secondary' if pf.status == 'active' else 'success' }}"
+              onclick="pfToggle('{{ pf.id }}')">{{ 'pause' if pf.status == 'active' else 're-enable' }}</button>
+            <button class="btn btn-sm btn-outline-danger" onclick="pfRemove('{{ pf.id }}')">&times;</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-muted">Hit list is empty — add a cleared village below.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card config-card">
+  <div class="card-header">Add a target</div>
+  <div class="card-body pb-3">
+    <div class="form-row align-items-end">
+      <div class="form-group col-3 col-md-1">
+        <label class="small mb-1">X</label>
+        <input type="number" class="form-control form-control-sm" id="pf-tx">
+      </div>
+      <div class="form-group col-3 col-md-1">
+        <label class="small mb-1">Y</label>
+        <input type="number" class="form-control form-control-sm" id="pf-ty">
+      </div>
+      <div class="form-group col-6 col-md-3">
+        <label class="small mb-1">Send from</label>
+        <select class="form-control form-control-sm" id="pf-source">
+          {% for v in playerfarms.villages %}
+          <option value="{{ v.id }}" data-coords="{{ v.coords|tojson if v.coords else '' }}"
+            data-home='{{ v.home|tojson }}'>{{ v.name }}
+            {%- if v.coords %} ({{ v.coords[0] }}|{{ v.coords[1] }}){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group col-6 col-md-2">
+        <label class="small mb-1">Every (minutes)</label>
+        <input type="number" class="form-control form-control-sm" id="pf-interval" min="15" max="1440"
+          value="{{ playerfarms.default_interval_min }}">
+      </div>
+    </div>
+    <div class="form-row">
+      {% for u in playerfarms.form_units %}
+      <div class="form-group col-4 col-md-1">
+        <label class="small mb-1">{{ u }} <small class="text-muted pf-home" data-unit="{{ u }}"></small></label>
+        <input type="number" class="form-control form-control-sm pf-unit" data-unit="{{ u }}" min="0"
+          value="{{ playerfarms.default_units.get(u, 0) }}">
+      </div>
+      {% endfor %}
+    </div>
+    <small class="text-muted d-block mb-2">Tip: keep a spy in every run — a surviving spy shows the
+      defender's troops and remaining resources, which is exactly what the auto-stop judges.</small>
+
+    <div class="card bg-transparent border mb-2">
+      <div class="card-body py-2">
+        <strong class="small">Production calculator</strong>
+        <small class="text-muted">— mine levels auto-fill from the newest scout report for the coords;
+          adjust them (or type them from a report) to recompute.</small>
+        <div class="form-row mt-2">
+          {% for m, lbl in [('wood', 'Timber'), ('stone', 'Clay'), ('iron', 'Iron'), ('storage', 'Warehouse')] %}
+          <div class="form-group col-3 col-md-1 mb-1">
+            <label class="small mb-1">{{ lbl }}</label>
+            <input type="number" class="form-control form-control-sm pf-mine" id="pf-lvl-{{ m }}" min="0" max="30">
+          </div>
+          {% endfor %}
+          <div class="form-group col-12 col-md-7 mb-1 align-self-end">
+            <span class="small" id="pf-calc-out">Enter target coords (or mine levels) to calculate.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-danger small mb-2" id="pf-error"></div>
+    <button class="btn btn-sm btn-primary" onclick="pfAdd()">Add to hit list</button>
+  </div>
+</div>
+</div><!-- /pane-players -->
+
 <div id="fs-saved" class="alert alert-success py-1 px-3">Saved — applies next bot cycle</div>
 {% endblock %}
 
@@ -270,5 +444,135 @@
       persist('scavenge', 'gather_exclude_units', JSON.stringify(excluded));
     });
   });
+
+  // --- tabs (hash-addressable so a reload stays on the player-farm pane) ---
+  function showFarmPane(name) {
+    $('#farm-tabs .nav-link').each(function () {
+      $(this).toggleClass('active', $(this).data('pane') === name);
+    });
+    $('#pane-settings').toggle(name === 'settings');
+    $('#pane-players').toggle(name === 'players');
+  }
+  $('#farm-tabs .nav-link').click(function (e) {
+    e.preventDefault();
+    history.replaceState(null, '', $(this).attr('href'));
+    showFarmPane($(this).data('pane'));
+  });
+  if (location.hash === '#players') showFarmPane('players');
+
+  // --- player-farm times ---
+  function pfRelative(ts, future) {
+    var d = ts - Math.floor(Date.now() / 1000);
+    if (!future) d = -d;
+    if (d <= 0) return future ? 'due' : 'just now';
+    if (d < 3600) return (future ? 'in ' : '') + Math.round(d / 60) + 'm' + (future ? '' : ' ago');
+    return (future ? 'in ' : '') + (d / 3600).toFixed(1) + 'h' + (future ? '' : ' ago');
+  }
+  $('.pf-eta').each(function () { $(this).text(pfRelative(parseInt($(this).data('ts'), 10), true)); });
+  $('.pf-ago').each(function () { $(this).text(pfRelative(parseInt($(this).data('ts'), 10), false)); });
+
+  // Show the selected source village's troops at home next to each unit input.
+  function pfHomeCounts() {
+    var home = $('#pf-source option:selected').data('home') || {};
+    $('.pf-home').each(function () {
+      var n = home[$(this).data('unit')] || 0;
+      $(this).text('/' + n);
+    });
+  }
+  $('#pf-source').change(pfHomeCounts);
+  pfHomeCounts();
+
+  // Auto-pick the nearest source village once target coords are typed.
+  function pfNearestSource() {
+    var tx = parseInt($('#pf-tx').val(), 10), ty = parseInt($('#pf-ty').val(), 10);
+    if (isNaN(tx) || isNaN(ty)) return;
+    var best = null, bestD = 1e9;
+    $('#pf-source option').each(function () {
+      var c = $(this).data('coords');
+      if (!c || c.length !== 2) return;
+      var d = Math.hypot(c[0] - tx, c[1] - ty);
+      if (d < bestD) { bestD = d; best = $(this).val(); }
+    });
+    if (best !== null) { $('#pf-source').val(best); pfHomeCounts(); }
+  }
+  $('#pf-tx, #pf-ty').change(function () { pfNearestSource(); pfEstimateFromCoords(); });
+
+  // --- production calculator ---
+  function pfRenderEstimate(est) {
+    if (!est || !est.found) {
+      $('#pf-calc-out').html('<span class="text-muted">No scout intel for these coords yet — ' +
+        'enter the mine levels manually (or scout it first).</span>');
+      return;
+    }
+    if (est.levels) {
+      $('#pf-lvl-wood').val(est.levels.wood); $('#pf-lvl-stone').val(est.levels.stone);
+      $('#pf-lvl-iron').val(est.levels.iron);
+      if (est.storage_level) $('#pf-lvl-storage').val(est.storage_level);
+    }
+    var run = Math.round(est.hourly_total * (parseInt($('#pf-interval').val(), 10) || 60) / 60);
+    var html = '~<strong>' + est.hourly_total.toLocaleString() + '</strong>/h &middot; one run &asymp; ' +
+      run.toLocaleString() + ' res &middot; send <strong>&ge;' + est.suggested_light + ' lc</strong> ' +
+      '<button type="button" class="btn btn-sm btn-outline-primary py-0" onclick="pfUseSuggestion(' +
+      est.suggested_light + ')">use</button>';
+    if (est.est_now_total !== null && est.est_now_total !== undefined) {
+      html += '<span class="text-muted d-block">&asymp;' + est.est_now_total.toLocaleString() +
+        ' res inside right now (scouted ' + est.scouted_hours_ago + 'h ago, warehouse caps at ' +
+        est.capacity.toLocaleString() + ')</span>';
+    }
+    $('#pf-calc-out').html(html);
+  }
+  function pfUseSuggestion(n) {
+    $('.pf-unit[data-unit="light"]').val(n);
+  }
+  function pfEstimateFromCoords() {
+    var tx = $('#pf-tx').val(), ty = $('#pf-ty').val();
+    if (!tx || !ty) return;
+    $.getJSON('/app/playerfarm/estimate', {
+      x: tx, y: ty, interval_min: $('#pf-interval').val(),
+    }).done(function (res) { if (res.ok) pfRenderEstimate(res.estimate); });
+  }
+  function pfEstimateManual() {
+    $.getJSON('/app/playerfarm/estimate', {
+      interval_min: $('#pf-interval').val(),
+      wood: $('#pf-lvl-wood').val() || 0, stone: $('#pf-lvl-stone').val() || 0,
+      iron: $('#pf-lvl-iron').val() || 0, storage: $('#pf-lvl-storage').val() || '',
+    }).done(function (res) {
+      if (res.ok) { res.estimate.levels = null; pfRenderEstimate(res.estimate); }
+    });
+  }
+  $('.pf-mine').change(pfEstimateManual);
+  $('#pf-interval').change(function () {
+    if ($('#pf-lvl-wood').val()) pfEstimateManual(); else pfEstimateFromCoords();
+  });
+
+  function pfAdd() {
+    var units = {};
+    $('.pf-unit').each(function () {
+      var n = parseInt($(this).val(), 10) || 0;
+      if (n > 0) units[$(this).data('unit')] = n;
+    });
+    $.ajax({
+      url: '/app/playerfarm/add', method: 'POST', contentType: 'application/json',
+      data: JSON.stringify({
+        target_x: $('#pf-tx').val(), target_y: $('#pf-ty').val(),
+        source_id: $('#pf-source').val(),
+        interval_min: $('#pf-interval').val(), units: units,
+      }),
+    }).done(function (res) {
+      if (!res.ok) { $('#pf-error').text(res.error || 'failed'); return; }
+      location.hash = '#players'; location.reload();
+    }).fail(function () { $('#pf-error').text('request failed'); });
+  }
+  function pfToggle(id) {
+    $.getJSON('/app/playerfarm/toggle?id=' + encodeURIComponent(id), function () {
+      location.hash = '#players'; location.reload();
+    });
+  }
+  function pfRemove(id) {
+    if (!confirm('Remove this target from the hit list?')) return;
+    $.getJSON('/app/playerfarm/remove?id=' + encodeURIComponent(id), function () {
+      location.hash = '#players'; location.reload();
+    });
+  }
 </script>
 {% endblock %}

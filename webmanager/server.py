@@ -11,7 +11,8 @@ try:
                                      section_setup, unit_building, unit_list)
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
-                                  DefenseOverview)
+                                  DefenseOverview, CSnipeOverview, SnipeOverview,
+                                  PlayerFarmOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
@@ -443,7 +444,63 @@ def attack_schedule_cancel():
 @app.route('/defense', methods=['GET'])
 def defense_page():
     data = sync()
-    return render_template('defense.html', data=data, defense=DefenseOverview.build(data))
+    return render_template('defense.html', data=data,
+                           defense=DefenseOverview.build(data),
+                           csnipe=CSnipeOverview.build(data),
+                           snipe=SnipeOverview.build(data))
+
+
+@app.route('/app/csnipe/arm', methods=['POST'])
+def csnipe_arm():
+    """Arm a cancel snipe. Expects JSON: village_id, incoming_id, first_hit_ms
+    (epoch ms of the train's first hit), aim_ms (return this many ms after it),
+    lead_min, target_x, target_y, units {unit: count}."""
+    body = request.get_json(silent=True) or {}
+    entry, error = DataReader.csnipe_arm(
+        village_id=body.get("village_id"),
+        incoming_id=body.get("incoming_id"),
+        first_hit_ms=body.get("first_hit_ms"),
+        aim_ms=body.get("aim_ms"),
+        lead_min=body.get("lead_min"),
+        target_x=body.get("target_x"),
+        target_y=body.get("target_y"),
+        units=body.get("units") or {},
+    )
+    if error:
+        return jsonify({"ok": False, "error": error})
+    return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/csnipe/cancel', methods=['GET', 'POST'])
+def csnipe_cancel():
+    sid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.csnipe_disarm(sid)
+    return jsonify({"ok": bool(state), "state": state})
+
+
+@app.route('/app/snipe/arm', methods=['POST'])
+def snipe_arm():
+    """Arm one support-snipe per selected option. Expects JSON: incoming_id,
+    target_village_id, land_ms (epoch ms the support must land), options
+    [{village_id, pace_unit, units {unit: count}}], shortfall, min_pct, boost."""
+    body = request.get_json(silent=True) or {}
+    armed, errors = DataReader.snipe_arm_batch(
+        incoming_id=body.get("incoming_id"),
+        target_village_id=body.get("target_village_id"),
+        land_ms=body.get("land_ms"),
+        options=body.get("options") or [],
+        shortfall=body.get("shortfall"),
+        min_pct=body.get("min_pct"),
+        boost=body.get("boost"),
+    )
+    return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
+
+
+@app.route('/app/snipe/cancel', methods=['GET', 'POST'])
+def snipe_cancel():
+    sid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.snipe_disarm(sid)
+    return jsonify({"ok": bool(state), "state": state})
 
 
 @app.route('/setup', methods=['GET'])
@@ -871,8 +928,58 @@ def farm_settings_state():
 
 @app.route('/farms', methods=['GET'])
 def get_farms():
-    return render_template('farms.html', data=sync(), helpfile=help_file,
-                           farms=farm_settings_state())
+    data = sync()
+    return render_template('farms.html', data=data, helpfile=help_file,
+                           farms=farm_settings_state(),
+                           playerfarms=PlayerFarmOverview.build(data))
+
+
+@app.route('/app/playerfarm/add', methods=['POST'])
+def playerfarm_add():
+    """Add a target to the player-farm hit list. Expects JSON: target_x,
+    target_y, source_id, units {unit: count}, interval_min."""
+    body = request.get_json(silent=True) or {}
+    entry, error = DataReader.playerfarm_add(
+        target_x=body.get("target_x"),
+        target_y=body.get("target_y"),
+        source_id=body.get("source_id"),
+        units=body.get("units") or {},
+        interval_min=body.get("interval_min"),
+    )
+    if error:
+        return jsonify({"ok": False, "error": error})
+    return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/playerfarm/estimate', methods=['GET'])
+def playerfarm_estimate():
+    """Production calculator: ?x=&y=&interval_min= uses the newest scout intel
+    for that village; passing wood/stone/iron (mine levels, optional storage)
+    computes from those instead."""
+    args = request.args
+    levels = None
+    if any(args.get(k) for k in ("wood", "stone", "iron")):
+        levels = {k: args.get(k) or 0 for k in ("wood", "stone", "iron")}
+        if args.get("storage"):
+            levels["storage"] = args.get("storage")
+    estimate, error = DataReader.playerfarm_estimate(
+        args.get("x"), args.get("y"), args.get("interval_min"), levels=levels)
+    if error:
+        return jsonify({"ok": False, "error": error})
+    return jsonify({"ok": True, "estimate": estimate})
+
+
+@app.route('/app/playerfarm/toggle', methods=['GET', 'POST'])
+def playerfarm_toggle():
+    fid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.playerfarm_toggle(fid)
+    return jsonify({"ok": state is not None, "state": state})
+
+
+@app.route('/app/playerfarm/remove', methods=['GET', 'POST'])
+def playerfarm_remove():
+    fid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    return jsonify({"ok": bool(DataReader.playerfarm_remove(fid))})
 
 
 @app.route('/app/village/apply_template', methods=['POST'])

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 import uuid
 
@@ -213,12 +214,14 @@ PREP_JITTER_MIN = 0.4
 PREP_JITTER_MAX = 1.8
 
 
-def prepare_command(wrapper, origin_id, x, y, units):
+def prepare_command(wrapper, origin_id, x, y, units, support=False):
     """Open the rally point and run the confirm step, but do NOT launch yet.
 
     Returns (confirm_data, server_duration, error). confirm_data is the ready-to
     -launch form; server_duration is TribalWars' own travel time for this command
-    in seconds (the authoritative figure for hitting an exact arrival)."""
+    in seconds (the authoritative figure for hitting an exact arrival).
+    With support=True the command is an "Ondersteunen" (support) send instead
+    of an attack - used by the snipe engine."""
     units = {u: int(n) for u, n in (units or {}).items() if int(n or 0) > 0}
     if not units:
         return None, 0, "no units selected"
@@ -230,7 +233,12 @@ def prepare_command(wrapper, origin_id, x, y, units):
         return None, 0, "could not open rally point"
     pre_data = {k: v for k, v in Extractor.attack_form(pre)}
     pre_data.update({str(u): str(n) for u, n in units.items()})
-    pre_data.update({"x": x, "y": y, "target_type": "coord", "attack": "Aanvallen"})
+    pre_data.update({"x": x, "y": y, "target_type": "coord"})
+    # The submit button's name tells the server the command type.
+    if support:
+        pre_data["support"] = "Ondersteunen"
+    else:
+        pre_data["attack"] = "Aanvallen"
 
     # Human-pacing gap between opening the rally point and confirming it. Only
     # needed when the wrapper is in priority_mode (timed sends), where its built-in
@@ -243,13 +251,25 @@ def prepare_command(wrapper, origin_id, x, y, units):
     # travel duration, and an error box if the target/troops are invalid.
     confirm_url = f"game.php?village={origin_id}&screen=place&try=confirm"
     conf = wrapper.post_url(url=confirm_url, data=pre_data)
-    if not conf or '<div class="error_box">' in conf.text:
-        return None, 0, "rally point rejected the command (bad target or no troops)"
+    if not conf:
+        return None, 0, "rally point confirm request failed"
+    if '<div class="error_box">' in conf.text:
+        # Surface the game's own reason (e.g. newbie/points protection, invalid
+        # target, no troops) - callers like the player-farm loop decide from it.
+        box = re.search(r'<div class="error_box">\s*(.*?)\s*</div>',
+                        conf.text, re.S)
+        detail = re.sub(r"<[^>]+>", " ", box.group(1)).strip() if box else ""
+        detail = re.sub(r"\s+", " ", detail)
+        return None, 0, "rally point rejected the command%s" % (
+            ": %s" % detail if detail else " (bad target or no troops)")
 
     duration = Extractor.attack_duration(conf)
     confirm_data = {}
+    # The confirm form carries a field for the *other* command type too; strip
+    # it so the launch unambiguously matches the button that was pressed.
+    drop_key = "attack" if support else "support"
     for k, v in Extractor.attack_form(conf):
-        if k == "support":
+        if k == drop_key:
             continue
         confirm_data[k] = v
     confirm_data.update({"building": "main", "h": wrapper.last_h})
