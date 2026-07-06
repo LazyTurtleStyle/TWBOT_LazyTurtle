@@ -88,8 +88,10 @@ class WebWrapper:
         """One-shot: if a page the bot already loaded contains the daily-login
         bonus data, dump the full page + log the init blob so the daily-bonus
         feature can be built from the real structure. No extra requests are made;
-        this only inspects text we already fetched. Fires at most once per run."""
-        if WebWrapper._daily_bonus_captured or "DailyBonus" not in text:
+        this only inspects text we already fetched. Fires at most once per run.
+        Matches the init call, not the bare feature name: the world-config XML
+        contains <DailyBonusUnlock> and would burn the one-shot at startup."""
+        if WebWrapper._daily_bonus_captured or "DailyBonus.init(" not in text:
             return
         WebWrapper._daily_bonus_captured = True
         try:

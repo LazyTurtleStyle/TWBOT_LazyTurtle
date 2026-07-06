@@ -494,17 +494,27 @@ class TWB:
         """
         Checks if the bot is within active hours
         Allows the bot to run more productive during an active session and ensure stealth at night
+        Bounds may be whole hours ("6-23") or HH:MM ("5-23:30").
         """
-        active_h = [int(hour) for hour in config["bot"]["active_hours"].split("-")]
-        start, end = active_h[0], active_h[1]
-        get_h = time.localtime().tm_hour
-        if start <= end:
-            # Same-day window; the end hour is inclusive ("6-23" is active
+
+        def to_minutes(bound, is_end):
+            if ":" in bound:
+                hour, minute = bound.split(":")
+                return int(hour) * 60 + int(minute)
+            # A whole-hour end bound is inclusive ("6-23" is active
             # 06:00-23:59, matching how a user reads "6 to 23").
-            return start <= get_h <= end
+            return int(bound) * 60 + (59 if is_end else 0)
+
+        raw_start, raw_end = config["bot"]["active_hours"].split("-")
+        start = to_minutes(raw_start.strip(), is_end=False)
+        end = to_minutes(raw_end.strip(), is_end=True)
+        now = time.localtime()
+        now_m = now.tm_hour * 60 + now.tm_min
+        if start <= end:
+            return start <= now_m <= end
         # Overnight window that wraps past midnight (e.g. "22-6"): active from
-        # the start hour through the end hour inclusive.
-        return get_h >= start or get_h <= end
+        # the start bound through the end bound inclusive.
+        return now_m >= start or now_m <= end
 
     def _make_poller_wrapper(self, config):
         """A separate, GET-only web session for the incoming-attack poller.
