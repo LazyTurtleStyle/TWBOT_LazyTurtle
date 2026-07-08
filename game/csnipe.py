@@ -25,6 +25,22 @@ Constraints, and how they shape the flow:
   - and the clock is re-synced against the server shortly before the cancel
   fires. Clock sync uses game_state.time_generated (server epoch ms) sampled
   around a request, so precision is roughly half the round-trip time.
+- Asymmetry: a return that is EARLY puts the stack home before the hit it was
+  dodging (fatal), a late one just lands deeper into the gap (harmless for a
+  lone incoming, degraded-but-survivable in a train). Timing errors therefore
+  must only ever fall on the late side: the halfway division rounds up, and
+  the cancel request is fired at C plus a safety margin with no latency lead,
+  so the server processes it at least one-way-latency past C. The achieved
+  return lands in [R, R + 2*(safety + latency)] - roughly R..R+400ms on a
+  ~100ms connection - never before R.
+
+Mechanics verified live (nl99, 2026-07-08, see the cancel-ms experiments):
+a cancelled command's return really is ms-exact 2C - S; second-granularity
+folklore ("only the cancel second matters") holds only for UNcancelled trips,
+whose turnaround at the target floors to :000. TW renders ms clocks split
+across markup ('14:26:49<span>:641</span>'), so clock regexes must run on
+tag-stripped text, and command ids are NOT chronological, so our command is
+identified by its expected ms arrival rather than by id order.
 
 Storage reuses attack_scheduler's locked, atomic queue-file helpers on a
 separate file (cache/csnipes.json) shared between the bot process (executes)
@@ -60,6 +76,11 @@ MIN_CANCEL_MARGIN_MS = 60_000
 CANCEL_WINDOW_SLACK_MS = 10_000
 # Re-sync the server clock and refresh the cancel link this long before C.
 FINAL_SYNC_SECONDS = 25
+# Late-bias on the cancel fire moment (adaptive: rtt/2 clamped to this range).
+# Covers the clock-offset estimation error so the cancel can never run early;
+# every ms of bias shows up as 2ms of extra (safe) lateness on the return.
+CANCEL_LATE_BIAS_MIN_MS = 40
+CANCEL_LATE_BIAS_MAX_MS = 150
 # A snipe stuck in 'running' this long has lost its runner (crash/restart);
 # it is marked failed instead of re-executed, since its send may have fired.
 STALE_RUNNING_SECONDS = 45 * 60
@@ -226,10 +247,16 @@ class _Clock:
     def server_now_ms(self):
         return time.time() * 1000.0 + self.offset_ms
 
-    def sleep_until(self, server_ms, network_lead=0.0):
+    def sleep_until(self, server_ms, network_lead=0.0, lead=True):
         """Sleep so that a request fired on return is *processed* at server_ms:
-        lead by the one-way latency (rtt/2) plus any configured extra."""
-        target_local = (server_ms - self.offset_ms) / 1000.0 - self.rtt / 2.0 - network_lead
+        lead by the one-way latency (rtt/2) plus any configured extra.
+
+        With lead=False the request instead FIRES at server_ms (local clock),
+        so the server processes it at least one one-way latency AFTER
+        server_ms - used for the cancel, which must never run early."""
+        target_local = (server_ms - self.offset_ms) / 1000.0 - network_lead
+        if lead:
+            target_local -= self.rtt / 2.0
         wait = target_local - time.time()
         if wait > 0:
             time.sleep(wait)
@@ -237,6 +264,14 @@ class _Clock:
 
 
 # -- page parsing ------------------------------------------------------------
+
+def _page_text(html):
+    """Tag-stripped page text for clock parsing. TW splits ms clocks across
+    markup ('14:26:49<span class="small grey">:641</span>'), so the regex must
+    run on text with the tags removed and NO separator inserted - anything
+    between the seconds and the ms breaks the match."""
+    return BeautifulSoup(html or "", "html.parser").get_text()
+
 
 def _match_clock_ms(text, expected_ms):
     """Find the millisecond wall clock in `text` that corresponds to the epoch
@@ -267,32 +302,43 @@ def _locate_outgoing(wrapper, clock, village_id, target_x, target_y,
                      expected_arrival_ms):
     """Find our just-sent command and return (command_id, arrival_ms, cancel_url).
 
-    The village overview lists outgoing commands as info_command links whose row
-    text carries the target coordinates; the newest matching id is ours (farm
-    runs to *other* coordinates never match). The info_command page then gives
-    the millisecond arrival time and the cancel link. Any of the three may come
-    back None - callers degrade gracefully."""
+    The village overview lists outgoing commands as info_command links whose
+    row text carries the target coordinates and a ms arrival clock. Ours is
+    the row whose arrival matches the expected one (send + server travel time,
+    +-3s) - command ids are NOT chronological, so id order cannot identify it;
+    it only serves as a fallback when no row clock parses. The info_command
+    page then confirms the millisecond arrival and gives the cancel link. Any
+    of the three may come back None - callers degrade gracefully."""
     res = clock.sync(wrapper, "game.php?village=%s&screen=overview" % village_id)
     if res is None:
         return None, None, None
     coords = "(%s|%s)" % (target_x, target_y)
-    candidates = []
+    matched, unmatched = [], []
     soup = BeautifulSoup(res.text, "html.parser")
     for link in soup.find_all("a", href=re.compile(r"screen=info_command")):
         row = link.find_parent("tr")
         if not row or coords not in row.get_text():
             continue
         cid = re.search(r"id=(\d+)", link.get("href", ""))
-        if cid:
-            candidates.append(int(cid.group(1)))
-    for command_id in sorted(set(candidates), reverse=True)[:3]:
+        if not cid:
+            continue
+        command_id = int(cid.group(1))
+        arrival = _match_clock_ms(row.get_text(), expected_arrival_ms)
+        if arrival is not None:
+            matched.append((abs(arrival - expected_arrival_ms), command_id))
+        else:
+            unmatched.append(command_id)
+    candidates = [cid for _, cid in sorted(matched)]
+    candidates += [c for c in sorted(set(unmatched), reverse=True)
+                   if c not in candidates]
+    for command_id in candidates[:3]:
         page = clock.sync(
             wrapper,
             "game.php?village=%s&screen=info_command&id=%d&type=own"
             % (village_id, command_id))
         if page is None or coords not in page.text:
             continue
-        arrival_ms = _match_clock_ms(page.text, expected_arrival_ms)
+        arrival_ms = _match_clock_ms(_page_text(page.text), expected_arrival_ms)
         cancel_url = _extract_cancel_url(page.text)
         if arrival_ms is not None or cancel_url:
             return command_id, arrival_ms, cancel_url
@@ -322,9 +368,10 @@ def _wait_checking_disarm(snipe_id, clock, until_server_ms, path):
 def execute(wrapper, snipe, path=None, network_lead=0.0):
     """Run one claimed snipe to completion: send, measure, cancel.
 
-    Timeline (all server epoch ms): R = desired return; S = send, aligned to
-    R's millisecond offset so a fallback cancel-at-half still lands in the gap
-    even if measuring S fails; C = (S + R) / 2 = cancel."""
+    Timeline (all server epoch ms): R = earliest acceptable return; S = send,
+    aligned to R's millisecond offset so a fallback cancel-at-half stays exact
+    when measuring S fails; C = ceil((S + R) / 2) = cancel, fired with a late
+    bias so the achieved return lands in [R, R + 2*(safety + latency)]."""
     sid = snipe.get("id")
     village_id = snipe.get("village_id")
     return_ms = int(snipe.get("return_ms", 0))
@@ -367,7 +414,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     if send_target < earliest:
         send_target += 1000
 
-    cancel_at = (send_target + return_ms) // 2
+    cancel_at = (send_target + return_ms + 1) // 2
     if duration * 1000 < (cancel_at - send_target) + MIN_CANCEL_MARGIN_MS:
         return _finish(
             sid, "failed",
@@ -402,15 +449,20 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         _event(sid, "send measured at .%03d (aimed .%03d)"
                % (send_actual % 1000, send_target % 1000), path=path)
     else:
-        send_actual = send_target
+        # Unmeasured send: assume it fired LATE by a full round-trip. An
+        # overestimated S only delays the return (safe); an underestimated one
+        # brings it home early (fatal) - observed sends run tens of ms late.
+        send_actual = send_target + int(clock.rtt * 1000)
         _event(sid, "could not read the outgoing command's ms arrival; "
-               "assuming the aimed send moment", path=path)
+               "assuming the aimed send moment +%dms (late-safe)"
+               % int(clock.rtt * 1000), path=path)
     if not cancel_url:
         return _finish(sid, "failed", "no cancel link found on the outgoing "
                        "command - troops will hit the target and return on "
                        "their own", path=path, outgoing_id=command_id)
 
-    cancel_at = (send_actual + return_ms) // 2
+    # Ceil: rounding the halfway moment down would shave the return early.
+    cancel_at = (send_actual + return_ms + 1) // 2
     _patch(sid, path=path, send_ms=int(send_actual), outgoing_id=command_id,
            cancel_ms=int(cancel_at))
     _event(sid, "cancel scheduled at .%03d (in %.1fs)"
@@ -439,7 +491,22 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
             if fresh:
                 cancel_url = fresh
 
-    clock.sleep_until(cancel_at, network_lead)
+    # Fire the cancel with NO latency lead and a safety margin on top: server
+    # processing then lands at least one-way-latency past C and clock-offset
+    # error stays covered, so the cancel - and with it the return, at double
+    # weight - can only ever err late, never early (early = home before the
+    # hit = dead stack).
+    safety_ms = 0
+    if not disarmed:
+        safety_ms = int(min(CANCEL_LATE_BIAS_MAX_MS,
+                            max(CANCEL_LATE_BIAS_MIN_MS, clock.rtt * 500.0)))
+        # Ceiling: lateness = 2*(safety + one-way latency), and asymmetric
+        # routing can push one-way toward the full rtt.
+        _event(sid, "cancel fires at .%03d +%dms late-bias (return lands "
+               "%d-%dms past target)"
+               % (cancel_at % 1000, safety_ms, 2 * safety_ms,
+                  2 * (safety_ms + int(clock.rtt * 1000))), path=path)
+    clock.sleep_until(cancel_at + safety_ms, lead=False)
     t0 = time.time()
     res = wrapper.get_url(cancel_url)
     if res is None:  # one immediate retry: a late cancel beats no cancel
@@ -455,7 +522,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     cancel_actual = float(state["time_generated"]) if state \
         and state.get("time_generated") else (t0 * 1000 + clock.offset_ms)
     return_actual = int(2 * cancel_actual - send_actual)
-    parsed = _match_clock_ms(res.text, return_actual)
+    parsed = _match_clock_ms(_page_text(res.text), return_actual)
     if parsed is not None:
         return_actual = parsed
     delta = return_actual - return_ms

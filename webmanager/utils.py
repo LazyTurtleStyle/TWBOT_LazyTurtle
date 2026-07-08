@@ -1902,7 +1902,11 @@ class CSnipeOverview:
                   "axe", "light", "knight", "ram", "catapult"]
 
     DEFAULT_LEAD_MIN = 18
-    DEFAULT_GAP_MS = 50
+    # Default "land +ms after the first hit". The engine biases the cancel so
+    # the return is never early but may run up to ~2x ping late; anything much
+    # under ~150ms is fake precision on a residential connection. For a lone
+    # incoming (no train behind it) 300-500ms is the safe choice.
+    DEFAULT_AIM_MS = 150
 
     @staticmethod
     def _suggest_barb(loc, barbs, speeds, world_speed, unit_speed, lead_seconds):
@@ -1976,7 +1980,7 @@ class CSnipeOverview:
             "prefill_units": cls.PREFILL_UNITS,
             "cancel_seconds": cancel_seconds,
             "default_lead_min": cls.DEFAULT_LEAD_MIN,
-            "default_gap_ms": cls.DEFAULT_GAP_MS,
+            "default_aim_ms": cls.DEFAULT_AIM_MS,
             "now": now,
         }
 

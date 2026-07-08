@@ -227,7 +227,7 @@
 			<div class="form-group col-6 col-md-2">
 				<label>Land +ms after it</label>
 				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="1" max="5000"
-					value="{{ csnipe.default_gap_ms // 2 }}">
+					value="{{ csnipe.default_aim_ms }}">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Engage (min before)</label>
@@ -244,9 +244,11 @@
 			</div>
 		</div>
 		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
-		<small class="text-muted d-block mb-2">Trains are spaced 20/50/100&nbsp;ms depending on the world —
-			aim for the middle of the first gap (e.g. +25&nbsp;ms at 50&nbsp;ms spacing). The troops below
-			dodge out and land back at first hit + aim.</small>
+		<small class="text-muted d-block mb-2">The troops below dodge out and land back <strong>no earlier than</strong>
+			first hit + aim, but up to ~2&times;ping later — the bot biases the cancel late on purpose,
+			since an early return puts the stack home before the hit. <strong>Lone incoming: use
+			300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; gaps tighter than your
+			ping cannot be sniped reliably.</small>
 		<div class="form-row" id="cs-units"></div>
 		<div class="text-danger small mb-2" id="cs-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="csnipeArm()">Arm snipe</button>
@@ -516,7 +518,7 @@ function csnipeArm() {
 		village_id: csForm.village_id,
 		incoming_id: csForm.incoming_id,
 		first_hit_ms: csForm.arrival * 1000 + hitMs,
-		aim_ms: parseInt(document.getElementById('cs-aim-ms').value, 10) || 25,
+		aim_ms: parseInt(document.getElementById('cs-aim-ms').value, 10) || 150,
 		lead_min: parseFloat(document.getElementById('cs-lead-min').value) || 18,
 		target_x: document.getElementById('cs-tx').value,
 		target_y: document.getElementById('cs-ty').value,
