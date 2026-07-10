@@ -44,7 +44,6 @@ _RE_OPTION_VALUE = re.compile(r'<option value="(\d+)"')
 _RE_FARM_ICON = re.compile(
     r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>')
 _RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
-_RE_DAILY = re.compile(r'DailyBonus.init\((\s+\{.*\}),')
 
 
 class Extractor:
@@ -361,15 +360,24 @@ class Extractor:
         return result
 
     @staticmethod
-    def get_daily_reward(res):
+    def daily_bonus_data(res):
         """
-        Detects if there are unopened daily rewards
+        The DailyBonus.init cycle state from the daily-bonus screen: chests
+        keyed by day (is_locked / is_collected / reward) plus
+        reward_count_unlocked. None when the page carries no daily bonus.
+        The init call has several arguments, so the first JSON object is
+        parsed with raw_decode instead of a regex.
         """
         if type(res) != str:
             res = res.text
-        get_daily = _RE_DAILY.search(res)
-        res = json.loads(get_daily.group(1))
-        reward_count_unlocked = str(res["reward_count_unlocked"])
-        if reward_count_unlocked and res["chests"][reward_count_unlocked]["is_collected"]:
-            return reward_count_unlocked
-        return None
+        marker = res.find("DailyBonus.init(")
+        if marker == -1:
+            return None
+        start = res.find("{", marker)
+        if start == -1:
+            return None
+        try:
+            data, _ = json.JSONDecoder().raw_decode(res[start:])
+            return data
+        except ValueError:
+            return None

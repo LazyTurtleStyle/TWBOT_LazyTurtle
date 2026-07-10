@@ -41,6 +41,7 @@ from game.village import Village
 from game.incomings import IncomingManager
 from game import attack_scheduler
 from game import csnipe
+from game import dailybonus
 from game import snipe
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
@@ -837,6 +838,19 @@ class TWB:
                         print("Village %s was newly added, registering it for management" % vid)
                         v = Village(wrapper=self.wrapper, village_id=vid)
                         self.villages.append(copy.deepcopy(v))
+
+                # Claim the daily login bonus once per day, only during active
+                # hours: a chest opened at the same minute past midnight every
+                # night is a robotic pattern, a morning claim is what a human
+                # session looks like.
+                if config["bot"].get("claim_daily_bonus", False) and \
+                        self.is_active_hours(config=config):
+                    try:
+                        dailybonus.run(
+                            self.wrapper, next(iter(config["villages"]), None))
+                    except Exception as exc:
+                        logging.getLogger("DailyBonus").warning(
+                            "Daily bonus check failed: %s", exc)
 
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)

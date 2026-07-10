@@ -49,11 +49,6 @@ class WebWrapper:
     # must never write it, or two sessions would fight over the session id.
     is_session_owner = False
     _last_persisted_cookies = None
-    # One-shot diagnostic: capture the daily-login-bonus data the first time any
-    # page the bot fetches contains it, so the daily-bonus feature can be built
-    # from the real structure (no extra requests, no session conflict). Class-level
-    # so it fires once per process run. Remove once the blob is captured.
-    _daily_bonus_captured = False
 
     def __init__(self, url, server=None, endpoint=None, reporter_enabled=False, reporter_constr=None):
         """
@@ -82,28 +77,6 @@ class WebWrapper:
             self.last_h = get_h.group(1)
         if self.is_session_owner:
             self.persist_session()
-        self._capture_daily_bonus(response.text)
-
-    def _capture_daily_bonus(self, text):
-        """One-shot: if a page the bot already loaded contains the daily-login
-        bonus data, dump the full page + log the init blob so the daily-bonus
-        feature can be built from the real structure. No extra requests are made;
-        this only inspects text we already fetched. Fires at most once per run.
-        Matches the init call, not the bare feature name: the world-config XML
-        contains <DailyBonusUnlock> and would burn the one-shot at startup."""
-        if WebWrapper._daily_bonus_captured or "DailyBonus.init(" not in text:
-            return
-        WebWrapper._daily_bonus_captured = True
-        try:
-            path = FileManager._resolve("cache/daily_bonus_capture.html")
-            with open(path, "w", encoding="utf-8", errors="replace") as fh:
-                fh.write(text)
-            m = re.search(r'DailyBonus\.init\((.+?)\);', text, re.DOTALL)
-            blob = (m.group(1)[:1500] if m else "(init(...) not matched - see the html file)")
-            self.logger.warning(
-                "DAILY BONUS PAGE CAPTURED -> %s | init blob: %s", path, blob)
-        except Exception as e:
-            self.logger.warning("Daily bonus capture failed: %s", e)
 
     def persist_session(self):
         """Write the live cookie jar back to cache/session.json.

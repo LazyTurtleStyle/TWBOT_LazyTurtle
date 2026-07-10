@@ -35,7 +35,8 @@
     "incoming_check_max": 570,
     "scheduled_attacks": true,
     "sched_prestage_seconds": 15,
-    "sched_lead_seconds": 0.0
+    "sched_lead_seconds": 0.0,
+    "claim_daily_bonus": false
   },
   "building": {
     "manage_buildings": true,

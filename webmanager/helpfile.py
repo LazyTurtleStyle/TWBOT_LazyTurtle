@@ -25,6 +25,7 @@ help_file = {
     'bot.incoming_check': 'Run a background poller that tracks incoming attacks (origin, arrival, walking times, tagging) on its own schedule',
     'bot.incoming_check_min': 'Minimum seconds between incoming-attack checks (e.g. 300 = 5 min). Lower = more accurate tags but more requests',
     'bot.incoming_check_max': 'Maximum seconds between incoming-attack checks (e.g. 570 = 9.5 min)',
+    'bot.claim_daily_bonus': 'Open the daily login-bonus chests automatically: once per day (during active hours) the bot visits the daily-bonus screen and claims every unlocked, uncollected chest. Locked chests and premium unlocks are never touched.',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
     'building.default': 'The default template to use, village configs override this variable',
@@ -209,7 +210,8 @@ section_setup = {
 config_groups = {
     'bot': [
         ('Timing & activity', ['active_hours', 'delay_factor', 'active_delay',
-                               'inactive_delay', 'inactive_still_active']),
+                               'inactive_delay', 'inactive_still_active',
+                               'claim_daily_bonus']),
         ('New villages', ['add_new_villages', 'village_name_template',
                           'village_name_number_length', 'auto_set_village_names']),
         ('Incoming attacks', ['incoming_check', 'incoming_check_min', 'incoming_check_max']),
