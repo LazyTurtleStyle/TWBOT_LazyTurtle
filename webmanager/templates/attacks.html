@@ -25,13 +25,28 @@
 <!-- ---------- Overview: tracked targets ---------- -->
 <div id="pane-overview">
 <div class="card mb-3">
-	<div class="card-header py-2"><strong>Tracked targets ({{ plan.targets|length }})</strong>
-		<small class="text-muted">— what the bot is currently farming / scouting</small></div>
+	<div class="card-header py-2 d-flex align-items-center flex-wrap">
+		<span><strong>Tracked targets ({{ plan.targets|length }})</strong>
+		<small class="text-muted">— what the bot is currently farming / scouting</small></span>
+		<span class="ml-auto d-flex align-items-center">
+			<small class="text-muted mr-1">ETA&nbsp;from</small>
+			<select id="o_origin" class="form-control form-control-sm" style="width:auto">
+				{% for o in plan.origins %}
+				{% if o.coords %}
+				<option data-x="{{ o.coords[0] }}" data-y="{{ o.coords[1] }}"
+					data-troops='{{ o.troops|tojson }}'>
+					{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
+				{% endif %}
+				{% endfor %}
+			</select>
+		</span>
+	</div>
 	<div class="table-responsive">
 		<table class="table table-sm planner-table mb-0">
 			<thead><tr>
 				<th>Target</th><th>Kind</th><th class="text-right">Points</th>
-				<th>Owner</th><th class="text-right">Last hit</th><th></th>
+				<th>Owner</th><th class="text-right">Last hit</th>
+				<th class="text-right" title="Travel time of the fastest unit at home in the chosen origin">ETA</th><th></th>
 			</tr></thead>
 			<tbody>
 				{% for t in plan.targets %}
@@ -43,6 +58,7 @@
 					<td class="text-right">{{ t.points|comma if t.points else '—' }}</td>
 					<td>{% if t.owner and t.owner != '0' %}{{ t.owner }}{% else %}<span class="text-muted">barbarian</span>{% endif %}</td>
 					<td class="text-right">{% if t.last_attack %}<span title="{{ t.last_attack|ts }}">{{ t.last_attack|ago }}</span>{% else %}—{% endif %}</td>
+					<td class="text-right eta-cell"{% if t.coords %} data-x="{{ t.coords[0] }}" data-y="{{ t.coords[1] }}"{% endif %}>—</td>
 					<td class="text-right" style="white-space:nowrap">{% if t.coords %}
 						<button class="btn btn-outline-primary btn-sm py-0"
 							onclick="scheduleTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Schedule</button>
@@ -50,7 +66,7 @@
 							onclick="planTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Plan</button>{% endif %}</td>
 				</tr>
 				{% else %}
-				<tr><td colspan="6" class="text-muted">No tracked targets yet.</td></tr>
+				<tr><td colspan="7" class="text-muted">No tracked targets yet.</td></tr>
 				{% endfor %}
 			</tbody>
 		</table>
@@ -164,7 +180,7 @@
 					<select id="origin" class="form-control form-control-sm">
 						{% for o in plan.origins %}
 						{% if o.coords %}
-						<option value="{{ o.coords[0] }}|{{ o.coords[1] }}">
+						<option value="{{ o.coords[0] }}|{{ o.coords[1] }}" data-troops='{{ o.troops|tojson }}'>
 							{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
 						{% endif %}
 						{% else %}
@@ -192,6 +208,7 @@
 				<table class="table table-sm planner-table mb-0">
 					<thead><tr>
 						<th>Unit</th>
+						<th class="text-right" title="Standing in the origin village right now">At home</th>
 						<th class="text-right">Travel</th>
 						<th class="text-right">Arrives (if sent now)</th>
 						<th class="text-right">Send by</th>
@@ -239,8 +256,14 @@ function fmtDur(sec) {
 }
 function fmtClock(d) { return pad(d.getHours(),2)+':'+pad(d.getMinutes(),2)+':'+pad(d.getSeconds(),2); }
 
+function optTroops(sel) {
+	const opt = sel && sel.options[sel.selectedIndex];
+	try { return JSON.parse((opt && opt.getAttribute('data-troops')) || '{}'); } catch(e) { return {}; }
+}
+
 function recompute() {
-	const o = (document.getElementById('origin').value || '').split('|');
+	const originSel = document.getElementById('origin');
+	const o = (originSel.value || '').split('|');
 	const ox = parseFloat(o[0]), oy = parseFloat(o[1]);
 	const tx = parseFloat(document.getElementById('tx').value);
 	const ty = parseFloat(document.getElementById('ty').value);
@@ -262,23 +285,52 @@ function recompute() {
 		arriveAt.setHours(parts[0]||0, parts[1]||0, parts[2]||0, 0);
 		if (arriveAt < new Date()) arriveAt.setDate(arriveAt.getDate()+1);
 	}
+	const troops = optTroops(originSel);
 	const now = new Date();
 	let html = '';
 	UNITS.forEach(u => {
 		const base = SPEEDS[u];
 		const sec = dist * base / (WORLD_SPEED*UNIT_SPEED) * 60;
 		const arrives = new Date(now.getTime() + sec*1000);
+		const home = troops[u] || 0;
 		let sendBy = '—';
 		if (arriveAt) {
 			const send = new Date(arriveAt.getTime() - sec*1000);
 			const past = send < now;
 			sendBy = '<span class="'+(past?'text-danger':'text-success')+'">'+fmtClock(send)+(past?' (too late)':'')+'</span>';
 		}
-		html += '<tr><td>'+u+'</td><td class="text-right">'+fmtDur(sec)+
+		html += '<tr'+(home ? '' : ' class="text-muted"')+'><td>'+u+'</td>'+
+			'<td class="text-right">'+(home ? home : '<span class="text-danger">0</span>')+'</td>'+
+			'<td class="text-right">'+fmtDur(sec)+
 			'</td><td class="text-right">'+fmtClock(arrives)+
 			'</td><td class="text-right">'+sendBy+'</td></tr>';
 	});
 	rows.innerHTML = html;
+}
+
+/* ---------- Inline ETAs in the tracked-target list ---------- */
+function updateEtas() {
+	const sel = document.getElementById('o_origin');
+	const opt = sel && sel.options[sel.selectedIndex];
+	if (!opt || !opt.getAttribute('data-x')) return;
+	const ox = parseFloat(opt.getAttribute('data-x')), oy = parseFloat(opt.getAttribute('data-y'));
+	const troops = optTroops(sel);
+	// Fastest unit standing in the origin; fall back to the fastest unit on
+	// the world when there is no troop snapshot yet.
+	let unit = null;
+	UNITS.forEach(u => {
+		if (SPEEDS[u] && troops[u] > 0 && (!unit || SPEEDS[u] < SPEEDS[unit])) unit = u;
+	});
+	if (!unit) UNITS.forEach(u => {
+		if (SPEEDS[u] && (!unit || SPEEDS[u] < SPEEDS[unit])) unit = u;
+	});
+	if (!unit) return;
+	document.querySelectorAll('.eta-cell').forEach(td => {
+		const tx = parseFloat(td.getAttribute('data-x')), ty = parseFloat(td.getAttribute('data-y'));
+		if (isNaN(tx) || isNaN(ty)) return;
+		const sec = Math.hypot(ox-tx, oy-ty) * SPEEDS[unit] / (WORLD_SPEED*UNIT_SPEED) * 60;
+		td.innerHTML = fmtDur(sec) + ' <small class="text-muted">' + unit + '</small>';
+	});
 }
 
 function planTarget(x, y) {
@@ -299,6 +351,10 @@ function scheduleTarget(x, y) {
 ['origin','tx','ty','arrival'].forEach(id =>
 	document.getElementById(id).addEventListener('input', recompute));
 recompute();
+
+const oOrigin = document.getElementById('o_origin');
+if (oOrigin) oOrigin.addEventListener('change', updateEtas);
+updateEtas();
 
 /* ---------- Scheduled attacks ---------- */
 function slowestTravelSec(dist, units) {
@@ -404,6 +460,21 @@ document.getElementById('s_origin').addEventListener('change', function() { upda
 ['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', schedPreview));
 buildUnitInputs();
 updateAvail();
+
+/* Deep link from /map (and anywhere else): /attacks?x=..&y=..#planner
+   pre-fills the target in both the planner and the scheduler; the hash
+   picks the visible pane as usual. */
+(function() {
+	const qp = new URLSearchParams(location.search);
+	const x = parseInt(qp.get('x'), 10), y = parseInt(qp.get('y'), 10);
+	if (isNaN(x) || isNaN(y)) return;
+	document.getElementById('tx').value = x;
+	document.getElementById('ty').value = y;
+	document.getElementById('s_tx').value = x;
+	document.getElementById('s_ty').value = y;
+	recompute();
+	schedPreview();
+})();
 
 /* Live "sends in" countdown for the scheduled-commands table. */
 setInterval(function() {

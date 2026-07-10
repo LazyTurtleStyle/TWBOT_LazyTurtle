@@ -219,15 +219,21 @@ into a "Setup / World" area, ideally a first-run wizard.
   moment, computed client-side from the world's real unit speeds) plus a **tracked-targets
   overview** (cache/attacks enriched from the village DB: coords, kind, points, owner, last hit).
   Backend: `AttackPlanner.build` + world-aware `DataReader.world_speeds()`.
-- [ ] **Inline ETAs in the target list** — show the fastest-unit travel time from a chosen
-  origin per target row, so reach is visible at a glance.
+- [x] **Inline ETAs in the target list** — ETA column on the tracked-targets overview: travel
+  time of the fastest unit *at home* in a chosen origin (falls back to the world's fastest unit
+  when there's no troop snapshot), computed client-side per row.
 - [ ] **Snipe / coordination helper** — given a target arrival time, compute send-by for several
-  origins at once (land-together planning).
-- [ ] **Troop check** — show the selected origin's available troops next to the plan and flag
-  when you can't field the attack.
-- [ ] **Map integration** — click a village on `/map` to set it as the planner target.
-- [ ] **(Bigger / riskier) Send from the UI** — a backend route into `AttackManager.attack`,
-  gated behind explicit confirmation since it's a real in-game action.
+  origins at once (land-together planning). *(Single-origin timed lands are covered by the
+  Scheduler tab; snipe-on-defense is covered by the snipe/c-snipe engines — what's left here is
+  specifically multi-origin land-together math.)*
+- [x] **Troop check** — the planner table shows an "At home" column from the origin's troop
+  snapshot; units with none at home are muted with a red 0.
+- [x] **Map integration** — `/map`: hover previews a village, click pins it and shows
+  "Plan attack" / "Schedule" buttons deep-linking to `/attacks?x=..&y=..#planner|#scheduler`
+  (barbarian cells are clickable now too). The attacks page prefills both forms from `?x&y`.
+- [~] **(Bigger / riskier) Send from the UI** — largely superseded: the Scheduler tab already
+  sends real attacks via `attack_scheduler` at a chosen arrival time. A "send now" button is
+  the only missing piece, if ever wanted.
 
 ---
 

@@ -58,10 +58,10 @@
 
           if(i in data.grid && j in data.grid[i] && data.grid[i][j]) {
             var village = data.grid[i][j];
-            cell.onclick = function() { clickCell(this); };
-            cell.onmouseover = function() { clickCell(this); };
+            cell.onclick = function() { pinCell(this); };
+            cell.onmouseover = function() { hoverCell(this); };
+            cell.setAttribute("village", JSON.stringify(village));
             if(village.owner != "0") {
-                cell.setAttribute("village", JSON.stringify(village));
                 if(data.extra && village.owner == data.extra.owner) {
                     cell.setAttribute("class", "owner");
                 } else if(data.extra && data.extra.tribe != "0" && data.extra.tribe == village.tribe) {
@@ -80,19 +80,40 @@
 
     generateGrid(Object.keys(map_data.grid).length, Object.keys(map_data.grid).length, map_data);
 
-    function clickCell(cell) {
+    // Hovering previews a village; clicking pins it so the mouse can travel
+    // to the action buttons without the panel switching to the cells crossed
+    // on the way. Clicking the pinned village again unpins it.
+    var pinned = null;
+
+    function renderCell(cell) {
         var village_data = $(cell).attr("village");
         if(!village_data) return;
         var data = JSON.parse(village_data);
-        $('#v_name').text(data.name);
+        $('#v_name').text(data.name + (pinned ? ' 📌' : ''));
 
         var output = '';
         $.each(data, function(k, v){
-            if(jQuery.type(v) !== "object") {
+            if(jQuery.type(v) !== "object" && jQuery.type(v) !== "array") {
                 output += '<strong>' + k + '</strong> ' + v + '<br />';
             }
         });
+        if(data.location) {
+            var q = 'x=' + data.location[0] + '&y=' + data.location[1];
+            output += '<strong>coords</strong> ' + data.location[0] + '|' + data.location[1] + '<br />';
+            output += '<a class="btn btn-sm btn-outline-secondary mt-2 mr-1" href="/attacks?' + q + '#planner">Plan attack</a>';
+            output += '<a class="btn btn-sm btn-outline-primary mt-2" href="/attacks?' + q + '#scheduler">Schedule</a>';
+        }
         $('#v_data').html(output);
+    }
+
+    function hoverCell(cell) {
+        if(pinned) return;
+        renderCell(cell);
+    }
+
+    function pinCell(cell) {
+        pinned = (pinned === cell) ? null : cell;
+        renderCell(cell);
     }
 </script>
 {% endblock %}
