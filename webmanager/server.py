@@ -454,7 +454,10 @@ def defense_page():
 def csnipe_arm():
     """Arm a cancel snipe. Expects JSON: village_id, incoming_id, first_hit_ms
     (epoch ms of the train's first hit), aim_ms (return this many ms after it),
-    lead_min, target_x, target_y, units {unit: count}."""
+    lead_min, target_x, target_y, units {unit: count}, test (dry run against a
+    chosen return moment instead of an incoming), window_ms (optional: the
+    return must land at most this many ms past the target - the engine
+    re-fires missed sends until one is inside the window)."""
     body = request.get_json(silent=True) or {}
     entry, error = DataReader.csnipe_arm(
         village_id=body.get("village_id"),
@@ -465,6 +468,8 @@ def csnipe_arm():
         target_x=body.get("target_x"),
         target_y=body.get("target_y"),
         units=body.get("units") or {},
+        test=bool(body.get("test")),
+        window_ms=body.get("window_ms"),
     )
     if error:
         return jsonify({"ok": False, "error": error})

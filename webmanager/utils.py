@@ -433,10 +433,15 @@ class DataReader:
 
     @staticmethod
     def csnipe_arm(village_id, incoming_id, first_hit_ms, aim_ms, lead_min,
-                   target_x, target_y, units):
+                   target_x, target_y, units, test=False, window_ms=None):
         """Arm a cancel snipe: the bot sends `units` from the attacked village
         toward (target_x|target_y) and cancels at the halfway moment so they
         land back home at first_hit_ms + aim_ms (epoch milliseconds).
+        With window_ms > 0 (alpha) the return must land within that many ms
+        PAST the target: the engine aims mid-window and re-fires missed sends
+        until one lands inside it. 0/None keeps the late-safe one-shot mode.
+        With test=True the entry is a dry run against a user-chosen return
+        moment instead of an incoming attack - same engine path, just badged.
         Returns (entry, error_message)."""
         if csnipe is None:
             return None, "c-snipe engine unavailable"
@@ -452,8 +457,11 @@ class DataReader:
             first_hit_ms = int(float(first_hit_ms))
             aim_ms = int(float(aim_ms))
             lead_seconds = int(float(lead_min) * 60)
+            window_ms = int(float(window_ms)) if window_ms not in (None, "") else 0
         except (TypeError, ValueError):
             return None, "invalid numbers in the snipe form"
+        # Slots repeat every 2s, so a window that wide always hits; cap below it.
+        window_ms = max(0, min(1900, window_ms))
 
         selected = {}
         for unit, count in (units or {}).items():
@@ -512,7 +520,9 @@ class DataReader:
             "distance": round(distance, 1),
             "units": selected,
             "lead_seconds": lead_seconds,
+            "window_ms": window_ms,
             "start_ts": int(max(now, return_ms / 1000.0 - lead_seconds)),
+            "test": bool(test),
         }
         csnipe.arm(entry, path=DataReader.csnipe_path())
         return entry, None
@@ -1976,6 +1986,7 @@ class CSnipeOverview:
             "villages": villages,
             "snipes": active + done,
             "active_count": len(active),
+            "test_active_count": sum(1 for s in active if s.get("test")),
             "form_units": cls.FORM_UNITS,
             "prefill_units": cls.PREFILL_UNITS,
             "cancel_seconds": cancel_seconds,

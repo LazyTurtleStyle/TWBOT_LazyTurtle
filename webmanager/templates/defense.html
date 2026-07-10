@@ -9,15 +9,66 @@
 	.ms { font-variant-numeric: tabular-nums; }
 	.ms small { opacity: .65; }
 	.snipe-log { max-height: 9rem; overflow-y: auto; font-size: .75rem; white-space: pre-line; }
-	#csnipe-form label { font-size: .8rem; margin-bottom: .1rem; }
-	#csnipe-form .unit-input { max-width: 7rem; }
+	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
+	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
 </style>
+
+{% macro csnipe_rows(snipes, empty_text) %}
+	{% for s in snipes %}
+	<tr>
+		<td>
+			{% set badge = {'armed': 'warning', 'running': 'info', 'done': 'success',
+							'failed': 'danger', 'disarmed': 'secondary'} %}
+			<span class="badge badge-{{ badge.get(s.status, 'dark') }}">{{ s.status }}</span>
+			{% if s.test %}<span class="badge badge-info">test</span>{% endif %}
+			{% if s.window_ms %}<span class="badge badge-dark" title="two-sided window: the return must land at most this far past the target; missed sends are re-fired">window +{{ s.window_ms }}ms</span>{% endif %}
+			{% if s.events %}
+			<details class="mt-1"><summary class="small text-muted">log</summary>
+				<div class="snipe-log text-muted">{{ s.events|join('\n') }}</div>
+			</details>
+			{% endif %}
+		</td>
+		<td><strong>{{ s.village_name }}</strong>
+			<small class="text-muted d-block">#{{ s.village_id }}</small></td>
+		<td class="ms" data-ms="{{ s.return_ms }}">…</td>
+		<td class="small text-muted">
+			{% if s.status == 'armed' %}
+				engages <span class="ms" data-ms="{{ (s.start_ts or 0) * 1000 }}">…</span>
+			{% endif %}
+			{% if s.send_ms %}sent <span class="ms" data-ms="{{ s.send_ms }}">…</span><br>{% endif %}
+			{% if s.cancel_ms %}cancel <span class="ms" data-ms="{{ s.cancel_ms }}">…</span>{% endif %}
+		</td>
+		<td class="coord">{{ s.target_name or '' }} {{ s.target_x }}|{{ s.target_y }}
+			<small class="text-muted d-block">{{ s.distance }} fields ·
+				{% for u, n in s.units.items() %}{{ u }} {{ n }} {% endfor %}</small></td>
+		<td class="small">
+			{{ s.result or '—' }}
+			{% if s.delta_ms is defined and s.delta_ms is not none and not (s.status == 'disarmed') %}
+				{# early (negative) is the fatal direction; late is on plan up to
+				   the window's far edge (or 500ms in one-shot late-safe mode) #}
+				{% set ok_cap = s.window_ms or 500 %}
+				<span class="badge badge-{{ 'danger' if s.delta_ms < 0 else ('success' if s.delta_ms <= ok_cap else 'warning') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+			{% endif %}
+		</td>
+		<td class="text-right">
+			{% if s.status in ('armed', 'running') %}
+			<button class="btn btn-sm btn-outline-danger" onclick="csnipeDisarm('{{ s.id }}')">
+				{{ 'disarm' if s.status == 'armed' else 'abort (return early)' }}</button>
+			{% endif %}
+		</td>
+	</tr>
+	{% else %}
+	<tr><td colspan="7" class="text-muted">{{ empty_text }}</td></tr>
+	{% endfor %}
+{% endmacro %}
 
 <ul class="nav nav-tabs mb-3" id="def-tabs">
 	<li class="nav-item"><a class="nav-link active" href="#overview" data-pane="overview">Overview</a></li>
 	<li class="nav-item"><a class="nav-link" href="#csnipe" data-pane="csnipe">C-snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if csnipe.active_count %}<span class="badge badge-danger">{{ csnipe.active_count }}</span>{% endif %}</a></li>
+	<li class="nav-item"><a class="nav-link" href="#csnipetest" data-pane="csnipetest">C-snipe test
+		{% if csnipe.test_active_count %}<span class="badge badge-info">{{ csnipe.test_active_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
@@ -134,47 +185,7 @@
 				<th>Target</th><th>Result</th><th></th>
 			</tr></thead>
 			<tbody>
-				{% for s in csnipe.snipes %}
-				<tr>
-					<td>
-						{% set badge = {'armed': 'warning', 'running': 'info', 'done': 'success',
-										'failed': 'danger', 'disarmed': 'secondary'} %}
-						<span class="badge badge-{{ badge.get(s.status, 'dark') }}">{{ s.status }}</span>
-						{% if s.events %}
-						<details class="mt-1"><summary class="small text-muted">log</summary>
-							<div class="snipe-log text-muted">{{ s.events|join('\n') }}</div>
-						</details>
-						{% endif %}
-					</td>
-					<td><strong>{{ s.village_name }}</strong>
-						<small class="text-muted d-block">#{{ s.village_id }}</small></td>
-					<td class="ms" data-ms="{{ s.return_ms }}">…</td>
-					<td class="small text-muted">
-						{% if s.status == 'armed' %}
-							engages <span class="ms" data-ms="{{ (s.start_ts or 0) * 1000 }}">…</span>
-						{% endif %}
-						{% if s.send_ms %}sent <span class="ms" data-ms="{{ s.send_ms }}">…</span><br>{% endif %}
-						{% if s.cancel_ms %}cancel <span class="ms" data-ms="{{ s.cancel_ms }}">…</span>{% endif %}
-					</td>
-					<td class="coord">{{ s.target_name or '' }} {{ s.target_x }}|{{ s.target_y }}
-						<small class="text-muted d-block">{{ s.distance }} fields ·
-							{% for u, n in s.units.items() %}{{ u }} {{ n }} {% endfor %}</small></td>
-					<td class="small">
-						{{ s.result or '—' }}
-						{% if s.delta_ms is defined and s.delta_ms is not none %}
-							<span class="badge badge-{{ 'success' if s.delta_ms|abs <= 25 else 'warning' }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
-						{% endif %}
-					</td>
-					<td class="text-right">
-						{% if s.status in ('armed', 'running') %}
-						<button class="btn btn-sm btn-outline-danger" onclick="csnipeDisarm('{{ s.id }}')">
-							{{ 'disarm' if s.status == 'armed' else 'abort (return early)' }}</button>
-						{% endif %}
-					</td>
-				</tr>
-				{% else %}
-				<tr><td colspan="7" class="text-muted">No snipes armed yet — pick an incoming attack below.</td></tr>
-				{% endfor %}
+				{{ csnipe_rows(csnipe.snipes, 'No snipes armed yet — pick an incoming attack below.') }}
 			</tbody>
 		</table>
 	</div>
@@ -230,6 +241,11 @@
 					value="{{ csnipe.default_aim_ms }}">
 			</div>
 			<div class="form-group col-6 col-md-2">
+				<label>No later than +ms <small class="text-muted">(alpha)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cs-latest-ms" min="2" max="5000"
+					placeholder="empty = no cap">
+			</div>
+			<div class="form-group col-6 col-md-2">
 				<label>Engage (min before)</label>
 				<input type="number" class="form-control form-control-sm" id="cs-lead-min" min="2" max="60"
 					value="{{ csnipe.default_lead_min }}">
@@ -245,10 +261,17 @@
 		</div>
 		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
 		<small class="text-muted d-block mb-2">The troops below dodge out and land back <strong>no earlier than</strong>
-			first hit + aim, but up to ~2&times;ping later — the bot biases the cancel late on purpose,
-			since an early return puts the stack home before the hit. <strong>Lone incoming: use
-			300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; gaps tighter than your
-			ping cannot be sniped reliably.</small>
+			first hit + aim, typically 30–90&nbsp;ms after it: the server credits a cancelled command's travel
+			in whole seconds, so the return keeps the <em>send's</em> millisecond — the bot fires throwaway
+			one-unit probes at the barb first to measure today's send timing, then aims the real send just past
+			your target (without probe time it falls back to a blind +150&nbsp;ms buffer, achieving
+			150–400&nbsp;ms). A badly-jittered send costs +2&nbsp;s (late, never early). <strong>Lone incoming:
+			use 300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; 100&nbsp;ms gaps are
+			makeable when calibration succeeds — check the log's "send bias" line.
+			<strong>Tight gap (both sides fatal):</strong> also fill "no later than +ms" (e.g. the next hit's
+			offset minus a margin) — the bot then aims the middle of that window and, when a measured send
+			would miss it, cancels the attempt immediately and re-fires on a later 2-second slot until one
+			lands inside (needs a few minutes of lead; ~10–15&nbsp;s per retry, up to 8 tries).</small>
 		<div class="form-row" id="cs-units"></div>
 		<div class="text-danger small mb-2" id="cs-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="csnipeArm()">Arm snipe</button>
@@ -256,6 +279,85 @@
 	</div>
 </div>
 </div><!-- /pane-csnipe -->
+
+<div id="pane-csnipetest" style="display:none">
+<p class="text-muted small mt-1">Dry-run the cancel snipe with no incoming attack: pick a village, set the
+	moment the troops must be back home, and the bot runs the <em>exact</em> same flow it would against a real
+	train — send toward a far barb, measure the send to the millisecond, cancel at the halfway moment. The
+	result row shows the achieved return and its ±ms against your target, so you can verify the timing on
+	this world/connection before trusting it with a real train. Use the same troops you would dodge with.</p>
+
+<!-- Test setup form -->
+<div class="card border-info" id="csnipe-test-form">
+	<div class="card-header py-2"><strong>Set up a test snipe</strong></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="form-group col-12 col-md-3">
+				<label>Village</label>
+				<select class="form-control form-control-sm" id="cst-village" onchange="cstVillageChanged()"></select>
+			</div>
+			<div class="form-group col-6 col-md-2">
+				<label>Return at <small class="text-muted">(HH:MM:SS)</small></label>
+				<input type="time" step="1" class="form-control form-control-sm" id="cst-time">
+			</div>
+			<div class="form-group col-6 col-md-2">
+				<label>Return ms <small class="text-muted">(the :mmm part)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cst-ms" min="0" max="999" value="250">
+			</div>
+			<div class="form-group col-6 col-md-2">
+				<label>Window +ms <small class="text-muted">(alpha)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cst-window-ms" min="10" max="1900"
+					placeholder="empty = late-safe">
+			</div>
+			<div class="form-group col-6 col-md-2">
+				<label>Engage (min before)</label>
+				<input type="number" class="form-control form-control-sm" id="cst-lead" min="2" max="60"
+					value="{{ csnipe.default_lead_min }}">
+			</div>
+			<div class="form-group col-3 col-md-1">
+				<label>Target X</label>
+				<input type="number" class="form-control form-control-sm" id="cst-tx">
+			</div>
+			<div class="form-group col-3 col-md-1">
+				<label>Target Y</label>
+				<input type="number" class="form-control form-control-sm" id="cst-ty">
+			</div>
+		</div>
+		<small class="text-muted d-block mb-2" id="cst-barb-hint"></small>
+		<small class="text-muted d-block mb-2">The two fields together are the full return moment
+			HH:MM:SS<strong>:mmm</strong> — the ms field is <em>part of the time</em>, not a margin. A time in
+			the past means <strong>tomorrow</strong>. Aim at a non-zero millisecond (e.g. .250): an uncancelled
+			return always lands on .000, so hitting near your ms proves the cancel mechanic worked. Like a real
+			snipe the return is never early — expect it 30–90&nbsp;ms late when the send-bias probes succeed
+			(watch the log), 150–400&nbsp;ms without them, +2&nbsp;s on a badly-jittered send; the ±ms badge on
+			the result is your verdict, and it reads the achieved return from the in-game command list, not the
+			cancel screen. With <strong>Window +ms</strong> set the return must land within that many ms past
+			the target: the bot aims mid-window and re-fires missed sends (cancel, wait home, next 2-second
+			slot) until one is inside — the result line then reports window HIT or MISSED. Try +100 to see the
+			retry loop work.</small>
+		<div class="form-row" id="cst-units"></div>
+		<div class="text-danger small mb-2" id="cst-error"></div>
+		<button class="btn btn-sm btn-info" onclick="cstArm()">Arm test snipe</button>
+	</div>
+</div>
+
+<!-- Test snipes -->
+<div class="card mt-3">
+	<div class="card-header py-2"><strong>Test snipes</strong>
+		<small class="text-muted">— active first</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Status</th><th>Village</th><th>Return at</th><th>Timeline</th>
+				<th>Target</th><th>Result</th><th></th>
+			</tr></thead>
+			<tbody>
+				{{ csnipe_rows(csnipe.snipes|selectattr('test')|list, 'No test snipes yet — arm one above.') }}
+			</tbody>
+		</table>
+	</div>
+</div>
+</div><!-- /pane-csnipetest -->
 
 <div id="pane-snipe" style="display:none">
 <p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
@@ -422,7 +524,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'csnipe', 'snipe'];
+const PANES = ['overview', 'csnipe', 'csnipetest', 'snipe'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -468,28 +570,9 @@ setInterval(tickDefense, 1000);
 // --- arm form ---
 let csForm = { village_id: null, incoming_id: null, arrival: null };
 
-function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
-	const v = CSNIPE.villages[String(villageId)];
-	if (!v) return;
-	csForm = { village_id: String(villageId), incoming_id: commandId, arrival: arrival };
-	const d = new Date(arrival * 1000);
-	document.getElementById('cs-context').textContent =
-		'— ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
-	if (v.barb) {
-		document.getElementById('cs-tx').value = v.barb.x;
-		document.getElementById('cs-ty').value = v.barb.y;
-		document.getElementById('cs-barb-hint').textContent =
-			'Suggested barb: ' + (v.barb.name || '') + ' ' + v.barb.x + '|' + v.barb.y +
-			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav) — ' +
-			'any target works as long as the troops are still under way at the cancel moment.';
-	} else {
-		document.getElementById('cs-tx').value = '';
-		document.getElementById('cs-ty').value = '';
-		document.getElementById('cs-barb-hint').textContent =
-			'No barb suggestion available (map cache empty?) — enter target coords manually.';
-	}
-	const grid = document.getElementById('cs-units');
+// Shared between the real arm form and the test tab: unit grid (defensive
+// units prefilled with everything at home), barb target prefill, unit readout.
+function csnipeUnitGrid(grid, v, unitClass) {
 	grid.innerHTML = '';
 	CSNIPE.form_units.forEach(function(u) {
 		const home = (v.home && v.home[u]) || 0;
@@ -498,9 +581,46 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 		grid.insertAdjacentHTML('beforeend',
 			'<div class="form-group col-4 col-md-2 unit-input">' +
 			'<label>' + u + ' <small class="text-muted">/' + home + '</small></label>' +
-			'<input type="number" class="form-control form-control-sm cs-unit" data-unit="' + u + '"' +
+			'<input type="number" class="form-control form-control-sm ' + unitClass + '" data-unit="' + u + '"' +
 			' min="0" max="' + home + '" value="' + prefill + '"></div>');
 	});
+}
+
+function csnipeBarbPrefill(v, txId, tyId, hintId) {
+	if (v.barb) {
+		document.getElementById(txId).value = v.barb.x;
+		document.getElementById(tyId).value = v.barb.y;
+		document.getElementById(hintId).textContent =
+			'Suggested barb: ' + (v.barb.name || '') + ' ' + v.barb.x + '|' + v.barb.y +
+			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav) — ' +
+			'any target works as long as the troops are still under way at the cancel moment.';
+	} else {
+		document.getElementById(txId).value = '';
+		document.getElementById(tyId).value = '';
+		document.getElementById(hintId).textContent =
+			'No barb suggestion available (map cache empty?) — enter target coords manually.';
+	}
+}
+
+function csnipeCollectUnits(unitClass) {
+	const units = {};
+	document.querySelectorAll('.' + unitClass).forEach(function(inp) {
+		const n = parseInt(inp.value, 10) || 0;
+		if (n > 0) units[inp.getAttribute('data-unit')] = n;
+	});
+	return units;
+}
+
+function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
+	const v = CSNIPE.villages[String(villageId)];
+	if (!v) return;
+	csForm = { village_id: String(villageId), incoming_id: commandId, arrival: arrival };
+	const d = new Date(arrival * 1000);
+	document.getElementById('cs-context').textContent =
+		'— ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
+	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
+	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
 	document.getElementById('cs-error').textContent = '';
 	const form = document.getElementById('csnipe-form');
 	form.style.display = '';
@@ -508,17 +628,28 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 }
 
 function csnipeArm() {
-	const units = {};
-	document.querySelectorAll('.cs-unit').forEach(function(inp) {
-		const n = parseInt(inp.value, 10) || 0;
-		if (n > 0) units[inp.getAttribute('data-unit')] = n;
-	});
+	const units = csnipeCollectUnits('cs-unit');
 	const hitMs = parseInt(document.getElementById('cs-hit-ms').value, 10) || 0;
+	const aimMs = parseInt(document.getElementById('cs-aim-ms').value, 10) || 150;
+	// "No later than +ms" is relative to the first hit, like the aim; the
+	// engine wants the window's width past the aim.
+	const latestRaw = document.getElementById('cs-latest-ms').value.trim();
+	let windowMs = 0;
+	if (latestRaw !== '') {
+		const latest = parseInt(latestRaw, 10);
+		if (!(latest > aimMs)) {
+			document.getElementById('cs-error').textContent =
+				'"no later than" must be greater than "land +ms after it" (' + aimMs + ')';
+			return;
+		}
+		windowMs = latest - aimMs;
+	}
 	const body = {
 		village_id: csForm.village_id,
 		incoming_id: csForm.incoming_id,
 		first_hit_ms: csForm.arrival * 1000 + hitMs,
-		aim_ms: parseInt(document.getElementById('cs-aim-ms').value, 10) || 150,
+		aim_ms: aimMs,
+		window_ms: windowMs,
 		lead_min: parseFloat(document.getElementById('cs-lead-min').value) || 18,
 		target_x: document.getElementById('cs-tx').value,
 		target_y: document.getElementById('cs-ty').value,
@@ -541,8 +672,77 @@ function csnipeArm() {
 }
 
 function csnipeDisarm(id) {
+	// Reload in place: the button lives on both the c-snipe and the test tab,
+	// and the hash already tracks whichever pane is open.
 	fetch('/app/csnipe/cancel?id=' + encodeURIComponent(id))
-		.then(r => r.json()).then(function() { location.hash = '#csnipe'; location.reload(); });
+		.then(r => r.json()).then(function() {
+			if (PANES.indexOf(location.hash.slice(1)) <= 0) location.hash = '#csnipe';
+			location.reload();
+		});
+}
+
+// --- c-snipe test tab: same engine, user-chosen return moment ---
+(function() {
+	const sel = document.getElementById('cst-village');
+	Object.values(CSNIPE.villages)
+		.sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); })
+		.forEach(function(v) {
+			const o = document.createElement('option');
+			o.value = v.id;
+			o.textContent = v.name + (v.coords ? ' (' + v.coords[0] + '|' + v.coords[1] + ')' : '');
+			sel.appendChild(o);
+		});
+	// Default return moment: 25 min out — enough room for the default 18 min
+	// engage lead plus arming time.
+	const d = new Date(Date.now() + 25 * 60000);
+	document.getElementById('cst-time').value =
+		pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+	if (sel.value) cstVillageChanged();
+})();
+
+function cstVillageChanged() {
+	const v = CSNIPE.villages[document.getElementById('cst-village').value];
+	if (!v) return;
+	csnipeBarbPrefill(v, 'cst-tx', 'cst-ty', 'cst-barb-hint');
+	csnipeUnitGrid(document.getElementById('cst-units'), v, 'cst-unit');
+	document.getElementById('cst-error').textContent = '';
+}
+
+function cstArm() {
+	const err = document.getElementById('cst-error');
+	const vid = document.getElementById('cst-village').value;
+	if (!vid) { err.textContent = 'no village selected'; return; }
+	const t = document.getElementById('cst-time').value;
+	if (!t) { err.textContent = 'set a return time first'; return; }
+	const parts = t.split(':').map(Number);
+	const d = new Date();
+	d.setHours(parts[0], parts[1] || 0, parts[2] || 0, 0);
+	let returnMs = d.getTime() + (parseInt(document.getElementById('cst-ms').value, 10) || 0);
+	// A time-of-day already gone (or too tight to arm) means tomorrow.
+	if (returnMs <= Date.now() + 150000) returnMs += 86400000;
+	const units = csnipeCollectUnits('cst-unit');
+	if (!Object.keys(units).length) { err.textContent = 'no units selected'; return; }
+	const body = {
+		village_id: vid,
+		incoming_id: null,
+		first_hit_ms: returnMs,  // the chosen moment IS the return target
+		aim_ms: 0,
+		window_ms: parseInt(document.getElementById('cst-window-ms').value, 10) || 0,
+		lead_min: parseFloat(document.getElementById('cst-lead').value) || 18,
+		target_x: document.getElementById('cst-tx').value,
+		target_y: document.getElementById('cst-ty').value,
+		units: units,
+		test: true,
+	};
+	fetch('/app/csnipe/arm', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body),
+	}).then(r => r.json()).then(function(res) {
+		if (!res.ok) { err.textContent = res.error || 'arming failed'; return; }
+		location.hash = '#csnipetest';
+		location.reload();
+	}).catch(function(e) { err.textContent = String(e); });
 }
 
 // --- support-snipe tab ---
