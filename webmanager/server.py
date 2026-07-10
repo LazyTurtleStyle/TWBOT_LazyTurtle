@@ -291,14 +291,37 @@ def render_grouped(group_key, ctrl_prefix, fields, village_id=None):
     return out
 
 
+def _example_defaults():
+    """Sections/keys from config.example.json. Merged (display-only) into the
+    settings pages so options added to the bot after a world's config.json was
+    created still render with their default value - otherwise a new setting is
+    invisible until the key is added to the file by hand. Saving one persists
+    it to the world config via the normal config_set path."""
+    path = os.path.join(DataReader.project_root(), "config.example.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _with_defaults(fields, example_section):
+    merged = dict(fields)
+    for key, default in (example_section or {}).items():
+        merged.setdefault(key, default)
+    return merged
+
+
 def pre_process_config():
     config = sync()['config']
+    example = _example_defaults()
     to_hide = ["build", "villages"]
     sections = {}
     for section in config:
         if section in to_hide or not isinstance(config[section], dict):
             continue
-        sections[section] = render_grouped(section, section, config[section])
+        fields = _with_defaults(config[section], example.get(section))
+        sections[section] = render_grouped(section, section, fields)
     return sections
 
 
@@ -310,10 +333,12 @@ SETUP_SECTIONS = ['server', 'world', 'notifications', 'reporting']
 def pre_process_setup():
     """Render the set-once sections as (section, html) steps for the setup page."""
     config = sync()['config']
+    example = _example_defaults()
     steps = []
     for section in SETUP_SECTIONS:
         if section in config and isinstance(config[section], dict):
-            steps.append((section, render_grouped(section, section, config[section])))
+            fields = _with_defaults(config[section], example.get(section))
+            steps.append((section, render_grouped(section, section, fields)))
     return steps
 
 

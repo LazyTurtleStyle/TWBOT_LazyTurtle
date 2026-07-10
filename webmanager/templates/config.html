@@ -16,8 +16,10 @@
 		width: 18px; height: 18px; border-radius: 50%; background: var(--muted);
 		color: var(--bg); font-size: 12px; font-weight: 700; cursor: help; flex: none; }
 	.config-section-help { display: block; margin-bottom: .75rem; }
+	/* While searching, every pane is shown at once and rows are filtered. */
+	.config-searching .tab-pane { display: block !important; opacity: 1; }
 </style>
-<div class="row">
+<div class="row align-items-center">
 	<ul class="nav nav-tabs">
 		{% for section in config %}
 		  <li class="nav-item">
@@ -25,6 +27,8 @@
 		  </li>
 		{% endfor %}
 	</ul>
+	<input id="config_search" type="search" class="form-control form-control-sm ml-auto mr-2"
+		style="width: 230px" placeholder="Search settings…" autocomplete="off" />
 	 <a id="save_config" class="btn btn-success disabled">Save</a>
 </div>
 
@@ -139,6 +143,39 @@
 		    set_config(set_key, set_value);
 		  });
 		  setTimeout(function(){location.reload()}, 500);
+		});
+
+		// Search across every section at once: matches the setting's display
+		// name, its config key (data-type-option) and its help text. While a
+		// query is active all panes are shown with non-matching rows/cards
+		// hidden; clearing the box restores the normal tabs.
+		$('#config_search').on('input', function() {
+			var q = $(this).val().trim().toLowerCase();
+			$('.tab-content').toggleClass('config-searching', q.length > 0);
+			if (!q) {
+				$('.config-row, .config-card, .tab-pane, .config-section-help').css('display', '');
+				return;
+			}
+			$('.tab-pane').each(function() {
+				var pane = $(this), any = false;
+				pane.find('.config-row').each(function() {
+					var row = $(this);
+					var help = row.find('.config-help');
+					var hay = (row.find('.config-row-name').text() + ' ' +
+						(help.attr('data-original-title') || help.attr('title') || '') + ' ' +
+						(row.find('[data-type-option]').attr('data-type-option') || '')
+					).toLowerCase();
+					var hit = hay.indexOf(q) !== -1;
+					row.toggle(hit);
+					any = any || hit;
+				});
+				pane.find('.config-card').each(function() {
+					var card = $(this);
+					card.toggle(card.find('.config-row:visible').length > 0);
+				});
+				pane.find('.config-section-help').toggle(false);
+				pane.toggle(any);
+			});
 		});
 
 		$('[data-toggle="tooltip"]').tooltip();
