@@ -125,7 +125,10 @@ class ReportManager:
 
     def read(self, page=0, full_run=False):
         """
-        Read some (or all if you like) reports
+        Read reports from every report folder. In-game report filters can file
+        new reports straight into a group, so only polling the main folder can
+        silently miss everything (nl99 2026-07-09: all farm reports were
+        auto-filed into "Rooftochten"/"Farm-assistent" and farming stalled).
         """
         if not self.logger:
             self.logger = logging.getLogger("Reports")
@@ -134,12 +137,25 @@ class ReportManager:
             self.logger.info("First run, re-reading cache entries")
             self.last_reports = ReportCache.cache_grab()
             self.logger.info("Got %d reports from cache", len(self.last_reports))
+
+        # The main folder's page carries the group selector, from which the
+        # other folders are discovered.
+        groups = self.read_group("0", page=page, full_run=full_run)
+        for group_id in groups:
+            self.read_group(group_id, page=page, full_run=full_run)
+
+    def read_group(self, group_id, page=0, full_run=False):
+        """
+        Read one report folder, recursing through its pages. Returns the other
+        folder ids found in the page's group selector.
+        """
         offset = page * 12
-        url = f"game.php?village={self.village_id}&screen=report&mode=all"
+        url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id={group_id}"
         if page > 0:
             url += f"&from={offset}"
         result = self.wrapper.get_url(url)
         self.game_state = Extractor.game_state(result)
+        groups = [g for g in Extractor.report_groups(result) if g != group_id]
         new = 0
 
         ids = Extractor.report_table(result)
@@ -147,7 +163,7 @@ class ReportManager:
             if report_id in self.last_reports:
                 continue
             new += 1
-            url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id=0&view={report_id}"
+            url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id={group_id}&view={report_id}"
             data = self.wrapper.get_url(url)
 
             get_type = re.search(r'class="report_(\w+)', data.text)
@@ -176,9 +192,11 @@ class ReportManager:
         if new == 12 or full_run and page < 20:
             page += 1
             self.logger.debug(
-                "%d new reports where added, also checking page %d", new, page
+                "%d new reports where added, also checking page %d of group %s",
+                new, page, group_id
             )
-            return self.read(page, full_run=full_run)
+            return self.read_group(group_id, page, full_run=full_run)
+        return groups
 
     def re_unit(self, inp):
         """

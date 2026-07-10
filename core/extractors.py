@@ -38,6 +38,8 @@ _RE_UNITS_TOTAL = re.compile(r'(?s)class=\Wunit-item unit-item-([a-z]+)\W.+?(\d+
 _RE_ATTACK_FORM = re.compile(r'(?s)<input.+?name="(.+?)".+?value="(.*?)"')
 _RE_ATTACK_DURATION = re.compile(r'<span class="relative_time" data-duration="(\d+)"')
 _RE_REPORT_TABLE = re.compile(r'(?s)class="report-link" data-id="(\d+)"')
+_RE_REPORT_GROUP_SELECT = re.compile(r'(?s)<select name="group_id".+?</select>')
+_RE_OPTION_VALUE = re.compile(r'<option value="(\d+)"')
 _RE_FARM_ICON = re.compile(
     r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>')
 _RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
@@ -303,6 +305,19 @@ class Extractor:
             res = res.text
         data = _RE_REPORT_TABLE.findall(res)
         return data
+
+    @staticmethod
+    def report_groups(res):
+        """
+        Report-folder ids from the group selector on the report screen.
+        The main folder (group 0) is implicit and not listed as an option.
+        """
+        if type(res) != str:
+            res = res.text
+        select = _RE_REPORT_GROUP_SELECT.search(res)
+        if not select:
+            return []
+        return _RE_OPTION_VALUE.findall(select.group(0))
 
     @staticmethod
     def farm_assistant_icons(res):
