@@ -56,12 +56,13 @@
 </div>
 
 <ul class="nav nav-tabs mb-3" id="farm-tabs">
-  <li class="nav-item"><a class="nav-link active" href="#settings" data-pane="settings">Barbs &amp; scavenging</a></li>
+  <li class="nav-item"><a class="nav-link active" href="#barbs" data-pane="barbs">Barb farming</a></li>
+  <li class="nav-item"><a class="nav-link" href="#scavenge" data-pane="scavenge">Scavenging</a></li>
   <li class="nav-item"><a class="nav-link" href="#players" data-pane="players">Player farms
     {% if playerfarms.farms %}<span class="badge badge-dark">{{ playerfarms.farms|length }}</span>{% endif %}</a></li>
 </ul>
 
-<div id="pane-settings">
+<div id="pane-barbs">
 <div class="alert alert-secondary fs-intro" role="alert">
   This page mirrors <code>readme/farm_checklist.md</code>. The bot picks an attack per target
   by report freshness: <strong>A</strong> = re-scout (no/old report), <strong>B</strong> =
@@ -150,7 +151,9 @@
   </div>
 </div>
 
-<h4 class="mt-2">Scavenging</h4>
+</div><!-- /pane-barbs -->
+
+<div id="pane-scavenge" style="display:none">
 <p class="text-muted fs-intro">Uses left-over troops to gather resources. These controls write to
   <strong>every village</strong> and the default template at once. Per-village values below show the
   current state; edit a single village from its <a href="/villages">village config</a>.</p>
@@ -238,7 +241,7 @@
   </div>
 </div>
 
-</div><!-- /pane-settings -->
+</div><!-- /pane-scavenge -->
 
 <div id="pane-players" style="display:none">
 <div class="alert alert-secondary fs-intro" role="alert">
@@ -445,20 +448,20 @@
     });
   });
 
-  // --- tabs (hash-addressable so a reload stays on the player-farm pane) ---
+  // --- tabs (hash-addressable so a reload stays on the same pane) ---
+  var FARM_PANES = ['barbs', 'scavenge', 'players'];
   function showFarmPane(name) {
     $('#farm-tabs .nav-link').each(function () {
       $(this).toggleClass('active', $(this).data('pane') === name);
     });
-    $('#pane-settings').toggle(name === 'settings');
-    $('#pane-players').toggle(name === 'players');
+    FARM_PANES.forEach(function (p) { $('#pane-' + p).toggle(p === name); });
   }
   $('#farm-tabs .nav-link').click(function (e) {
     e.preventDefault();
     history.replaceState(null, '', $(this).attr('href'));
     showFarmPane($(this).data('pane'));
   });
-  if (location.hash === '#players') showFarmPane('players');
+  if (FARM_PANES.indexOf(location.hash.slice(1)) > 0) showFarmPane(location.hash.slice(1));
 
   // --- player-farm times ---
   function pfRelative(ts, future) {

@@ -583,12 +583,20 @@
 		var ws = document.getElementById('worldSwitch');
 		if (ws && !ws.contains(e.target)) ws.classList.remove('open');
 	});
+	// Config page: the sidebar Modules links are /config#<section>. Switch to the
+	// hash's tab on load AND on every hash change — clicking a Modules link while
+	// already on /config only changes the hash (no reload), so without the
+	// hashchange handler the visible tab would never follow the link.
+	function showConfigTab() {
+		if (location.pathname !== '/config') return;
+		var tab = location.hash && $('.nav-tabs a[data-toggle="tab"][href="' + location.hash + '"]');
+		if (!tab || !tab.length) tab = $('.nav-tabs a[data-toggle="tab"]').first();
+		if (tab.length) tab.tab('show');
+	}
+	$(window).on('hashchange', showConfigTab);
 	$(function(){
 		$('[data-toggle="tooltip"]').tooltip();
-		if (location.pathname === '/config' && location.hash) {
-			var tab = $('.nav-tabs a[href="' + location.hash + '"]');
-			if (tab.length) tab.tab('show');
-		}
+		showConfigTab();
 	});
 </script>
 {% block scripts %}{% endblock %}

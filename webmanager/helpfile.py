@@ -133,7 +133,7 @@ section_labels = {
     'notifications': 'Notifications (Telegram)',
     'bot': 'Bot',
     'building': 'Building',
-    'units': 'Units',
+    'units': 'Recruitment (units)',
     'farms': 'Farms',
     'market': 'Market',
     'world': 'World',
