@@ -35,6 +35,7 @@ _RE_RECRUIT_QUEUE = re.compile(r'(?s)TrainOverview\.cancelOrder\((\d+)\)')
 _RE_VILLAGE_IDS = re.compile(r'<span class="quickedit-vn" data-id="(\w+)"')
 _RE_VILLAGE_ANCHOR = re.compile(r'(?s)<span class="village_anchor.+?</tr>')
 _RE_UNITS_TOTAL = re.compile(r'(?s)class=\Wunit-item unit-item-([a-z]+)\W.+?(\d+)</td>')
+_RE_PLACE_ENTRY_ALL = re.compile(r'units_entry_all_(\w+)[^>]*>\s*\(([\d.,]+)\)')
 _RE_ATTACK_FORM = re.compile(r'(?s)<input.+?name="(.+?)".+?value="(.*?)"')
 _RE_ATTACK_DURATION = re.compile(r'<span class="relative_time" data-duration="(\d+)"')
 _RE_REPORT_TABLE = re.compile(r'(?s)class="report-link" data-id="(\d+)"')
@@ -191,6 +192,19 @@ class Extractor:
             # the name would be "knight tooltip", so we had to remove that.
             return units
         return []
+
+    @staticmethod
+    def units_in_place(res):
+        """
+        Available units on a rally point send form (screen=place): the (N)
+        "select all" links next to each unit input. Returns {unit: int}.
+        """
+        if type(res) != str:
+            res = res.text
+        return {
+            unit: int(count.replace(".", "").replace(",", ""))
+            for unit, count in _RE_PLACE_ENTRY_ALL.findall(res)
+        }
 
     @staticmethod
     def active_building_queue(res):

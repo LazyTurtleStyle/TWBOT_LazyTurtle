@@ -359,6 +359,12 @@ class DataReader:
 
         selected = {}
         for unit, count in (units or {}).items():
+            if isinstance(count, str) and count.strip().lower() == "all":
+                # Resolved by the bot at send time to whatever is home then,
+                # so the command still fires when the village holds fewer
+                # troops than it does now.
+                selected[unit] = "all"
+                continue
             try:
                 count = int(count)
             except (TypeError, ValueError):

@@ -221,9 +221,24 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False):
     -launch form; server_duration is TribalWars' own travel time for this command
     in seconds (the authoritative figure for hitting an exact arrival).
     With support=True the command is an "Ondersteunen" (support) send instead
-    of an attack - used by the snipe engine."""
-    units = {u: int(n) for u, n in (units or {}).items() if int(n or 0) > 0}
-    if not units:
+    of an attack - used by the snipe engine.
+
+    A unit count of "all" means: every one of that unit at home at SEND time,
+    resolved from the rally point page itself - so the command still goes out
+    when the village holds fewer troops than planned."""
+    units = dict(units or {})
+    want_all = [u for u in units if str(units[u]).strip().lower() == "all"]
+    fixed = {}
+    for u, n in units.items():
+        if u in want_all:
+            continue
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            fixed[u] = n
+    if not want_all and not fixed:
         return None, 0, "no units selected"
 
     # 1) Open the rally point to collect the form's hidden fields + token.
@@ -231,6 +246,17 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False):
     pre = wrapper.get_url(open_url)
     if not pre:
         return None, 0, "could not open rally point"
+    if want_all:
+        home = Extractor.units_in_place(pre)
+        if not home:
+            return None, 0, "could not read available units for 'all' selection"
+        for u in want_all:
+            n = home.get(u, 0)
+            if n > 0:
+                fixed[u] = n
+        if not fixed:
+            return None, 0, "no units at home for the 'all' selection"
+    units = fixed
     pre_data = {k: v for k, v in Extractor.attack_form(pre)}
     pre_data.update({str(u): str(n) for u, n in units.items()})
     pre_data.update({"x": x, "y": y, "target_type": "coord"})

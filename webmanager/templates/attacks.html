@@ -9,95 +9,57 @@
 
 <p class="text-muted small mt-1">
 	<span class="badge badge-warning">alpha</span>
-	Plan travel/arrival times between your villages and a target, and review the targets the
-	bot is already tracking. Times use this world's unit speeds
+	Review tracked targets, schedule timed attacks and plan travel/arrival times.
+	Times use this world's unit speeds
 	(speed {{ plan.world_speed }}, unit speed {{ plan.unit_speed }}).
 </p>
 
-<div class="row">
-	<!-- Travel-time planner -->
-	<div class="col-lg-5 mb-3">
-		<div class="card">
-			<div class="card-header py-2"><strong>Travel-time planner</strong></div>
-			<div class="card-body">
-				<div class="form-group mb-2">
-					<label class="small mb-1">Origin (your village)</label>
-					<select id="origin" class="form-control form-control-sm">
-						{% for o in plan.origins %}
-						{% if o.coords %}
-						<option value="{{ o.coords[0] }}|{{ o.coords[1] }}">
-							{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
-						{% endif %}
-						{% else %}
-						<option value="">No managed villages found</option>
-						{% endfor %}
-					</select>
-				</div>
-				<div class="form-row">
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target X</label>
-						<input id="tx" type="number" class="form-control form-control-sm" placeholder="e.g. 431" />
-					</div>
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target Y</label>
-						<input id="ty" type="number" class="form-control form-control-sm" placeholder="e.g. 414" />
-					</div>
-				</div>
-				<div class="form-group mb-2">
-					<label class="small mb-1">Arrive at (optional)</label>
-					<input id="arrival" type="time" step="1" class="form-control form-control-sm" />
-					<small class="text-muted">Adds a "send by" column so each unit lands at this time
-						(today, or tomorrow if it's already past).</small>
-				</div>
-				<div id="dist" class="small text-muted mb-2"></div>
-				<table class="table table-sm planner-table mb-0">
-					<thead><tr>
-						<th>Unit</th>
-						<th class="text-right">Travel</th>
-						<th class="text-right">Arrives (if sent now)</th>
-						<th class="text-right">Send by</th>
-					</tr></thead>
-					<tbody id="plan-rows"></tbody>
-				</table>
-			</div>
-		</div>
-	</div>
+{% set pending_count = scheduled|selectattr('status', 'equalto', 'pending')|list|length %}
+<ul class="nav nav-tabs mb-3" id="atk-tabs">
+	<li class="nav-item"><a class="nav-link active" href="#overview" data-pane="overview">Overview</a></li>
+	<li class="nav-item"><a class="nav-link" href="#scheduler" data-pane="scheduler">Scheduler
+		{% if pending_count %}<span class="badge badge-danger">{{ pending_count }}</span>{% endif %}</a></li>
+	<li class="nav-item"><a class="nav-link" href="#planner" data-pane="planner">Planner</a></li>
+</ul>
 
-	<!-- Tracked targets -->
-	<div class="col-lg-7 mb-3">
-		<div class="card">
-			<div class="card-header py-2"><strong>Tracked targets ({{ plan.targets|length }})</strong>
-				<small class="text-muted">— what the bot is currently farming / scouting</small></div>
-			<div class="table-responsive">
-				<table class="table table-sm planner-table mb-0">
-					<thead><tr>
-						<th>Target</th><th>Kind</th><th class="text-right">Points</th>
-						<th>Owner</th><th class="text-right">Last hit</th><th></th>
-					</tr></thead>
-					<tbody>
-						{% for t in plan.targets %}
-						<tr>
-							<td class="coord">{% if t.coords %}{{ t.coords[0] }}|{{ t.coords[1] }}{% else %}#{{ t.id }}{% endif %}
-								{% if t.name %}<small class="text-muted d-block">{{ t.name }}</small>{% endif %}</td>
-							<td>{% if t.kind == 'scout' %}<span class="badge badge-info">scout</span>
-								{% else %}<span class="badge badge-secondary">{{ t.kind or 'farm' }}</span>{% endif %}</td>
-							<td class="text-right">{{ t.points|comma if t.points else '—' }}</td>
-							<td>{% if t.owner and t.owner != '0' %}{{ t.owner }}{% else %}<span class="text-muted">barbarian</span>{% endif %}</td>
-							<td class="text-right">{% if t.last_attack %}<span title="{{ t.last_attack|ts }}">{{ t.last_attack|ago }}</span>{% else %}—{% endif %}</td>
-							<td class="text-right">{% if t.coords %}<button class="btn btn-outline-primary btn-sm py-0"
-								onclick="planTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Plan</button>{% endif %}</td>
-						</tr>
-						{% else %}
-						<tr><td colspan="6" class="text-muted">No tracked targets yet.</td></tr>
-						{% endfor %}
-					</tbody>
-				</table>
-			</div>
-		</div>
+<!-- ---------- Overview: tracked targets ---------- -->
+<div id="pane-overview">
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Tracked targets ({{ plan.targets|length }})</strong>
+		<small class="text-muted">— what the bot is currently farming / scouting</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm planner-table mb-0">
+			<thead><tr>
+				<th>Target</th><th>Kind</th><th class="text-right">Points</th>
+				<th>Owner</th><th class="text-right">Last hit</th><th></th>
+			</tr></thead>
+			<tbody>
+				{% for t in plan.targets %}
+				<tr>
+					<td class="coord">{% if t.coords %}{{ t.coords[0] }}|{{ t.coords[1] }}{% else %}#{{ t.id }}{% endif %}
+						{% if t.name %}<small class="text-muted d-block">{{ t.name }}</small>{% endif %}</td>
+					<td>{% if t.kind == 'scout' %}<span class="badge badge-info">scout</span>
+						{% else %}<span class="badge badge-secondary">{{ t.kind or 'farm' }}</span>{% endif %}</td>
+					<td class="text-right">{{ t.points|comma if t.points else '—' }}</td>
+					<td>{% if t.owner and t.owner != '0' %}{{ t.owner }}{% else %}<span class="text-muted">barbarian</span>{% endif %}</td>
+					<td class="text-right">{% if t.last_attack %}<span title="{{ t.last_attack|ts }}">{{ t.last_attack|ago }}</span>{% else %}—{% endif %}</td>
+					<td class="text-right" style="white-space:nowrap">{% if t.coords %}
+						<button class="btn btn-outline-primary btn-sm py-0"
+							onclick="scheduleTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Schedule</button>
+						<button class="btn btn-outline-secondary btn-sm py-0"
+							onclick="planTarget({{ t.coords[0] }}, {{ t.coords[1] }})">Plan</button>{% endif %}</td>
+				</tr>
+				{% else %}
+				<tr><td colspan="6" class="text-muted">No tracked targets yet.</td></tr>
+				{% endfor %}
+			</tbody>
+		</table>
 	</div>
 </div>
+</div><!-- /pane-overview -->
 
-<!-- ---------- Scheduled (timed) attacks ---------- -->
+<!-- ---------- Scheduler: timed attacks ---------- -->
+<div id="pane-scheduler" style="display:none">
 <div class="row">
 	<div class="col-lg-5 mb-3">
 		<div class="card">
@@ -139,7 +101,7 @@
 					<label class="small mb-1">Arrive at (date &amp; time)</label>
 					<input id="s_arrival" type="datetime-local" step="1" class="form-control form-control-sm" />
 				</div>
-				<label class="small mb-1">Units to send</label>
+				<label class="small mb-1">Units to send <span class="text-muted">— type a number, or <code>all</code> to send every one home at send time</span></label>
 				<div id="s_units" class="form-row"></div>
 				<div id="s_avail" class="small text-muted mb-2"></div>
 				<div id="s_preview" class="small mb-2"></div>
@@ -188,6 +150,59 @@
 		</div>
 	</div>
 </div>
+</div><!-- /pane-scheduler -->
+
+<!-- ---------- Planner: travel times ---------- -->
+<div id="pane-planner" style="display:none">
+<div class="row">
+	<div class="col-lg-5 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Travel-time planner</strong></div>
+			<div class="card-body">
+				<div class="form-group mb-2">
+					<label class="small mb-1">Origin (your village)</label>
+					<select id="origin" class="form-control form-control-sm">
+						{% for o in plan.origins %}
+						{% if o.coords %}
+						<option value="{{ o.coords[0] }}|{{ o.coords[1] }}">
+							{{ o.name }} ({{ o.coords[0] }}|{{ o.coords[1] }})</option>
+						{% endif %}
+						{% else %}
+						<option value="">No managed villages found</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="form-row">
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target X</label>
+						<input id="tx" type="number" class="form-control form-control-sm" placeholder="e.g. 431" />
+					</div>
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target Y</label>
+						<input id="ty" type="number" class="form-control form-control-sm" placeholder="e.g. 414" />
+					</div>
+				</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Arrive at (optional)</label>
+					<input id="arrival" type="time" step="1" class="form-control form-control-sm" />
+					<small class="text-muted">Adds a "send by" column so each unit lands at this time
+						(today, or tomorrow if it's already past).</small>
+				</div>
+				<div id="dist" class="small text-muted mb-2"></div>
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr>
+						<th>Unit</th>
+						<th class="text-right">Travel</th>
+						<th class="text-right">Arrives (if sent now)</th>
+						<th class="text-right">Send by</th>
+					</tr></thead>
+					<tbody id="plan-rows"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+</div>
+</div><!-- /pane-planner -->
 {% endblock %}
 
 {% block scripts %}
@@ -196,6 +211,25 @@ const SPEEDS = {{ plan.speeds|tojson }};
 const WORLD_SPEED = {{ plan.world_speed }} || 1;
 const UNIT_SPEED = {{ plan.unit_speed }} || 1;
 const UNITS = {{ plan.units|tojson }};
+
+/* ---------- tabs (hash-addressable so a reload stays on the same pane) ---------- */
+const PANES = ['overview', 'scheduler', 'planner'];
+function showPane(name) {
+	document.querySelectorAll('#atk-tabs .nav-link').forEach(function(a) {
+		a.classList.toggle('active', a.getAttribute('data-pane') === name);
+	});
+	PANES.forEach(function(p) {
+		document.getElementById('pane-' + p).style.display = p === name ? '' : 'none';
+	});
+}
+document.querySelectorAll('#atk-tabs .nav-link').forEach(function(a) {
+	a.addEventListener('click', function(e) {
+		e.preventDefault();
+		history.replaceState(null, '', a.getAttribute('href'));
+		showPane(a.getAttribute('data-pane'));
+	});
+});
+if (PANES.indexOf(location.hash.slice(1)) > 0) showPane(location.hash.slice(1));
 
 function pad(n, w) { return String(n).padStart(w, '0'); }
 function fmtDur(sec) {
@@ -251,7 +285,15 @@ function planTarget(x, y) {
 	document.getElementById('tx').value = x;
 	document.getElementById('ty').value = y;
 	recompute();
-	window.scrollTo({top: 0, behavior: 'smooth'});
+	history.replaceState(null, '', '#planner');
+	showPane('planner');
+}
+function scheduleTarget(x, y) {
+	document.getElementById('s_tx').value = x;
+	document.getElementById('s_ty').value = y;
+	schedPreview();
+	history.replaceState(null, '', '#scheduler');
+	showPane('scheduler');
 }
 
 ['origin','tx','ty','arrival'].forEach(id =>
@@ -262,7 +304,7 @@ recompute();
 function slowestTravelSec(dist, units) {
 	let max = 0;
 	Object.keys(units).forEach(u => {
-		if (units[u] > 0 && SPEEDS[u]) {
+		if ((units[u] === 'all' || units[u] > 0) && SPEEDS[u]) {
 			const sec = dist * SPEEDS[u] / (WORLD_SPEED*UNIT_SPEED) * 60;
 			if (sec > max) max = sec;
 		}
@@ -273,7 +315,9 @@ function selectedUnits() {
 	const out = {};
 	UNITS.forEach(u => {
 		const el = document.getElementById('su_'+u);
-		const n = parseInt(el && el.value, 10);
+		const v = ((el && el.value) || '').trim().toLowerCase();
+		if (v === 'all') { out[u] = 'all'; return; }
+		const n = parseInt(v, 10);
 		if (n > 0) out[u] = n;
 	});
 	return out;
@@ -283,10 +327,17 @@ function originOpt() { const s = document.getElementById('s_origin'); return s.o
 function buildUnitInputs() {
 	const wrap = document.getElementById('s_units');
 	wrap.innerHTML = UNITS.map(u =>
-		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+'</label>'+
-		'<input id="su_'+u+'" type="number" min="0" class="form-control form-control-sm" placeholder="0"></div>'
+		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+
+		' <a href="#" class="unit-all-link" data-u="'+u+'" title="Send every '+u+' that is home at send time, even if fewer than now">all</a></label>'+
+		'<input id="su_'+u+'" type="text" inputmode="numeric" class="form-control form-control-sm" placeholder="0"></div>'
 	).join('');
 	UNITS.forEach(u => document.getElementById('su_'+u).addEventListener('input', schedPreview));
+	wrap.querySelectorAll('.unit-all-link').forEach(a => a.addEventListener('click', function(e) {
+		e.preventDefault();
+		const el = document.getElementById('su_'+this.getAttribute('data-u'));
+		el.value = el.value.trim().toLowerCase() === 'all' ? '' : 'all';
+		schedPreview();
+	}));
 }
 function updateAvail() {
 	const opt = originOpt();
@@ -345,7 +396,7 @@ document.getElementById('s_submit').addEventListener('click', function() {
 	}).then(r => r.json()).then(d => {
 		if (!d.ok) { msg.innerHTML = '<span class="text-danger">'+(d.error||'failed')+'</span>'; return; }
 		msg.innerHTML = '<span class="text-success">Scheduled.</span>';
-		setTimeout(() => location.reload(), 900);
+		setTimeout(() => { location.hash = '#scheduler'; location.reload(); }, 900);
 	}).catch(e => { msg.innerHTML = '<span class="text-danger">Error: '+e+'</span>'; });
 });
 
