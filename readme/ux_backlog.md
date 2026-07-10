@@ -90,6 +90,12 @@ sometimes vague help text. Goal: readable, well-explained settings.
   `farms.forced_peace_times`, `village.advanced_gather`, `world.boosters_enabled`).
   - [ ] Still optional: move long-form help into a dedicated `help.md` / per-setting markdown
     so explanations can be richer than a single tooltip line.
+- [x] **Config search bar.** Search box on the settings page that matches display name,
+  config key and help text across every section at once (all panes shown, non-matching rows
+  and empty cards hidden; normal tabs restored when cleared). Also: settings that exist in
+  `config.example.json` but not yet in the live config now render with their example
+  defaults, so new bot options are visible without hand-editing the file; saving persists
+  them through the normal `config_set` path.
 - [x] **Clarified the "Reporting" tab.** Tab now reads **"Action log (export)"**
   (`helpfile.section_labels`) with a description spelling out that it's the bot's own action
   log/export (file or MySQL), *not* the in-game reports on the Status page.
@@ -158,8 +164,11 @@ into a "Setup / World" area, ideally a first-run wizard.
   thread-local selection; `BotManager` tracks/starts/stops each world's process by its
   `--world` cmdline). No `--world` = project root, unchanged. Foundation: `FileManager`
   data-dir + `DataReader.data_path`.
-  - [ ] Future nicety: a "create new world" button in the UI that scaffolds `worlds/<name>/`
-    and walks the Setup steps, instead of bootstrapping the world from the CLI first.
+  - [x] **"Create new world" from the UI.** Card on the Setup page: paste the game URL (+
+    user agent, optional login cookie), it scaffolds `worlds/<name>/config.json` from
+    `config.example.json` (never overwrites), optionally starts the bot right away, and
+    switches the dashboard to the new world. `POST /app/world/create` →
+    `DataReader.create_world`. No CLI bootstrap needed anymore.
 - [x] **Notifications: add setup instructions.** The Notifications config tab now shows a
   step-by-step "Set up Telegram notifications" card (@BotFather token, add bot to chat, get
   chat id, enable + save) plus a **Send test message** button. Backend: data-driven
@@ -208,8 +217,8 @@ into a "Setup / World" area, ideally a first-run wizard.
   `BotManager` tracks/starts/stops each world's process by its `--world` cmdline). No `--world`
   = project root, unchanged. Foundation: `FileManager` data-dir + `DataReader.data_path`.
   `start.sh` takes world names (`./start.sh nl99 nl98`). See README "Running multiple worlds".
-  - [ ] Future nicety: a "create new world" button in the UI that scaffolds `worlds/<name>/`
-    and walks the Setup steps, instead of bootstrapping the world from the CLI first.
+  - [x] **"Create new world" from the UI** — done; see the same item under "Set-once
+    configuration" above (Setup page card → `POST /app/world/create`).
 
 ## Attack planner (alpha)
 
