@@ -14,6 +14,29 @@ from game.resources import ResourceManager
 # returns equal the squad's total carry capacity times this factor.
 SCAVENGE_LOOT_FACTOR = {1: 0.10, 2: 0.25, 3: 0.50, 4: 0.75}
 
+# Scavenge run duration in seconds:
+#   ((carry^2 * 100 * loot_factor^2) ^ 0.45 + 1800) * world_speed ^ -0.55
+# Community formula, verified against a live nl99 (speed 2.0) option-IV run:
+# 39,160 carry predicted 16h10m, observed 16h09m.
+SCAVENGE_DURATION_EXPONENT = 0.45
+SCAVENGE_DURATION_BASE_SECONDS = 1800
+SCAVENGE_DURATION_SPEED_EXPONENT = -0.55
+
+
+def scavenge_max_carry(option, max_seconds, world_speed=1.0):
+    """Largest squad carry capacity whose scavenge run on `option` returns
+    within max_seconds (inverse of the duration formula). 0 when not even a
+    minimal squad would make it back in time."""
+    factor = SCAVENGE_LOOT_FACTOR.get(int(option), 0)
+    if not factor or not max_seconds or max_seconds <= 0:
+        return 0
+    speed_factor = float(world_speed or 1.0) ** SCAVENGE_DURATION_SPEED_EXPONENT
+    inner = max_seconds / speed_factor - SCAVENGE_DURATION_BASE_SECONDS
+    if inner <= 0:
+        return 0
+    carry_squared = inner ** (1 / SCAVENGE_DURATION_EXPONENT) / (100 * factor * factor)
+    return int(math.sqrt(carry_squared))
+
 
 def scavenge_loot(option, carry_max):
     """Expected loot for one dispatched squad = carry capacity * option ratio."""
@@ -457,15 +480,17 @@ class TroopManager:
             return status
         return status
 
-    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=False):
+    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=0):
         """
         Used for the gather resources functionality where it uses two options:
         - Basic: all troops gather on the selected gather level
         - Advanced: troops are split
 
-        consolidate (night mode): override the split and send ALL troops into a
-        single run on the highest unlocked level <= selection. One long run to
-        cover an unattended night instead of several short split runs.
+        consolidate (night mode): seconds left until the night window ends.
+        When > 0, override the split and send troops into a single run on the
+        highest unlocked level <= selection, capped so the run is back home
+        when the window ends and normal spread runs take over. Troops that
+        don't fit the cap go out on the next-lower level in a later cycle.
         """
         if not self.can_gather:
             return False
@@ -608,6 +633,24 @@ class TroopManager:
                     self.logger.info(f"Gather operation {available_selection} is ready to start.")
                     selection = available_selection
 
+                    carry_budget = None
+                    if consolidate:
+                        world_cfg = FileManager.load_json_file("cache/world/config.json") or {}
+                        world_speed = float(world_cfg.get("speed", 1) or 1)
+                        carry_budget = scavenge_max_carry(
+                            available_selection, consolidate, world_speed
+                        )
+                        if carry_budget <= 0:
+                            self.logger.info(
+                                "Night consolidation: no time left for a run on option %s, skipping",
+                                available_selection,
+                            )
+                            break
+                        self.logger.info(
+                            "Night consolidation: capping option %s run at %d carry to return within %dm",
+                            available_selection, carry_budget, consolidate // 60,
+                        )
+
                     payload = {
                         "squad_requests[0][village_id]": self.village_id,
                         "squad_requests[0][option_id]": str(available_selection),
@@ -621,10 +664,13 @@ class TroopManager:
                         if item in disabled_units:
                             continue
                         if item in troops and int(troops[item]) > 0:
+                            count = int(troops[item])
+                            if carry_budget is not None:
+                                count = min(count, max(0, (carry_budget - total_carry) // int(carry)))
                             payload[
                                 "squad_requests[0][candidate_squad][unit_counts][%s]" % item
-                                ] = troops[item]
-                            total_carry += int(carry) * int(troops[item])
+                                ] = str(count)
+                            total_carry += int(carry) * count
                         else:
                             payload[
                                 "squad_requests[0][candidate_squad][unit_counts][%s]" % item

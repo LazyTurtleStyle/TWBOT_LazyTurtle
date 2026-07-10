@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from codecs import decode
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from core.extractors import Extractor
 from core.filemanager import FileManager
@@ -542,43 +542,48 @@ class Village:
                     self.attack.run()
 
     def _gather_night_consolidate(self):
-        """True when night-consolidation is enabled for this village and the
-        current hour is inside the configured night window. In that window all
-        scavenging troops go into one long run on the highest level instead of
-        being split - covering an unattended night. Turn it off (config or the
-        Scavenging quick-toggle) if you expect incoming, so troops do shorter
-        runs and return more often for defence.
+        """Seconds remaining in the night-consolidation window, or 0 when the
+        feature is off or the current hour is outside the window. In the window
+        all scavenging troops go into one long run on the highest level instead
+        of being split - covering an unattended night. The returned budget caps
+        the run's duration so it is back home by gather_night_end, when normal
+        spread runs take over. Turn it off (config or the Scavenging
+        quick-toggle) if you expect incoming, so troops do shorter runs and
+        return more often for defence.
 
         gather_night_min_hours (default 5): don't start a new consolidation run
-        if fewer than this many hours remain until gather_night_end. Prevents a
-        late-night run that overruns into active morning hours."""
+        if fewer than this many hours remain until gather_night_end. Prevents
+        pointlessly short consolidation runs late in the night."""
         if not self.get_village_config(
             self.village_id, parameter="gather_night_consolidate", default=False
         ):
-            return False
+            return 0
         start = int(self.get_village_config(
             self.village_id, parameter="gather_night_start", default=23))
         end = int(self.get_village_config(
             self.village_id, parameter="gather_night_end", default=7))
         if start == end:
-            return False
-        hour = datetime.now().hour
+            return 0
+        now = datetime.now()
+        hour = now.hour
         if start < end:
             in_window = start <= hour < end
         else:
             # Window wraps past midnight (e.g. 23 -> 6).
             in_window = hour >= start or hour < end
         if not in_window:
-            return False
+            return 0
+        end_time = now.replace(hour=end, minute=0, second=0, microsecond=0)
+        if end_time <= now:
+            end_time += timedelta(days=1)
+        seconds_left = int((end_time - now).total_seconds())
         # Don't start a new consolidation run if morning is too close.
         min_hours = int(self.get_village_config(
             self.village_id, parameter="gather_night_min_hours", default=5
         ))
-        if min_hours > 0:
-            hours_left = (24 - hour + end) if hour >= start else (end - hour)
-            if hours_left < min_hours:
-                return False
-        return True
+        if min_hours > 0 and seconds_left < min_hours * 3600:
+            return 0
+        return seconds_left
 
     def _scavenge_target_option(self, hq_level):
         """Highest scavenge option (1..4) this village should have unlocked

@@ -89,7 +89,7 @@ help_file = {
     'village.gather_enabled': 'Uses left-over units to gather additional resources if the option is enabled on the world',
     'village.gather_selection': 'The gather operation to preform (they have to be unlocked first)',
     'village.advanced_gather': 'Use a smarter scavenging split across the unlocked runs to maximise yield (only applies when gathering is enabled).',
-    'village.gather_night_consolidate': 'Night mode: during the window below, send ALL scavenging troops into one long run on the highest unlocked level instead of splitting, to cover an unattended night. Turn off (or use the Scavenging quick-toggle) if you expect incoming attacks.',
+    'village.gather_night_consolidate': 'Night mode: during the window below, send scavenging troops into one long run on the highest unlocked level instead of splitting, to cover an unattended night. The run is sized to be back home when the window ends; troops that don\'t fit go out on lower levels in later cycles. Turn off (or use the Scavenging quick-toggle) if you expect incoming attacks.',
     'village.gather_night_start': 'Hour (0-23) the night-consolidation window begins, e.g. 23.',
     'village.gather_night_end': 'Hour (0-23) the night-consolidation window ends, e.g. 7. Wraps past midnight when start > end.',
     'village.scavenge_unlock_enabled': 'Automatically unlock scavenging options (one at a time, lowest level first) once the headquarters reaches the level set below for each option.',
