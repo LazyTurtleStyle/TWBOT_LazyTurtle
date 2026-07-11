@@ -237,6 +237,14 @@ into a "Setup / World" area, ideally a first-run wizard.
   specifically multi-origin land-together math.)*
 - [x] **Troop check** — the planner table shows an "At home" column from the origin's troop
   snapshot; units with none at home are muted with a red 0.
+- [x] **Barb shaper (alpha)** — 4th tab on `/farms`: axe+ram attacks raze the walls of the
+  closest barbs whose last scout report shows a wall above `farms.shaper_min_wall`, so farming
+  stops bleeding LC. `game/barbshaper.py`: rams sized to full-raze in one clean win
+  (≈ `2·W·1.09^W`, +10% safety), axe escort sized so worst-case-luck (−25%) losses stay under
+  `shaper_loss_tolerance`; only engages report-proven-empty targets, re-hits only after a newer
+  report still shows a wall, idles while scavenging claims the axes (axe not in
+  `gather_exclude_units`), never sends under attack, spy rides along to refresh wall intel.
+  Untested against the live game — default off.
 - [x] **Map integration** — `/map`: hover previews a village, click pins it and shows
   "Plan attack" / "Schedule" buttons deep-linking to `/attacks?x=..&y=..#planner|#scheduler`
   (barbarian cells are clickable now too). The attacks page prefills both forms from `?x&y`.

@@ -9,6 +9,7 @@ from core.filemanager import FileManager
 from core.templates import TemplateManager
 from core.twstats import TwStats
 from game.attack import AttackManager
+from game.barbshaper import BarbShaper
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.map import Map
@@ -31,6 +32,7 @@ class Village:
     area = None
     snobman = None
     attack = None
+    barb_shaper = None
     resman = None
     def_man = None
     rep_man = None
@@ -540,6 +542,50 @@ class Village:
                         section="farms", parameter="max_farms", default=25
                     )
                     self.attack.run()
+
+                self.run_barb_shaper()
+
+    def run_barb_shaper(self):
+        """
+        Sends axe+ram attacks to raze the walls of nearby barbs (alpha).
+        Only runs when the axes aren't claimed by scavenging, and always
+        keeps rams home while under attack.
+        """
+        if not self.get_config(
+                section="farms", parameter="barb_shaper", default=False
+        ):
+            return
+        if not self.attack or (self.def_man and self.def_man.under_attack):
+            return
+        if "ram" in self.disabled_units:
+            self.logger.debug("Barb shaper: rams are disabled on this world")
+            return
+        if not self.barb_shaper:
+            self.barb_shaper = BarbShaper(
+                wrapper=self.wrapper,
+                village_id=self.village_id,
+                troopmanager=self.units,
+                map=self.area,
+                repman=self.rep_man,
+                attack_manager=self.attack,
+            )
+        shaper = self.barb_shaper
+        shaper.min_wall = self.get_config(
+            section="farms", parameter="shaper_min_wall", default=2)
+        shaper.loss_tolerance = self.get_config(
+            section="farms", parameter="shaper_loss_tolerance", default=1.0)
+        shaper.max_sends = self.get_config(
+            section="farms", parameter="shaper_max_sends", default=2)
+        shaper.ram_reserve = self.get_config(
+            section="farms", parameter="shaper_ram_reserve", default=0)
+        shaper.report_max_age_hours = self.get_config(
+            section="farms", parameter="report_max_age_hours", default=24)
+        gather_on = self.get_village_config(
+            self.village_id, parameter="gather_enabled", default=False)
+        excluded = list(self.disabled_units) + list(self.get_village_config(
+            self.village_id, parameter="gather_exclude_units", default=[]) or [])
+        shaper.scavenge_uses_axes = bool(gather_on and "axe" not in excluded)
+        shaper.run()
 
     def _gather_night_consolidate(self):
         """Seconds remaining in the night-consolidation window, or 0 when the

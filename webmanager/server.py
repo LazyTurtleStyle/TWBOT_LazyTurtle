@@ -953,7 +953,44 @@ def farm_settings_state():
         "scavenge_unlock_hq_3": template.get("scavenge_unlock_hq_3", 8),
         "scavenge_unlock_hq_4": template.get("scavenge_unlock_hq_4", 15),
     }
-    return {"farms": farms, "scavenge": scavenge, "villages": per_village}
+    # Barb shaper (alpha): config with defaults + the send/result log the
+    # game-side BarbShaper keeps in cache/barbshaper.json.
+    shaper_entries = []
+    try:
+        shaper_path = DataReader.data_path("cache", "barbshaper.json")
+        if os.path.exists(shaper_path):
+            with open(shaper_path) as f:
+                for vid, e in (json.load(f) or {}).items():
+                    e = dict(e or {})
+                    e["id"] = vid
+                    e["source_name"] = village_name(e.get("source"))
+                    shaper_entries.append(e)
+            shaper_entries.sort(key=lambda e: e.get("sent_at", 0), reverse=True)
+    except Exception:
+        pass
+    # Cost preview per wall level, using the exact same math the bot runs.
+    costs = []
+    try:
+        from game.barbshaper import BarbShaper
+        tolerance = float(farms.get("shaper_loss_tolerance", 1.0) or 1.0)
+        for wall in (3, 5, 7, 10, 12, 15, 20):
+            rams = BarbShaper.rams_to_raze(wall)
+            axes = BarbShaper.axes_needed(rams, wall, tolerance, 100000)
+            costs.append({"wall": wall, "rams": rams, "axes": axes})
+    except Exception:
+        pass
+    shaper = {
+        "enabled": bool(farms.get("barb_shaper", False)),
+        "min_wall": farms.get("shaper_min_wall", 2),
+        "loss_tolerance": farms.get("shaper_loss_tolerance", 1.0),
+        "max_sends": farms.get("shaper_max_sends", 2),
+        "ram_reserve": farms.get("shaper_ram_reserve", 0),
+        "entries": shaper_entries,
+        "costs": costs,
+    }
+
+    return {"farms": farms, "scavenge": scavenge, "villages": per_village,
+            "shaper": shaper}
 
 
 @app.route('/farms', methods=['GET'])

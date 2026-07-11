@@ -1,7 +1,7 @@
 {
   "build": {
     "name": "tw_bot",
-    "version": "2.4",
+    "version": "2.5",
     "author": "stefan2200"
   },
   "server": {
@@ -102,7 +102,12 @@
     "template_minimal_troops": {},
     "minimal_loss_tolerance": 0.5,
     "report_freshness_hours": 6,
-    "report_max_age_hours": 24
+    "report_max_age_hours": 24,
+    "barb_shaper": false,
+    "shaper_min_wall": 2,
+    "shaper_loss_tolerance": 1.0,
+    "shaper_max_sends": 2,
+    "shaper_ram_reserve": 0
   },
   "market": {
     "auto_trade": true,

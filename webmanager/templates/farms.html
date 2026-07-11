@@ -60,6 +60,8 @@
   <li class="nav-item"><a class="nav-link" href="#scavenge" data-pane="scavenge">Scavenging</a></li>
   <li class="nav-item"><a class="nav-link" href="#players" data-pane="players">Player farms
     {% if playerfarms.farms %}<span class="badge badge-dark">{{ playerfarms.farms|length }}</span>{% endif %}</a></li>
+  <li class="nav-item"><a class="nav-link" href="#shaper" data-pane="shaper">Barb shaper
+    <span class="badge badge-warning">alpha</span></a></li>
 </ul>
 
 <div id="pane-barbs">
@@ -408,6 +410,98 @@
 </div>
 </div><!-- /pane-players -->
 
+{% set sh = farms.shaper %}
+<div id="pane-shaper" style="display:none">
+<div class="alert alert-warning fs-intro" role="alert">
+  <strong>Alpha — not yet fired at a live wall.</strong> Sends <strong>axe + ram</strong> attacks at the
+  closest barbarian villages whose last scout report shows a wall above the level set below, so the
+  farm loop stops bleeding light cavalry on them. It only engages targets a report has proven
+  <em>empty</em>, sizes the ram count to raze the wall to 0 in one hit, and adds enough axes that even
+  a worst-case luck roll (−25%) stays under the loss tolerance. A spy rides along so the result report
+  shows the new wall level; a target is only re-hit once a <em>newer</em> report still shows a wall.
+</div>
+<div class="alert alert-secondary fs-intro" role="alert">
+  It stays idle for a village when scavenging claims its axes — uncheck <em>Axe</em> in the
+  <a href="#scavenge" onclick="showFarmPane('scavenge')">Scavenging</a> unit picker to free them — and it never sends while the village
+  is under attack. Rams must exist in the village; it won't recruit them for you.
+</div>
+
+<div class="row">
+  <div class="col-lg-6">
+    <div class="card config-card">
+      <div class="card-header">Barb shaper</div>
+      <div class="card-body">
+        {{ row('Barb shaping (barb_shaper)',
+               toggle('farm', 'barb_shaper', sh.enabled),
+               'Master switch. Runs with the farm cycle on every village that has idle axes and rams.') }}
+        {{ row('Target walls above (shaper_min_wall)',
+               num('farm', 'shaper_min_wall', sh.min_wall, '1', '2'),
+               'Only barbs whose last report shows a wall <strong>higher than</strong> this level are shaped.
+                Walls at or below it are left to the normal farm risk checks.') }}
+        {{ row('Loss tolerance (shaper_loss_tolerance)',
+               num('farm', 'shaper_loss_tolerance', sh.loss_tolerance, '0.1', '1.0'),
+               'Max expected troop deaths per shaping attack, computed at worst-case luck. The axe escort
+                is sized up until the estimate is below this.') }}
+        {{ row('Max sends per cycle (shaper_max_sends)',
+               num('farm', 'shaper_max_sends', sh.max_sends, '1', '2'),
+               'At most this many shaping attacks per village per farm cycle.') }}
+        {{ row('Rams to keep home (shaper_ram_reserve)',
+               num('farm', 'shaper_ram_reserve', sh.ram_reserve, '1', '0'),
+               'This many rams are never spent on shaping.') }}
+      </div>
+    </div>
+
+    <div class="card config-card">
+      <div class="card-header">What a wall costs (at the current loss tolerance)</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-striped mb-0">
+          <thead><tr><th>Wall level</th><th>Rams to raze</th><th>Axe escort</th></tr></thead>
+          <tbody>
+            {% for c in sh.costs %}
+            <tr><td>{{ c.wall }}</td><td>{{ c.rams }}</td>
+              <td>{% if c.axes is none %}<span class="text-danger">not reachable</span>{% else %}{{ c.axes }}{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card-body pt-2">
+        <small class="text-muted">Rams ≈ 2 · level · 1.09<sup>level</sup> (+10% safety) for a full raze in
+        one clean win; the escort covers the wall's passive defense (20 · 1.25<sup>level</sup> during the
+        fight, after the rams' pre-battle damage). A village without that many rams skips the target.</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card config-card">
+      <div class="card-header">Shaping log</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-striped mb-0">
+          <thead><tr><th>Target</th><th>Wall</th><th>Sent</th><th>From</th><th>When</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for e in sh.entries %}
+            <tr>
+              <td>{{ e.name or e.id }}
+                {% if e.coords and e.coords|length == 2 %}<small class="text-muted d-block">{{ e.coords[0] }}|{{ e.coords[1] }}
+                  {% if e.distance %}&middot; {{ e.distance }} fields{% endif %}</small>{% endif %}</td>
+              <td>{{ e.wall }}</td>
+              <td class="small">{{ e.rams }} rams<br>{{ e.axes }} axes</td>
+              <td class="small">{{ e.source_name or e.source }}</td>
+              <td><span class="pf-ago" data-ts="{{ e.sent_at }}"></span></td>
+              <td>{% if e.status == 'done' %}<span class="badge badge-success">wall {{ e.wall_after }}</span>
+                {% else %}<span class="badge badge-info">awaiting report</span>{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted">Nothing shaped yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div><!-- /pane-shaper -->
+
 <div id="fs-saved" class="alert alert-success py-1 px-3">Saved — applies next bot cycle</div>
 {% endblock %}
 
@@ -449,7 +543,7 @@
   });
 
   // --- tabs (hash-addressable so a reload stays on the same pane) ---
-  var FARM_PANES = ['barbs', 'scavenge', 'players'];
+  var FARM_PANES = ['barbs', 'scavenge', 'players', 'shaper'];
   function showFarmPane(name) {
     $('#farm-tabs .nav-link').each(function () {
       $(this).toggleClass('active', $(this).data('pane') === name);
