@@ -634,7 +634,9 @@ def get_village_config():
 def get_map():
     sync_data = sync()
     center_id = request.args.get("center", None)
-    center = next(iter(sync_data['bot'])) if not center_id else center_id
+    # No managed villages (e.g. no world cookie -> empty default world): there
+    # is nothing to center on, don't crash the whole page.
+    center = center_id or next(iter(sync_data['bot']), None)
     map_data = json.dumps(MapBuilder.build(sync_data['villages'], current_village=center, size=15))
     return render_template('map.html', data=sync_data, map=map_data)
 
