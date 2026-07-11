@@ -157,6 +157,13 @@ class WebWrapper:
                 continue
             if 'data-bot-protect="forced"' not in res.text:
                 FileManager.remove_file(self.CAPTCHA_BLOCK_FILE)
+                # The heartbeat was last stamped at the top of the cycle, before
+                # the captcha hit; without a refresh the dashboard flips from
+                # "captcha" straight to "no heartbeat - may be hung" while the
+                # resumed cycle is still finishing.
+                heartbeat = FileManager.load_json_file("cache/heartbeat.json") or {}
+                heartbeat["ts"] = int(time.time())
+                FileManager.save_json_file_atomic(heartbeat, "cache/heartbeat.json")
                 self.logger.info("Captcha cleared - resuming.")
                 Notification.send("Captcha cleared, bot resumed.")
                 return res
