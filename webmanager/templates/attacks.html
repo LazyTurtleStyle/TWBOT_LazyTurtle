@@ -333,6 +333,13 @@ const SPEEDS = {{ plan.speeds|tojson }};
 const WORLD_SPEED = {{ plan.world_speed }} || 1;
 const UNIT_SPEED = {{ plan.unit_speed }} || 1;
 const UNITS = {{ plan.units|tojson }};
+/* The game's internal unit codes are cryptic in places - show friendly
+   names in forms (ids/payloads keep the internal code). */
+const UNIT_NAMES = {
+	spy: 'scout (spy)', light: 'light cav', marcher: 'mounted archer',
+	heavy: 'heavy cav', knight: 'paladin', snob: 'noble',
+};
+function unitLabel(u) { return UNIT_NAMES[u] || u; }
 
 /* ---------- tabs (hash-addressable so a reload stays on the same pane) ---------- */
 const PANES = ['overview', 'scheduler', 'planner', 'noble'];
@@ -488,7 +495,7 @@ function originOpt() { const s = document.getElementById('s_origin'); return s.o
 function buildUnitInputs() {
 	const wrap = document.getElementById('s_units');
 	wrap.innerHTML = UNITS.map(u =>
-		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+
+		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+unitLabel(u)+
 		' <a href="#" class="unit-all-link" data-u="'+u+'" title="Send every '+u+' that is home at send time, even if fewer than now">all</a></label>'+
 		'<input id="su_'+u+'" type="text" inputmode="numeric" class="form-control form-control-sm" placeholder="0"></div>'
 	).join('');
@@ -587,7 +594,7 @@ function nbBuildUnits() {
 	if (!wrap) return;
 	const units = UNITS.filter(u => u !== 'snob');
 	wrap.innerHTML = units.map(u =>
-		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+'</label>'+
+		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+unitLabel(u)+'</label>'+
 		'<input id="nbu_'+u+'" type="number" min="0" class="form-control form-control-sm" placeholder="0"></div>'
 	).join('');
 }
