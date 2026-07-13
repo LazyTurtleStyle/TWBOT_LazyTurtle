@@ -45,6 +45,15 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
     `wall N` badge sourced from the report's scouted `extra.buildings` (amber for wall >= 5,
     grey otherwise). A scouted village with no wall reads `wall 0`; never-scouted targets show
     no badge. `OverviewBuilder.build` adds `wall` to each activity item; rendered in `bot.html`.
+  - [x] **In-game rename fixed for `--world` setups + auto-unit tag button.** The tag
+    editor's in-game rename always reported `no_endpoint_yet` on multi-world installs:
+    `rename_command_ingame` loaded the captured endpoint via the game module's
+    `load_label_endpoint()`, whose relative `cache/world/...` path resolves against
+    `FileManager`'s data root — set only in the bot process (`--world`), so the web process
+    read the default world's (missing) cache. `DataReader.incoming_rename_ingame` now loads
+    `incoming_label.json` world-aware and passes it as `label_cfg`. Verified live on nl99
+    (label applied in-game). Also added a third preset button next to fake/noble showing
+    `tag_auto` (the ≥ unit-speed estimate), which tags the incoming as that unit.
   - [x] **Live incoming-attack tracking.** A background poller (`game/incomings.py`,
     `IncomingManager`) scrapes the in-game incomings screen every few minutes and caches each
     individual command (origin village/player, arrival time, first-seen) under
@@ -113,6 +122,24 @@ sometimes vague help text. Goal: readable, well-explained settings.
   `gather_selection` (1–4) / `advanced_gather` controls that broadcast to every village +
   the template (new whitelisted `/app/scavenge/set` → `broadcast_village_set`), plus a
   per-village snapshot table linking to each village's config.
+- [x] **Scavenge while under attack** (`gather_when_attacked`, per-village, default off).
+  Scavenging normally pauses when a village has an incoming; this manual override keeps it
+  running for incomings you judged harmless (e.g. a lone scout run). Quick-controls toggle
+  ("Scavenge when attacked", broadcast to all villages), account-wide toggle + per-village
+  column on the Farms page, editable per village from the village config. Night
+  consolidation stays suspended under attack regardless (`do_gather` in `game/village.py`).
+  - [x] **Group policies (alpha, never live-fired):** `farms.gather_group_policies` maps an
+    in-game group (name, case-insensitive, or id) to a scavenging policy — `never` (troops
+    always home, front def; beats even `gather_enabled`), `pause_attacked` (scavenge but
+    always stop for incomings, mobile def) or `always` (keep scavenging through incomings,
+    safe/rim def). A policy is authoritative over the per-village `gather_when_attacked`
+    flag and the quick toggle; a village in several policy groups gets the safest one
+    (never > pause_attacked > always). Membership from the incoming tracker's hourly group
+    cache (`cache/world/groups.json`, `load_groups()`); inert while no groups are cached.
+    Picker UI on the Farms scavenge pane (a policy dropdown per cached group). Logic in
+    `Village._gather_group_policy` / `do_gather` (`game/village.py`).
+  - [ ] Possible refinement (not built): under-attack-only *unit* filter (e.g. scavenge
+    with def units only while an incoming is up), `gather_attacked_exclude_units`.
 - [x] Farm/scavenge activity is already in the P1 overview — `OverviewBuilder` aggregates
   `farm_targets`, `scout_targets` and `scavenging_runs` counters, shown on the status page.
   - [x] Added **Recent loot** (summed farm haul) and **Last activity** (time of the most
@@ -235,6 +262,21 @@ into a "Setup / World" area, ideally a first-run wizard.
   origins at once (land-together planning). *(Single-origin timed lands are covered by the
   Scheduler tab; snipe-on-defense is covered by the snipe/c-snipe engines — what's left here is
   specifically multi-origin land-together math.)*
+- [x] **Auto noble barb (alpha, never live-fired)** — 4th tab on `/attacks`: jobs
+  (from-village → barb target, escort-per-noble package, escort %-trigger) that walk a barb's
+  loyalty down until conquered. Loyalty from own reports (`extra["loyalty"]` parsed in
+  `game/reports.py`; none = 100) + regen (speed/h); overshoot guard caps concurrent nobles at
+  `ceil(loyalty/35)` (max drop) so a lucky train never lands a spare noble on an owned village —
+  at 100 that means 3 first, then re-evaluate. Sends what's home and repeats (round-trip wait via
+  `in_flight.back_at`). Multi-noble = sequential separate attacks (one noble per attack; extra
+  nobles in one attack add no loyalty drop); the in-game train/multi-send is NOT driven yet — the
+  first noble confirm page is dumped to `cache/world/noble_confirm.json` to build it from real
+  markup later. Auto-stops: conquered (owner in managed cache / loyalty < 0), taken by another
+  player (map-cache owner watch), red report, noble died without loyalty hit, 2 rally rejections.
+  Jobs start disarmed. Engine `game/noblebarb.py` (main-loop pass `run_noble_barbs`, kill switch
+  `farms.noble_barb`); UI endpoints `/app/noble/*`.
+  - [ ] Drive the in-game train/multi-send feature once a captured confirm page shows its form.
+  - [ ] Optional: also read loyalty from other players' reports shared in-tribe (not parsed now).
 - [x] **Troop check** — the planner table shows an "At home" column from the origin's troop
   snapshot; units with none at home are muted with a red 0.
 - [x] **Barb shaper (alpha)** — 4th tab on `/farms`: axe+ram attacks raze the walls of the

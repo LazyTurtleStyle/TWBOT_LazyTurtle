@@ -432,6 +432,27 @@ def get_config():
                            section_setup=section_setup)
 
 
+def noble_overview(data):
+    """Noble jobs + the source-village picker data for the noble tab."""
+    managed = data.get('bot', {}) or {}
+    sources = []
+    for vid, v in managed.items():
+        pub = (v or {}).get('public') or {}
+        loc = pub.get('location')
+        sources.append({
+            "id": str(vid),
+            "name": v.get('name') or pub.get('name') or vid,
+            "coord": "%s|%s" % (loc[0], loc[1]) if loc and len(loc) == 2 else "",
+            "troops": (v or {}).get('available_troops') or {},
+        })
+    sources.sort(key=lambda s: str(s["name"]))
+    jobs = sorted(
+        DataReader.noble_grab(),
+        key=lambda j: ({"armed": 0, "paused": 1, "stopped": 2, "done": 3}
+                       .get(j.get("status"), 9), -(j.get("created") or 0)))
+    return {"jobs": jobs, "sources": sources}
+
+
 @app.route('/attacks', methods=['GET'])
 def attacks_page():
     data = sync()
@@ -440,7 +461,38 @@ def attacks_page():
         key=lambda c: (c.get("status") != "pending", c.get("send_ts") or 0),
     )
     return render_template('attacks.html', data=data,
-                           plan=AttackPlanner.build(data), scheduled=scheduled)
+                           plan=AttackPlanner.build(data), scheduled=scheduled,
+                           noble=noble_overview(data))
+
+
+@app.route('/app/noble/add', methods=['POST'])
+def noble_add():
+    """Create an auto-noble job. Expects JSON: source_id, target_x, target_y,
+    escort {unit: count}, escort_min_pct. The job starts paused (disarmed)."""
+    body = request.get_json(silent=True) or {}
+    entry, error = DataReader.noble_add(
+        target_x=body.get("target_x"),
+        target_y=body.get("target_y"),
+        source_id=body.get("source_id"),
+        escort=body.get("escort") or {},
+        escort_min_pct=body.get("escort_min_pct", 80),
+    )
+    if error:
+        return jsonify({"ok": False, "error": error})
+    return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/noble/toggle', methods=['GET', 'POST'])
+def noble_toggle():
+    jid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.noble_toggle(jid)
+    return jsonify({"ok": state is not None, "status": state})
+
+
+@app.route('/app/noble/remove', methods=['GET', 'POST'])
+def noble_remove():
+    jid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    return jsonify({"ok": DataReader.noble_remove(jid)})
 
 
 @app.route('/app/attack/schedule', methods=['POST'])
@@ -858,11 +910,13 @@ QUICK_TOGGLES = {
     "build": ("Building", "building.manage_buildings"),
     "trade": ("Trading", "market.auto_trade"),
     "scavenge": ("Scavenging", "village_template.gather_enabled"),
+    "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
     "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).
 PER_VILLAGE_TOGGLES = {"scavenge": "gather_enabled",
+                       "scavenge_attacked": "gather_when_attacked",
                        "scavenge_night": "gather_night_consolidate"}
 
 
@@ -893,6 +947,7 @@ def quick_set():
 
 # Per-village scavenging parameters that the Farms page broadcasts account-wide.
 SCAVENGE_PARAMS = ("gather_enabled", "gather_selection", "advanced_gather",
+                   "gather_when_attacked",
                    "gather_night_consolidate", "gather_night_start", "gather_night_end",
                    "gather_exclude_units",
                    "scavenge_unlock_enabled", "prioritize_scavenge_unlock",
@@ -931,6 +986,7 @@ def farm_settings_state():
             "gather_enabled": bool(vcfg.get("gather_enabled", False)),
             "gather_selection": vcfg.get("gather_selection", template.get("gather_selection", 1)),
             "advanced_gather": bool(vcfg.get("advanced_gather", template.get("advanced_gather", True))),
+            "gather_when_attacked": bool(vcfg.get("gather_when_attacked", template.get("gather_when_attacked", False))),
             "gather_night_consolidate": bool(vcfg.get("gather_night_consolidate", template.get("gather_night_consolidate", False))),
         })
     per_village.sort(key=lambda v: str(v["name"]))
@@ -944,6 +1000,12 @@ def farm_settings_state():
         # Units NOT to send scavenging (e.g. keep light cav for farming). Stored as
         # an exclude list; the UI shows the inverse ("scavenge with these units").
         "gather_exclude_units": list(template.get("gather_exclude_units", []) or []),
+        "gather_when_attacked": bool(template.get("gather_when_attacked", False)),
+        # Group policies (alpha): in-game group (name or id) -> never /
+        # pause_attacked / always; authoritative over the per-village flag.
+        "gather_group_policies": dict(farms.get("gather_group_policies") or {}),
+        # The in-game groups the incoming tracker has cached, for the picker.
+        "village_groups": DataReader.groups_grab(),
         "archers_enabled": bool((config.get("world", {}) or {}).get("archers_enabled", False)),
         "gather_night_consolidate": bool(template.get("gather_night_consolidate", False)),
         "gather_night_start": template.get("gather_night_start", 23),

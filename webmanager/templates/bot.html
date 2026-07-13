@@ -137,6 +137,7 @@
 							<input class="field" id="tag-{{ c.command_id }}" value="{{ c.tag or '' }}" placeholder="tag" style="flex:1">
 							<button class="btn btn-sm" onclick="presetTag('{{ c.command_id }}','fake')">fake</button>
 							<button class="btn btn-sm" onclick="presetTag('{{ c.command_id }}','noble')">noble</button>
+							{% if c.tag_auto %}<button class="btn btn-sm" title="tag as the auto-detected slowest-unit estimate" onclick="presetTag('{{ c.command_id }}','{{ c.tag_auto }}')">{{ c.tag_auto }}</button>{% endif %}
 							<button class="btn btn-sm btn-ember" onclick="saveTag('{{ c.command_id }}')">Save</button>
 						</div>
 						<small class="faint" id="tagstatus-{{ c.command_id }}"></small>

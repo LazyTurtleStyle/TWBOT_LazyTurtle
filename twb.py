@@ -43,6 +43,7 @@ from game import attack_scheduler
 from game import csnipe
 from game import dailybonus
 from game import snipe
+from game.noblebarb import NobleBarbManager
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
@@ -706,6 +707,17 @@ class TWB:
             logging.getLogger("PlayerFarm").warning(
                 "Player farm pass failed: %s", exc)
 
+    def run_noble_barbs(self, config):
+        """One auto-noble pass (alpha). Runs AFTER the village loop so the
+        troop/report caches it decides from are fresh this cycle."""
+        if not config.get("farms", {}).get("noble_barb", True):
+            return
+        try:
+            NobleBarbManager(wrapper=self.wrapper, config=config).run()
+        except Exception as exc:
+            logging.getLogger("NobleBarb").warning(
+                "Noble-barb pass failed: %s", exc)
+
     def run(self):
         """
         Run the bot
@@ -903,6 +915,8 @@ class TWB:
 
                 if not config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
+
+                self.run_noble_barbs(config)
 
                 sleep = 0
                 if self.is_active_hours(config=config):

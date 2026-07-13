@@ -20,6 +20,10 @@
 	<li class="nav-item"><a class="nav-link" href="#scheduler" data-pane="scheduler">Scheduler
 		{% if pending_count %}<span class="badge badge-danger">{{ pending_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#planner" data-pane="planner">Planner</a></li>
+	{% set noble_armed = noble.jobs|selectattr('status', 'equalto', 'armed')|list|length %}
+	<li class="nav-item"><a class="nav-link" href="#noble" data-pane="noble">Noble barb
+		<span class="badge badge-warning">alpha</span>
+		{% if noble_armed %}<span class="badge badge-danger">{{ noble_armed }}</span>{% endif %}</a></li>
 </ul>
 
 <!-- ---------- Overview: tracked targets ---------- -->
@@ -220,6 +224,107 @@
 	</div>
 </div>
 </div><!-- /pane-planner -->
+
+<!-- ---------- Noble barb: auto-conquer a barbarian village (alpha) ---------- -->
+<div id="pane-noble" style="display:none">
+<div class="alert alert-secondary small" role="alert">
+	Walks a barbarian village's loyalty ("toestemming") down with noble attacks until it is yours.
+	Loyalty is tracked from your own reports (no report yet = assumed 100, plus regeneration over time);
+	the overshoot guard never has more than <code>ceil(loyalty / 35)</code> nobles under way at once, so a
+	lucky train can't drop a spare noble on a village you already own. With fewer nobles home it sends
+	what's there and repeats after the round trip. Multiple nobles go out as separate attacks seconds
+	apart. Auto-stops (never auto-resumes): conquered &#127881;, taken by another player, red report,
+	noble died without its hit landing, or the rally point refuses twice.
+	<strong>Jobs start disarmed — arm them yourself.</strong>
+</div>
+<div class="row">
+	<div class="col-lg-5 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>New noble job</strong></div>
+			<div class="card-body">
+				<div class="form-group mb-2">
+					<label class="small mb-1">From village (needs the academy &amp; nobles)</label>
+					<select id="nb_source" class="form-control form-control-sm">
+						{% for s in noble.sources %}
+						<option value="{{ s.id }}" data-troops='{{ s.troops|tojson }}'>
+							{{ s.name }}{% if s.coord %} ({{ s.coord }}){% endif %}</option>
+						{% else %}
+						<option value="">No managed villages found</option>
+						{% endfor %}
+					</select>
+					<div id="nb_avail" class="small text-muted mt-1"></div>
+				</div>
+				<div class="form-row">
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target X</label>
+						<input id="nb_tx" type="number" class="form-control form-control-sm" />
+					</div>
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Target Y</label>
+						<input id="nb_ty" type="number" class="form-control form-control-sm" />
+					</div>
+				</div>
+				<label class="small mb-1">Escort per noble <span class="text-muted">— sent along with every noble attack</span></label>
+				<div id="nb_units" class="form-row"></div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Escort trigger (%)</label>
+					<input id="nb_pct" type="number" min="0" max="100" value="80" class="form-control form-control-sm" style="width:6rem" />
+					<small class="text-muted">Send when at least this % of the escort is home (some troops may be
+						out farming); it sends what's there, capped at the configured amounts.</small>
+				</div>
+				<button id="nb_submit" class="btn btn-primary btn-sm" onclick="nbAdd()">Add job (disarmed)</button>
+				<div id="nb_msg" class="small mt-2"></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="col-lg-7 mb-3">
+		<div class="card">
+			<div class="card-header py-2"><strong>Noble jobs ({{ noble.jobs|length }})</strong></div>
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr>
+						<th>Target</th><th>From</th><th>Status</th>
+						<th class="text-right" title="Last reported loyalty + regeneration; 100 when no report yet">Loyalty &le;</th>
+						<th class="text-right" title="nobles home in the source / worst-case still needed">Nobles</th>
+						<th>Last event</th><th></th>
+					</tr></thead>
+					<tbody>
+						{% for j in noble.jobs %}
+						<tr>
+							<td class="coord">{{ j.target_x }}|{{ j.target_y }}
+								{% if j.target_name %}<small class="text-muted d-block">{{ j.target_name }}</small>{% endif %}</td>
+							<td><small>{{ j.source_name }}</small>
+								{% if j.distance %}<small class="text-muted d-block">{{ j.distance }} fields</small>{% endif %}</td>
+							<td>
+								{% if j.status == 'armed' %}<span class="badge badge-success">armed</span>
+								{% elif j.status == 'paused' %}<span class="badge badge-secondary">disarmed</span>
+								{% elif j.status == 'done' %}<span class="badge badge-primary">conquered &#127881;</span>
+								{% else %}<span class="badge badge-danger" title="{{ j.stop_reason }}">stopped</span>{% endif %}
+								{% if j.in_flight and j.in_flight.nobles %}
+								<span class="badge badge-info" title="nobles under way, waiting for the round trip">{{ j.in_flight.nobles }} flying</span>{% endif %}
+								{% if j.stop_reason %}<small class="text-muted d-block">{{ j.stop_reason }}</small>{% endif %}</td>
+							<td class="text-right">{% if j.status == 'done' %}—{% else %}{{ j.loyalty_est }}{% endif %}</td>
+							<td class="text-right">{{ j.nobles_home }} home{% if j.status != 'done' %}
+								<small class="text-muted d-block">&le; {{ j.nobles_needed }} needed, {{ j.train_allowed }}/send</small>{% endif %}</td>
+							<td><small class="text-muted">{% if j.log %}{{ j.log[-1].msg }}{% else %}—{% endif %}</small></td>
+							<td class="text-right" style="white-space:nowrap">
+								{% if j.status != 'done' %}
+								<button class="btn btn-sm py-0 {{ 'btn-outline-secondary' if j.status == 'armed' else 'btn-outline-success' }}"
+									onclick="nbToggle('{{ j.id }}')">{{ 'Disarm' if j.status == 'armed' else 'Arm' }}</button>
+								{% endif %}
+								<button class="btn btn-outline-danger btn-sm py-0" onclick="nbRemove('{{ j.id }}')">&times;</button></td>
+						</tr>
+						{% else %}
+						<tr><td colspan="7" class="text-muted">No noble jobs yet.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+</div>
+</div><!-- /pane-noble -->
 {% endblock %}
 
 {% block scripts %}
@@ -230,7 +335,7 @@ const UNIT_SPEED = {{ plan.unit_speed }} || 1;
 const UNITS = {{ plan.units|tojson }};
 
 /* ---------- tabs (hash-addressable so a reload stays on the same pane) ---------- */
-const PANES = ['overview', 'scheduler', 'planner'];
+const PANES = ['overview', 'scheduler', 'planner', 'noble'];
 function showPane(name) {
 	document.querySelectorAll('#atk-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -475,6 +580,65 @@ updateAvail();
 	recompute();
 	schedPreview();
 })();
+
+/* ---------- Noble barb (alpha) ---------- */
+function nbBuildUnits() {
+	const wrap = document.getElementById('nb_units');
+	if (!wrap) return;
+	const units = UNITS.filter(u => u !== 'snob');
+	wrap.innerHTML = units.map(u =>
+		'<div class="form-group col-3 mb-2"><label class="small mb-0">'+u+'</label>'+
+		'<input id="nbu_'+u+'" type="number" min="0" class="form-control form-control-sm" placeholder="0"></div>'
+	).join('');
+}
+function nbUpdateAvail() {
+	const sel = document.getElementById('nb_source');
+	if (!sel) return;
+	const opt = sel.options[sel.selectedIndex];
+	let troops = {};
+	try { troops = JSON.parse((opt && opt.getAttribute('data-troops')) || '{}'); } catch(e) {}
+	const nobles = troops.snob || 0;
+	const parts = Object.keys(troops).filter(u => u !== 'snob' && troops[u] > 0).map(u => u+' '+troops[u]);
+	document.getElementById('nb_avail').innerHTML =
+		'<strong>'+nobles+' noble'+(nobles === 1 ? '' : 's')+' home</strong>' +
+		(parts.length ? ' · ' + parts.join(', ') : ' · no other troop snapshot yet');
+}
+function nbAdd() {
+	const escort = {};
+	UNITS.filter(u => u !== 'snob').forEach(u => {
+		const el = document.getElementById('nbu_'+u);
+		const n = parseInt((el && el.value) || '', 10);
+		if (n > 0) escort[u] = n;
+	});
+	const msg = document.getElementById('nb_msg');
+	msg.textContent = 'Adding…';
+	fetch('/app/noble/add', {
+		method: 'POST',
+		headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({
+			source_id: document.getElementById('nb_source').value,
+			target_x: document.getElementById('nb_tx').value,
+			target_y: document.getElementById('nb_ty').value,
+			escort: escort,
+			escort_min_pct: document.getElementById('nb_pct').value,
+		}),
+	}).then(r => r.json()).then(resp => {
+		if (!resp.ok) { msg.innerHTML = '<span class="text-danger">'+(resp.error || 'failed')+'</span>'; return; }
+		location.hash = '#noble'; location.reload();
+	}).catch(() => { msg.innerHTML = '<span class="text-danger">request failed</span>'; });
+}
+function nbToggle(id) {
+	fetch('/app/noble/toggle?id='+encodeURIComponent(id))
+		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
+}
+function nbRemove(id) {
+	if (!confirm('Remove this noble job?')) return;
+	fetch('/app/noble/remove?id='+encodeURIComponent(id))
+		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
+}
+nbBuildUnits();
+const nbSource = document.getElementById('nb_source');
+if (nbSource) { nbSource.addEventListener('change', nbUpdateAvail); nbUpdateAvail(); }
 
 /* Live "sends in" countdown for the scheduled-commands table. */
 setInterval(function() {

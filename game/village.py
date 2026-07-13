@@ -12,6 +12,7 @@ from game.attack import AttackManager
 from game.barbshaper import BarbShaper
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
+from game.incomings import load_groups
 from game.map import Map
 from game.reports import ReportManager
 from game.resources import ResourceManager
@@ -683,26 +684,96 @@ class Village:
             prioritise and status.get("pending") and not status.get("affordable", True)
         )
 
+    # Group scavenging policies, most restrictive first: a village in several
+    # policy groups gets the safest one (never > pause_attacked > always).
+    GATHER_GROUP_POLICIES = ("never", "pause_attacked", "always")
+
+    def _gather_group_policy(self):
+        """This village's scavenging policy from in-game group membership
+        (alpha), or None when no policy group contains it.
+
+        farms.gather_group_policies maps an in-game group (name,
+        case-insensitive, or id) to a policy:
+          never          - troops always stay home, no scavenging at all
+                           (front-def group)
+          pause_attacked - scavenge normally, stop while an incoming is up,
+                           ignoring gather_when_attacked (mobile-def group)
+          always         - keep scavenging even while under attack
+                           (safe/rim def group)
+        Membership comes from the incoming tracker's hourly group cache;
+        without cached groups the policies are inert. A group policy is
+        authoritative: it beats the per-village gather_when_attacked flag
+        and the quick toggle. 'never' also beats gather_enabled.
+        """
+        policies = self.get_config(
+            section="farms", parameter="gather_group_policies", default={}) or {}
+        if not policies:
+            return None
+        groups = load_groups()
+        if not groups:
+            self.logger.warning(
+                "farms.gather_group_policies is set but no in-game groups are "
+                "cached yet - is the incoming tracker running?"
+            )
+            return None
+        lookup = {}
+        for key, policy in policies.items():
+            if policy in self.GATHER_GROUP_POLICIES:
+                lookup[str(key).lower()] = policy
+        mine = []
+        for group in groups:
+            if str(self.village_id) not in [str(v) for v in group.get("villages") or []]:
+                continue
+            for key in (str(group.get("name", "")).lower(), str(group.get("id", ""))):
+                if key in lookup:
+                    mine.append(lookup[key])
+        for policy in self.GATHER_GROUP_POLICIES:
+            if policy in mine:
+                return policy
+        return None
+
     def do_gather(self):
         """
-        Runs gathering if unlocked and active
+        Runs gathering if unlocked and active. A group policy (see
+        _gather_group_policy) decides behaviour first; without one the village
+        pauses while under attack unless its gather_when_attacked flag is
+        armed - a manual override for incomings you judged harmless (e.g. a
+        lone scout run). Flip it back off when a real attack is inbound.
         """
         self.units.can_gather = self.get_village_config(
             self.village_id, parameter="gather_enabled", default=False
         )
-        if not self.def_man or not self.def_man.under_attack:
-            extra_exclude = self.get_village_config(
-                self.village_id, parameter="gather_exclude_units", default=[]
+        policy = self._gather_group_policy()
+        if policy == "never":
+            self.logger.debug("Scavenging blocked by group policy 'never'")
+            return
+        under_attack = bool(self.def_man and self.def_man.under_attack)
+        if under_attack:
+            if policy == "pause_attacked":
+                return
+            if policy != "always" and not self.get_village_config(
+                self.village_id, parameter="gather_when_attacked", default=False
+            ):
+                return
+            self.logger.info(
+                "Village under attack but scavenge-under-attack is armed "
+                "(%s), scavenging anyway",
+                "group policy" if policy == "always" else "gather_when_attacked",
             )
-            disabled = list(self.disabled_units) + [u for u in extra_exclude if u not in self.disabled_units]
-            self.units.gather(
-                selection=self.get_village_config(
-                    self.village_id, parameter="gather_selection", default=1
-                ),
-                disabled_units=disabled,
-                advanced_gather=self.get_village_config(self.village_id, parameter="advanced_gather", default=1),
-                consolidate=self._gather_night_consolidate(),
-            )
+        extra_exclude = self.get_village_config(
+            self.village_id, parameter="gather_exclude_units", default=[]
+        )
+        disabled = list(self.disabled_units) + [u for u in extra_exclude if u not in self.disabled_units]
+        self.units.gather(
+            selection=self.get_village_config(
+                self.village_id, parameter="gather_selection", default=1
+            ),
+            disabled_units=disabled,
+            advanced_gather=self.get_village_config(self.village_id, parameter="advanced_gather", default=1),
+            # Never night-consolidate under attack: one long run with every
+            # troop is the opposite of what you want with an incoming.
+            consolidate=0 if under_attack else self._gather_night_consolidate(),
+        )
 
     def go_manage_market(self):
         """

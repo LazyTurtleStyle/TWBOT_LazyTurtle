@@ -647,11 +647,15 @@ def incoming_session_state():
     return FileManager.load_json_file(SESSION_STATE_CACHE)
 
 
-def rename_command_ingame(command_id, label, cookies, endpoint, user_agent=None):
+def rename_command_ingame(command_id, label, cookies, endpoint, user_agent=None,
+                          label_cfg=None):
     """Replay the game's own label-rename request to tag an incoming attack.
 
-    Uses the endpoint captured from the live incomings page (load_label_endpoint)
-    plus the bot's session cookies. Returns a small status dict; never raises.
+    Uses the endpoint captured from the live incomings page (load_label_endpoint,
+    or pass label_cfg explicitly - the web process must, since its FileManager
+    has no per-world data root and load_label_endpoint would read the wrong
+    world) plus the bot's session cookies. Returns a small status dict; never
+    raises.
 
     No endpoint is ever guessed: if the bot has not yet scraped a logged-in
     incomings page we report 'no_endpoint_yet' and the caller keeps the tag
@@ -659,7 +663,7 @@ def rename_command_ingame(command_id, label, cookies, endpoint, user_agent=None)
     the new text is sent under the field names QuickEdit/TribalWars accept (extra
     unused keys are harmless).
     """
-    cfg = load_label_endpoint()
+    cfg = label_cfg or load_label_endpoint()
     if not cfg or not cfg.get("screen"):
         return {"ok": False, "reason": "no_endpoint_yet"}
     if not cookies:

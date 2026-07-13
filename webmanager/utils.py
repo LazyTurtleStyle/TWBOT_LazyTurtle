@@ -30,6 +30,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     playerfarm = None
 
 try:
+    from game import noblebarb
+except Exception:  # pragma: no cover - dashboard still works without it
+    noblebarb = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -751,6 +756,117 @@ class DataReader:
         playerfarm.add_farm(entry, path=DataReader.playerfarm_path())
         return entry, None
 
+    NOBLE_REL = ("cache", "noble_jobs.json")
+
+    @staticmethod
+    def noble_path():
+        """World-aware path of the noble-job list the bot reads/writes."""
+        return DataReader.data_path(*DataReader.NOBLE_REL)
+
+    @staticmethod
+    def noble_grab():
+        """World-aware read of the noble jobs, enriched for display: current
+        loyalty estimate, worst-case nobles still needed and the overshoot
+        guard's train size, plus the source village's nobles at home."""
+        if noblebarb is None:
+            return []
+        jobs = noblebarb.load_jobs(path=DataReader.noble_path())
+        world = DataReader.cache_grab("world") or {}
+        try:
+            speed = float((world.get("config") or {}).get("speed") or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+        managed = DataReader.cache_grab("managed") or {}
+        for job in jobs:
+            est = noblebarb.estimate_loyalty(job, speed=speed)
+            job["loyalty_est"] = est
+            job["nobles_needed"] = noblebarb.nobles_needed_worst_case(est)
+            job["train_allowed"] = noblebarb.max_safe_nobles(est)
+            source = managed.get(str(job.get("source_id"))) or {}
+            job["nobles_home"] = int(
+                (source.get("available_troops") or {}).get("snob", 0) or 0)
+        return jobs
+
+    @staticmethod
+    def noble_add(target_x, target_y, source_id, escort, escort_min_pct):
+        """Add an auto-noble job. The target must be a barbarian village in
+        the map cache (that is where its id for report matching and the
+        ownership watch come from). Returns (entry, error_message)."""
+        if noblebarb is None:
+            return None, "noble-barb engine unavailable"
+        source_id = str(source_id)
+        managed = DataReader.cache_grab("managed")
+        origin = managed.get(source_id) or {}
+        pub = origin.get("public") or {}
+        loc = pub.get("location")
+        if not loc or len(loc) != 2:
+            return None, "unknown source village"
+        try:
+            tx, ty = int(target_x), int(target_y)
+            escort_min_pct = max(0, min(100, int(float(escort_min_pct))))
+        except (TypeError, ValueError):
+            return None, "invalid numbers in the form"
+
+        selected = {}
+        for unit, count in (escort or {}).items():
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                continue
+            if count > 0 and unit != "snob":
+                selected[str(unit)] = count
+
+        target = None
+        for v in DataReader.cache_grab("villages").values():
+            vloc = v.get("location")
+            if vloc and len(vloc) == 2 and int(vloc[0]) == tx and int(vloc[1]) == ty:
+                target = v
+                break
+        if not target:
+            return None, ("no village known at %d|%d yet - it appears in the "
+                          "map cache once the bot has seen that area" % (tx, ty))
+        if str(target.get("owner") or "0") != "0":
+            return None, "that village is not barbarian (owner %s)" % target.get("owner")
+        if str(target.get("id")) in managed:
+            return None, "that village is already yours"
+        for existing in DataReader.noble_grab():
+            if str(existing.get("target_id")) == str(target.get("id")) \
+                    and existing.get("status") != "done":
+                return None, "there is already a noble job on that village"
+
+        distance = None
+        if field_distance:
+            distance = round(field_distance((loc[0], loc[1]), (tx, ty)), 1)
+        name = target.get("name")
+        entry = {
+            "id": uuid.uuid4().hex[:12],
+            "created": int(time.time()),
+            "status": "paused",
+            "target_id": str(target.get("id")),
+            "target_x": tx, "target_y": ty,
+            "target_name": name if isinstance(name, str) and name else "%d|%d" % (tx, ty),
+            "source_id": source_id,
+            "source_name": origin.get("name") or pub.get("name") or source_id,
+            "escort": selected,
+            "escort_min_pct": escort_min_pct,
+            "distance": distance,
+        }
+        noblebarb.add_job(entry, path=DataReader.noble_path())
+        return entry, None
+
+    @staticmethod
+    def noble_toggle(job_id):
+        """Arm/pause (or re-arm a stopped) noble job."""
+        if noblebarb is None:
+            return None
+        return noblebarb.toggle_job(str(job_id), path=DataReader.noble_path())
+
+    @staticmethod
+    def noble_remove(job_id):
+        if noblebarb is None:
+            return False
+        return noblebarb.remove_job(str(job_id), path=DataReader.noble_path())
+
     @staticmethod
     def playerfarm_toggle(farm_id):
         """Pause/resume (or re-enable a stopped) hit-list target."""
@@ -919,7 +1035,20 @@ class DataReader:
                 user_agent = json.load(cf).get("bot", {}).get("user_agent")
         except (OSError, ValueError):
             pass
-        return rename_command_ingame(command_id, label, cookies, endpoint, user_agent)
+        # Load the captured rename endpoint world-aware: the game module's own
+        # load_label_endpoint resolves against the bot's FileManager data root,
+        # which the web process does not have, so it would read the default
+        # world's cache and report 'no_endpoint_yet' on --world setups.
+        label_cfg = None
+        try:
+            cache_path = DataReader.data_path("cache", "world", "incoming_label.json")
+            if os.path.exists(cache_path):
+                with open(cache_path) as f:
+                    label_cfg = json.load(f)
+        except (OSError, ValueError):
+            pass
+        return rename_command_ingame(command_id, label, cookies, endpoint,
+                                     user_agent, label_cfg=label_cfg)
 
     @staticmethod
     def apply_village_template(village_id=None):

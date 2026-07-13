@@ -323,6 +323,14 @@ class ReportManager:
                 data_away = self.re_unit(Extractor.units_in_total(units_away.group(1)))
                 extra["units_away"] = data_away
 
+        # Loyalty ("Instemming") change - only present when a noble hit. The
+        # noble-barb manager tracks the target's loyalty from this.
+        loyalty = re.search(
+            r'(?is)(?:instemming|loyalty|zustimmung).{0,200}?'
+            r'(?:van|from|von)\s+(\d+)\s+(?:naar|to|auf)\s+(-?\d+)', report)
+        if loyalty:
+            extra["loyalty"] = [int(loyalty.group(1)), int(loyalty.group(2))]
+
         attack_type = "scout" if scout_results and not results else "attack"
         res = self.put(
             report_id, attack_type, from_village, to_village, data=extra, losses=losses

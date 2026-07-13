@@ -542,9 +542,9 @@
 	<div class="quick-panel">
 		<div class="qp-head"><h3>Quick controls</h3><button class="btn btn-sm" onclick="toggleQuick()">Close</button></div>
 		{% for t in quick_toggles %}
-		<div class="qc-row{% if t.key == 'scavenge_night' %} qc-child{% elif t.key == 'scavenge' %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
+		<div class="qc-row{% if t.key in ('scavenge_night', 'scavenge_attacked') %} qc-child{% elif t.key == 'scavenge' %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
 			<div><div class="qc-name">{{ t.label }}</div>
-				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_night':'one long overnight run'}.get(t.key, '') }}</div></div>
+				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run'}.get(t.key, '') }}</div></div>
 			<span class="toggle {{ 'on' if t.on else '' }}"><span class="track"></span></span>
 		</div>
 		{% endfor %}
