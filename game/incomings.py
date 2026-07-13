@@ -323,7 +323,12 @@ class IncomingManager:
             if not isinstance(entry, dict):
                 continue
             gid = str(entry.get("group_id", "") or "")
-            gtype = entry.get("type")
+            # The live menu payload types groups as "group_dynamic" /
+            # "group_static" (and "group_all" for the built-in pseudo group);
+            # normalise so both prefixed and bare forms parse.
+            gtype = str(entry.get("type") or "")
+            if gtype.startswith("group_"):
+                gtype = gtype[len("group_"):]
             if not gid or gid == "0" or gtype not in ("static", "dynamic"):
                 continue
             groups.append({
