@@ -199,31 +199,47 @@
           <div class="config-row">
             <div class="config-row-label"><span class="config-row-name">Scavenging policy per group <span class="badge badge-warning">alpha</span></span></div>
             <div class="config-row-control">
-              {% if sc.village_groups %}
-              {% for g in sc.village_groups %}
-              {% set gp = sc.gather_group_policies.get(g.name) or sc.gather_group_policies.get(g.id) %}
+              {% for r in sc.group_policy_rows %}
               <div class="mb-1">
-                <select class="form-control form-control-sm d-inline-block scav-group-sel" style="width:15rem" data-group="{{ g.name }}">
-                  <option value=""{% if not gp %} selected{% endif %}>&mdash; (village settings decide)</option>
-                  <option value="never"{% if gp == 'never' %} selected{% endif %}>Never scavenge</option>
-                  <option value="pause_attacked"{% if gp == 'pause_attacked' %} selected{% endif %}>Scavenge, pause when attacked</option>
-                  <option value="always"{% if gp == 'always' %} selected{% endif %}>Scavenge, even when attacked</option>
+                <select class="form-control form-control-sm d-inline-block scav-group-sel" style="width:15rem" data-group="{{ r.key }}">
+                  <option value="never"{% if r.policy == 'never' %} selected{% endif %}>Never scavenge</option>
+                  <option value="pause_attacked"{% if r.policy == 'pause_attacked' %} selected{% endif %}>Scavenge, pause when attacked</option>
+                  <option value="always"{% if r.policy == 'always' %} selected{% endif %}>Scavenge, even when attacked</option>
                 </select>
-                {{ g.name }} <span class="badge badge-secondary">{{ g.type }}</span>
-                <span class="text-muted">{{ g.villages|length }} village{{ 's' if g.villages|length != 1 else '' }}</span>
+                <strong>{{ r.name }}</strong>
+                {% if r.missing %}<span class="badge badge-danger" title="no in-game group with this name/id is cached (deleted or renamed?) — the policy does nothing until it exists again">not found</span>
+                {% else %}<span class="badge badge-secondary">{{ r.type }}</span>
+                <span class="text-muted">{{ r.villages }} village{{ 's' if r.villages != 1 else '' }}</span>{% endif %}
+                <button class="btn btn-sm btn-outline-danger py-0 scav-group-del" data-group="{{ r.key }}" title="remove this policy">&times;</button>
               </div>
-              {% endfor %}
               {% else %}
+              <div class="text-muted mb-1">No group policies set — all villages follow their own settings.</div>
+              {% endfor %}
+              {% if sc.group_policy_unassigned %}
+              <div class="mt-1">
+                <select id="scav-group-add-name" class="form-control form-control-sm d-inline-block" style="width:12rem">
+                  {% for g in sc.group_policy_unassigned %}
+                  <option value="{{ g.name }}">{{ g.name }} ({{ g.type }}, {{ g.villages|length }})</option>
+                  {% endfor %}
+                </select>
+                <select id="scav-group-add-policy" class="form-control form-control-sm d-inline-block" style="width:15rem">
+                  <option value="never">Never scavenge</option>
+                  <option value="pause_attacked">Scavenge, pause when attacked</option>
+                  <option value="always">Scavenge, even when attacked</option>
+                </select>
+                <button class="btn btn-sm btn-outline-success py-0" id="scav-group-add">Add</button>
+              </div>
+              {% elif not sc.village_groups and not sc.group_policy_rows %}
               <span class="text-muted">No in-game village groups found — create manual/dynamic groups in TribalWars first; the incoming tracker picks them up within the hour.</span>
               {% endif %}
             </div>
           </div>
-          <div class="fs-help text-muted">Your in-game manual/dynamic groups, each with a scavenging policy — any group name works, it's
-            entirely up to how you organise your account (e.g. a front-line group &rarr; <strong>Never</strong> so troops stay home at all
-            times even with scavenging enabled; mobile defense &rarr; <strong>pause when attacked</strong>, normal scavenging that always
-            stops for incomings; a safe/rim group &rarr; <strong>even when attacked</strong>, keeps scavenging through incomings).
-            A policy beats the per-village settings and the toggles above. A village in several policy groups gets the safest one
-            (never &gt; pause &gt; always). Dynamic membership refreshes hourly via the incoming tracker. Alpha: never live-fired yet.</div>
+          <div class="fs-help text-muted">Give an in-game manual/dynamic group a scavenging policy — any group, whatever its name (e.g. a
+            front-line group &rarr; <strong>Never</strong> so troops stay home at all times even with scavenging enabled; mobile defense
+            &rarr; <strong>pause when attacked</strong>, normal scavenging that always stops for incomings; a safe/rim group &rarr;
+            <strong>even when attacked</strong>, keeps scavenging through incomings). Groups without a policy follow the per-village
+            settings and aren't listed. A policy beats the per-village settings and the toggles above; a village in several policy groups
+            gets the safest one (never &gt; pause &gt; always). Dynamic membership refreshes hourly via the incoming tracker. Alpha: never live-fired yet.</div>
         </div>
         {{ row('Night consolidate (gather_night_consolidate)',
                toggle('scavenge', 'gather_night_consolidate', sc.gather_night_consolidate),
@@ -575,15 +591,31 @@
       persist('scavenge', 'gather_exclude_units', JSON.stringify(excluded));
     });
 
-    // Per-group scavenging policy picker: rebuild the whole map on change.
-    // Stored as group names (readable in config.json; the bot matches
-    // name case-insensitively or id).
-    $('.scav-group-sel').change(function () {
+    // Per-group scavenging policy picker (compact: one row per assigned
+    // policy). The whole map is rebuilt from the rows and persisted on any
+    // change; stored as group names (readable in config.json; the bot
+    // matches name case-insensitively or id).
+    function scavGroupPolicies(dropKey) {
       var policies = {};
       $('.scav-group-sel').each(function () {
-        if ($(this).val()) policies[$(this).attr('data-group')] = $(this).val();
+        var key = $(this).attr('data-group');
+        if (key !== dropKey && $(this).val()) policies[key] = $(this).val();
       });
-      persist('farm', 'gather_group_policies', JSON.stringify(policies));
+      return policies;
+    }
+    $('.scav-group-sel').change(function () {
+      persist('farm', 'gather_group_policies', JSON.stringify(scavGroupPolicies()));
+    });
+    $('.scav-group-del').click(function () {
+      persist('farm', 'gather_group_policies',
+              JSON.stringify(scavGroupPolicies($(this).attr('data-group'))))
+        .always(function () { location.reload(); });
+    });
+    $('#scav-group-add').click(function () {
+      var policies = scavGroupPolicies();
+      policies[$('#scav-group-add-name').val()] = $('#scav-group-add-policy').val();
+      persist('farm', 'gather_group_policies', JSON.stringify(policies))
+        .always(function () { location.reload(); });
     });
   });
 

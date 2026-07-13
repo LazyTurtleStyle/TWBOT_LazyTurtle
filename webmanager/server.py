@@ -1006,6 +1006,11 @@ def farm_settings_state():
         "gather_group_policies": dict(farms.get("gather_group_policies") or {}),
         # The in-game groups the incoming tracker has cached, for the picker.
         "village_groups": DataReader.groups_grab(),
+        # Compact picker data: one resolved row per assigned policy + the
+        # groups still without one (accounts can have 30+ groups; listing
+        # them all as rows would swamp the page).
+        "group_policy_rows": None,  # filled below
+        "group_policy_unassigned": None,
         "archers_enabled": bool((config.get("world", {}) or {}).get("archers_enabled", False)),
         "gather_night_consolidate": bool(template.get("gather_night_consolidate", False)),
         "gather_night_start": template.get("gather_night_start", 23),
@@ -1052,6 +1057,32 @@ def farm_settings_state():
         "entries": shaper_entries,
         "costs": costs,
     }
+
+    # Resolve the group-policy map into display rows (one per assigned
+    # policy) + the groups still without one, for the compact picker.
+    groups = scavenge["village_groups"] or []
+    by_key = {}
+    for g in groups:
+        by_key[str(g.get("name", "")).lower()] = g
+        by_key[str(g.get("id", ""))] = g
+    rows = []
+    taken = set()
+    for key, policy in scavenge["gather_group_policies"].items():
+        g = by_key.get(str(key).lower()) or by_key.get(str(key))
+        if g:
+            taken.add(str(g.get("id")))
+        rows.append({
+            "key": key, "policy": policy,
+            "name": g.get("name") if g else key,
+            "type": g.get("type") if g else None,
+            "villages": len(g.get("villages") or []) if g else None,
+            "missing": g is None,
+        })
+    rows.sort(key=lambda r: str(r["name"]).lower())
+    scavenge["group_policy_rows"] = rows
+    scavenge["group_policy_unassigned"] = sorted(
+        (g for g in groups if str(g.get("id")) not in taken),
+        key=lambda g: str(g.get("name", "")).lower())
 
     return {"farms": farms, "scavenge": scavenge, "villages": per_village,
             "shaper": shaper}
