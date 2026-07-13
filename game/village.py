@@ -249,6 +249,14 @@ class Village:
         unit_config = self.get_village_config(
             self.village_id, parameter="units", default=None
         )
+        if unit_config is False:
+            # Per-village off-switch: recruit nothing here, whatever the
+            # global units.recruit master switch says.
+            self.logger.debug(
+                "Recruiting is disabled for village %s", self.village_id)
+            self.units.template = []
+            self.units.wanted = {}
+            return
         if not unit_config:
             self.logger.warning(
                 "Village %d does not have 'units' config override!", self.village_id
@@ -279,28 +287,32 @@ class Village:
         self.build_config = self.get_village_config(
             self.village_id, parameter="building", default=None
         )
-        if self.build_config is False:
+        # Per-village off-switch (building: false). Still fall through to
+        # start_update with build=False: that call is what reads the building
+        # levels, which the recruit templates need even when nothing is built.
+        build_disabled = self.build_config is False
+        if build_disabled:
             self.logger.debug("Builder is disabled for village %s", self.village_id)
-            return
-        if not self.build_config:
+        elif not self.build_config:
             self.logger.warning(
                 "Village %d does not have 'building' config override!", self.village_id
             )
             self.build_config = self.get_config(
                 section="building", parameter="default", default="purple_predator"
             )
-        new_queue = TemplateManager.get_template(
-            category="builder", template=self.build_config
-        )
-        if not self.builder.raw_template or self.builder.raw_template != new_queue:
-            self.builder.queue = new_queue
-            self.builder.raw_template = new_queue
-            if not self.get_config(
-                    section="world", parameter="knight_enabled", default=False
-            ):
-                self.builder.queue = [
-                    x for x in self.builder.queue if "statue" not in x
-                ]
+        if not build_disabled:
+            new_queue = TemplateManager.get_template(
+                category="builder", template=self.build_config
+            )
+            if not self.builder.raw_template or self.builder.raw_template != new_queue:
+                self.builder.queue = new_queue
+                self.builder.raw_template = new_queue
+                if not self.get_config(
+                        section="world", parameter="knight_enabled", default=False
+                ):
+                    self.builder.queue = [
+                        x for x in self.builder.queue if "statue" not in x
+                    ]
         self.builder.max_lookahead = self.get_config(
             section="building", parameter="max_lookahead", default=2
         )
@@ -322,7 +334,7 @@ class Village:
         except (TypeError, ValueError):
             self.builder.farm_priority_pop_pct = 0
         self.builder.start_update(
-            build=self.get_config(
+            build=not build_disabled and self.get_config(
                 section="building", parameter="manage_buildings", default=True
             ),
             set_village_name=self.village_set_name,

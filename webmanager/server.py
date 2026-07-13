@@ -231,7 +231,51 @@ def preprocess_fixed_select(key, value, options, village_id=None):
     return out
 
 
+def template_names(category):
+    """Available template names under templates/<category> (no extension)."""
+    tdir = os.path.join(DataReader.project_root(), 'templates', category)
+    try:
+        return sorted(
+            os.path.splitext(f)[0] for f in os.listdir(tdir)
+            if not f.startswith('.') and os.path.isfile(os.path.join(tdir, f)))
+    except OSError:
+        return []
+
+
+# The building/units fields hold a template name, or JSON false for "do
+# nothing in this village" (per-village off-switch under the master switch).
+TEMPLATE_SELECTS = {
+    'village.building': 'builder', 'village_template.building': 'builder',
+    'village.units': 'troops', 'village_template.units': 'troops',
+}
+
+
+def preprocess_template_select(key, value, category, village_id=None):
+    """A <select> of the available templates + an Off option (stored as
+    false). An unknown current value stays listed so it is not silently
+    replaced on the next save of a different field."""
+    known = template_names(category)
+    current = value if isinstance(value, str) else None
+    names = list(known)
+    if current and current not in names:
+        names.append(current)
+    vattr = (' data-village-id="%s"' % village_id) if village_id else ''
+    label = 'Off — do not %s in this village' % (
+        'build' if category == 'builder' else 'recruit')
+    out = '<select data-type-option="%s"%s data-type="select" class="form-control">' % (key, vattr)
+    out += '<option value="false"%s>%s</option>' % (
+        ' selected' if value is False else '', label)
+    for name in names:
+        out += '<option value="%s"%s>%s%s</option>' % (
+            html_escape(name, quote=True), ' selected' if name == current else '',
+            html_escape(name), '' if name in known else ' (missing template!)')
+    out += '</select>'
+    return out
+
+
 def control_for(key, value, village_id=None):
+    if key in TEMPLATE_SELECTS:
+        return preprocess_template_select(key, value, TEMPLATE_SELECTS[key], village_id)
     if key in FIXED_SELECTS:
         return preprocess_fixed_select(key, value, FIXED_SELECTS[key], village_id)
     # bool is a subclass of int, so it must be checked first.
