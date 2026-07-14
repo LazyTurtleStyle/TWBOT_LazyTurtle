@@ -94,24 +94,27 @@ class ReportManager:
             if vid == entry["dest"]:
                 if entry["type"] == "attack" and entry["losses"] == {}:
                     return 1
+                # A fully repelled scout leaves no defender table in the
+                # report, so defence_units is absent: no intel, not "safe"
+                defence_units = entry["extra"].get("defence_units")
                 if (
                         entry["type"] == "scout"
                         and entry["losses"] == {}
+                        and defence_units is not None
                         and (
-                        entry["extra"]["defence_units"] == {}
-                        or entry["extra"]["defence_units"]
-                        == entry["extra"]["defence_losses"]
+                        defence_units == {}
+                        or defence_units
+                        == entry["extra"].get("defence_losses")
                 )
                 ):
                     return 1
 
                 if entry["losses"] != {}:
                     # Acceptable losses for attacks
-                    print(f'Units sent: {entry["extra"]["units_sent"]}')
+                    print(f'Units sent: {entry["extra"].get("units_sent", {})}')
                     print(f'Units lost: {entry["losses"]}')
 
-                for sent_type in entry["extra"]["units_sent"]:
-                    amount = entry["extra"]["units_sent"][sent_type]
+                for sent_type, amount in entry["extra"].get("units_sent", {}).items():
                     if sent_type in entry["losses"]:
                         if amount == entry["losses"][sent_type]:
                             return 0  # Lost all units!
@@ -323,11 +326,13 @@ class ReportManager:
                 data_away = self.re_unit(Extractor.units_in_total(units_away.group(1)))
                 extra["units_away"] = data_away
 
-        # Loyalty ("Instemming") change - only present when a noble hit. The
-        # noble-barb manager tracks the target's loyalty from this.
+        # Loyalty ("Toestemming") change - only present when a noble hit. The
+        # noble-barb manager tracks the target's loyalty from this. The server
+        # wraps the numbers in tags: "Gedaald van <b>100</b> naar <b>73</b>".
         loyalty = re.search(
-            r'(?is)(?:instemming|loyalty|zustimmung).{0,200}?'
-            r'(?:van|from|von)\s+(\d+)\s+(?:naar|to|auf)\s+(-?\d+)', report)
+            r'(?is)(?:toestemming|instemming|loyalty|zustimmung).{0,200}?'
+            r'(?:van|from|von)(?:\s|<[^>]*>)*(\d+)(?:\s|<[^>]*>)*'
+            r'(?:naar|to|auf)(?:\s|<[^>]*>)*(-?\d+)', report)
         if loyalty:
             extra["loyalty"] = [int(loyalty.group(1)), int(loyalty.group(2))]
 

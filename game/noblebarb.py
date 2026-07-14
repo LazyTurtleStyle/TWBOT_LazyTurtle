@@ -4,8 +4,8 @@ Auto-noble barbarian villages (alpha).
 Each job walks one barb's loyalty ("toestemming") down with noble attacks from
 a fixed sending village until it is conquered, without ever overshooting:
 
-- Loyalty is tracked from our own attack reports (the "Instemming: van X naar
-  Y" line only nobles produce, extracted by game/reports.py into
+- Loyalty is tracked from our own attack reports (the "Toestemming: Gedaald
+  van X naar Y" line only nobles produce, extracted by game/reports.py into
   extra["loyalty"]). No report on the target yet -> assume 100. Loyalty
   regenerates over time, so the estimate adds +1/hour x world speed since the
   last report.
