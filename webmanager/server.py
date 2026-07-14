@@ -1098,6 +1098,9 @@ def farm_settings_state():
         "loss_tolerance": farms.get("shaper_loss_tolerance", 1.0),
         "max_sends": farms.get("shaper_max_sends", 2),
         "ram_reserve": farms.get("shaper_ram_reserve", 0),
+        "share_axes": bool(farms.get("shaper_share_axes", False)),
+        "axe_cap": farms.get("shaper_axe_cap", 0),
+        "max_travel_hours": farms.get("shaper_max_travel_hours", 0),
         "entries": shaper_entries,
         "costs": costs,
     }

@@ -593,6 +593,12 @@ class Village:
             section="farms", parameter="shaper_ram_reserve", default=0)
         shaper.report_max_age_hours = self.get_config(
             section="farms", parameter="report_max_age_hours", default=24)
+        shaper.share_scavenge_axes = self.get_config(
+            section="farms", parameter="shaper_share_axes", default=False)
+        shaper.axe_cap = self.get_config(
+            section="farms", parameter="shaper_axe_cap", default=0)
+        shaper.max_travel_hours = self.get_config(
+            section="farms", parameter="shaper_max_travel_hours", default=0)
         gather_on = self.get_village_config(
             self.village_id, parameter="gather_enabled", default=False)
         excluded = list(self.disabled_units) + list(self.get_village_config(

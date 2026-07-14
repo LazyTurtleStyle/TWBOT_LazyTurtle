@@ -20,6 +20,7 @@ import math
 import time
 
 from core.filemanager import FileManager
+from game import incomings
 from game.simulator import Simulator
 
 
@@ -56,6 +57,14 @@ class BarbShaper:
         self.ram_reserve = 0
         self.report_max_age_hours = 24
         self.scavenge_uses_axes = False
+        # Opt-in: keep shaping even while scavenging claims the axes. The cap
+        # bounds how many axes shaping may take (0 = no limit) so scavenging
+        # keeps the rest; it applies whether or not axes are shared.
+        self.share_scavenge_axes = False
+        self.axe_cap = 0
+        # One-way travel cap in hours (0 = no limit). Rams are the slowest
+        # unit in a shaping send, so this bounds the whole attack's duration.
+        self.max_travel_hours = 0
 
     # ------------------------------------------------------------------ math
 
@@ -114,17 +123,21 @@ class BarbShaper:
     # ------------------------------------------------------------------- run
 
     def run(self):
-        if self.scavenge_uses_axes:
-            # The user's axes belong to scavenging; never compete with it.
+        if self.scavenge_uses_axes and not self.share_scavenge_axes:
+            # The user's axes belong to scavenging; never compete with it
+            # unless the user explicitly opted into sharing.
             self.logger.info(
                 "%s: scavenging is set to use axes (axe not in "
-                "gather_exclude_units) - barb shaper stays idle", self.village_id)
+                "gather_exclude_units) - barb shaper stays idle (enable "
+                "shaper_share_axes to shape anyway)", self.village_id)
             return
         if not self.attack_manager or not self.map or not self.repman:
             return
 
         troops = {k: int(v) for k, v in (self.troopmanager.troops or {}).items()}
         axes_home = troops.get("axe", 0)
+        if int(self.axe_cap or 0) > 0:
+            axes_home = min(axes_home, int(self.axe_cap))
         rams_home = max(0, troops.get("ram", 0) - int(self.ram_reserve))
         if not rams_home or not axes_home:
             self.logger.debug(
@@ -136,10 +149,26 @@ class BarbShaper:
             # building the distance-sorted target list is map-cache only.
             self.attack_manager.get_targets()
 
+        ram_field_seconds = 0.0
+        if float(self.max_travel_hours or 0) > 0:
+            world_speed, unit_speed, speeds = incomings.load_world_speeds()
+            ram_field_seconds = incomings.unit_travel_seconds(
+                1, speeds.get("ram", 30.0), world_speed, unit_speed)
+
         state = self.get_state()
         sends = 0
         for target, distance in self.attack_manager.targets:
             if sends >= self.max_sends:
+                break
+            if (ram_field_seconds
+                    and distance * ram_field_seconds
+                    > float(self.max_travel_hours) * 3600):
+                # Targets are distance-sorted: everything after is farther.
+                self.logger.info(
+                    "%s: %s is beyond the %.1fh ram travel limit (%.1fh one "
+                    "way) - stopping the scan", self.village_id, target["id"],
+                    float(self.max_travel_hours),
+                    distance * ram_field_seconds / 3600)
                 break
             vid = target["id"]
             if target.get("owner") != "0":

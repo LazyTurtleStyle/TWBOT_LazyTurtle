@@ -472,7 +472,8 @@
 </div>
 <div class="alert alert-secondary fs-intro" role="alert">
   It stays idle for a village when scavenging claims its axes — uncheck <em>Axe</em> in the
-  <a href="#scavenge" onclick="showFarmPane('scavenge')">Scavenging</a> unit picker to free them — and it never sends while the village
+  <a href="#scavenge" onclick="showFarmPane('scavenge')">Scavenging</a> unit picker to free them, or enable
+  <em>Share axes with scavenging</em> below (ideally with an axe limit) — and it never sends while the village
   is under attack. Rams must exist in the village; it won't recruit them for you.
 </div>
 
@@ -498,6 +499,20 @@
         {{ row('Rams to keep home (shaper_ram_reserve)',
                num('farm', 'shaper_ram_reserve', sh.ram_reserve, '1', '0'),
                'This many rams are never spent on shaping.') }}
+        {{ row('Share axes with scavenging (shaper_share_axes)',
+               toggle('farm', 'shaper_share_axes', sh.share_axes),
+               'Normally the shaper stays idle when the Scavenging unit picker includes axes. Enable this
+                to shape anyway with whatever axes are home; combine with the limit below so scavenging
+                keeps the rest.') }}
+        {{ row('Max axes for shaping (shaper_axe_cap)',
+               num('farm', 'shaper_axe_cap', sh.axe_cap, '1', '0'),
+               'Shaping never uses more than this many axes per village per cycle (0 = no limit). Escorts
+                below 20 axes are never sent, so a cap under that stops the shaper.') }}
+        {{ row('Max travel time, hours (shaper_max_travel_hours)',
+               num('farm', 'shaper_max_travel_hours', sh.max_travel_hours, '1', '0'),
+               'Skip targets whose one-way <strong>ram</strong> travel time exceeds this (0 = no limit).
+                Rams are the slowest unit in the send, so this caps the whole attack — e.g. 12 keeps the
+                round trip within a day.') }}
       </div>
     </div>
 

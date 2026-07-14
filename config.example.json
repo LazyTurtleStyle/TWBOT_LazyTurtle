@@ -110,7 +110,10 @@
     "shaper_min_wall": 2,
     "shaper_loss_tolerance": 1.0,
     "shaper_max_sends": 2,
-    "shaper_ram_reserve": 0
+    "shaper_ram_reserve": 0,
+    "shaper_share_axes": false,
+    "shaper_axe_cap": 0,
+    "shaper_max_travel_hours": 0
   },
   "market": {
     "auto_trade": true,
