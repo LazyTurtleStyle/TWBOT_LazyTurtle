@@ -111,11 +111,9 @@ class TWB:
     Also verifies, merges and updates the config file automatically
     """
     res = None
-    villages = []
     wrapper = None
     should_run = True
     runs = 0
-    found_villages = []
     # Set by get_overview when the overview comes back as a login page; the run
     # loop skips the cycle instead of treating every village as unavailable.
     session_logged_out = False
@@ -132,6 +130,14 @@ class TWB:
     # Refresh it at most this often to avoid two extra full-page GETs every cycle
     # (cuts request volume and the bot-like request count).
     TROOP_MOVE_REFRESH_SECONDS = 900
+
+    def __init__(self):
+        # Mutable state must live on the instance: main() retries a crash with
+        # a fresh TWB(), and class-level lists survive into it - the retry then
+        # runs every village twice and the auto-renamer numbers the duplicates
+        # (villages named 004+ instead of 001+).
+        self.villages = []
+        self.found_villages = []
 
     @staticmethod
     def internet_online():
@@ -867,7 +873,8 @@ class TWB:
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
 
-                village_number = 1
+                village_number = int(
+                    config["bot"].get("village_name_number_start", 1) or 1)
                 for village in self.villages:
                     if village.village_id not in self.found_villages:
                         print(

@@ -73,7 +73,15 @@ class BuildingManager:
         Start a building manager run
         """
         main_data = self.wrapper.get_action(village_id=self.village_id, action="main")
-        self.game_state = Extractor.game_state(main_data)
+        self.game_state = Extractor.game_state(main_data) if main_data else None
+        if not self.game_state:
+            # A transient fetch/parse failure must not crash the whole bot
+            # (main() retries with a fresh TWB and the cycle starts over);
+            # skip this building run and let the next cycle try again.
+            (self.logger or logging.getLogger("Builder")).warning(
+                "Village %s: could not read the main screen (no game state) - "
+                "skipping this building run", self.village_id)
+            return False
         vname = self.game_state["village"]["name"]
 
         if not self.logger:

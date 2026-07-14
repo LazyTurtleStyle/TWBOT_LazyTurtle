@@ -27,6 +27,7 @@
     "add_new_villages": true,
     "village_name_template": "Village {num}",
     "village_name_number_length": 3,
+    "village_name_number_start": 1,
     "auto_set_village_names": false,
     "user_agent": null,
     "check_update": false,
