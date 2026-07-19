@@ -590,6 +590,10 @@ class TroopManager:
                         if item == "knight":
                             continue
                         if item in disabled_units:
+                            # Explicitly zero it out - omitting the key entirely
+                            # leaves it unconstrained server-side and it can get
+                            # pulled into the squad anyway.
+                            payload["squad_requests[0][candidate_squad][unit_counts][%s]" % item] = "0"
                             continue
 
                         if item in troops and int(troops[item]) > 0:
@@ -662,6 +666,12 @@ class TroopManager:
                         if item == "knight":
                             continue
                         if item in disabled_units:
+                            # Explicitly zero it out - omitting the key entirely
+                            # leaves it unconstrained server-side and it can get
+                            # pulled into the squad anyway.
+                            payload[
+                                "squad_requests[0][candidate_squad][unit_counts][%s]" % item
+                                ] = "0"
                             continue
                         if item in troops and int(troops[item]) > 0:
                             count = int(troops[item])
