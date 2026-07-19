@@ -546,6 +546,9 @@ class Village:
 
                 if (
                         self.get_config(section="farms", parameter="farm", default=False)
+                        and self.get_village_config(
+                            self.village_id, parameter="farm_enabled", default=True
+                        )
                         and not self.def_man.under_attack
                 ):
                     self.attack.extra_farm = self.get_village_config(

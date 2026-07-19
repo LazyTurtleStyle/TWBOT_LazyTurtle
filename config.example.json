@@ -61,6 +61,7 @@
     "farm_priority_pop_pct": -1,
     "managed": true,
     "scout_first": false,
+    "farm_enabled": true,
     "additional_farms": [],
     "prioritize_building": false,
     "prioritize_snob": false,
