@@ -44,6 +44,13 @@ class WebWrapper:
     # same session) and auto-resumes - no console keypress or restart needed.
     CAPTCHA_POLL_SECONDS = 20
     CAPTCHA_BLOCK_FILE = "cache/captcha_block.json"
+    # (connect, read) seconds. requests has no default timeout, so a connection
+    # that hangs after the server starts throttling/blocking (common right
+    # around a bot-protection trigger) would otherwise block the main loop
+    # forever with no exception and no captcha marker - it just looks "hung"
+    # with a stale heartbeat. Matches the timeout already used for the other
+    # direct requests calls in this codebase (twb.py, game/incomings.py).
+    REQUEST_TIMEOUT = (10, 30)
     # Only the wrapper that owns the login (the main loop) persists its rotated
     # cookies back to cache/session.json. Background pollers read that file but
     # must never write it, or two sessions would fight over the session id.
@@ -109,7 +116,7 @@ class WebWrapper:
         if not headers:
             headers = self.headers
         try:
-            res = self.web.get(url=url, headers=headers)
+            res = self.web.get(url=url, headers=headers, timeout=self.REQUEST_TIMEOUT)
             self.logger.debug("GET %s [%d]", url, res.status_code)
             self.post_process(res)
             if 'data-bot-protect="forced"' in res.text and not self.block_on_captcha:
@@ -150,7 +157,7 @@ class WebWrapper:
         while True:
             time.sleep(self.CAPTCHA_POLL_SECONDS)
             try:
-                res = self.web.get(url=url, headers=self.headers)
+                res = self.web.get(url=url, headers=self.headers, timeout=self.REQUEST_TIMEOUT)
                 self.post_process(res)
             except Exception as e:
                 self.logger.warning("Captcha re-check failed: %s", e)
@@ -187,9 +194,17 @@ class WebWrapper:
         if not headers:
             headers = self.headers
         try:
-            res = self.web.post(url=url, data=data, headers=headers)
+            res = self.web.post(url=url, data=data, headers=headers, timeout=self.REQUEST_TIMEOUT)
             self.logger.debug("POST %s %s [%d]", url, enc, res.status_code)
             self.post_process(res)
+            if 'data-bot-protect="forced"' in res.text and not self.block_on_captcha:
+                self.logger.warning("Bot protection hit during background poll, skipping")
+                return res
+            if 'data-bot-protect="forced"' in res.text:
+                # Building/recruiting/scavenging actions go through here too;
+                # without this check a captcha hit on a POST was invisible to
+                # the dashboard (no "captcha" banner, just a silent no-op).
+                return self._await_captcha_clear(url, headers)
             return res
         except Exception as e:
             self.logger.warning("POST %s %s: %s", url, enc, str(e))
