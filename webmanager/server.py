@@ -770,6 +770,8 @@ def pre_process_overrides(data):
                 'building': None,
                 'units': None,
                 'managed': False,
+                'gather_enabled': bool(template.get('gather_enabled', False)),
+                'farm_enabled': bool(template.get('farm_enabled', True)),
             })
             continue
 
@@ -790,6 +792,8 @@ def pre_process_overrides(data):
             'building': vcfg.get('building'),
             'units': vcfg.get('units'),
             'managed': bool(vcfg.get('managed')),
+            'gather_enabled': bool(vcfg.get('gather_enabled', template.get('gather_enabled', False))),
+            'farm_enabled': bool(vcfg.get('farm_enabled', template.get('farm_enabled', True))),
         })
 
     rows.sort(key=lambda r: (not r['overrides'], r['name'].lower()))

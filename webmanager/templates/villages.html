@@ -20,6 +20,8 @@
 					<th>Building</th>
 					<th>Units</th>
 					<th>Queue</th>
+					<th>Scavenge</th>
+					<th>Farm</th>
 					<th>Status</th>
 					<th class="num"></th>
 				</tr>
@@ -44,6 +46,14 @@
 						{% else %}<span class="faint">&mdash;</span>{% endif %}
 					</td>
 					<td class="num mono">{{ data.bot[row.id].building_queue | count if data.bot[row.id].building_queue else 0 }}</td>
+					<td>
+						<span class="badge {% if row.gather_enabled %}moss{% else %}dim{% endif %}"
+							{% if 'gather_enabled' in row.diff %}title="Overrides the global template"{% endif %}>{{ 'on' if row.gather_enabled else 'off' }}</span>
+					</td>
+					<td>
+						<span class="badge {% if row.farm_enabled %}moss{% else %}dim{% endif %}"
+							{% if 'farm_enabled' in row.diff %}title="Overrides the global template"{% endif %}>{{ 'on' if row.farm_enabled else 'off' }}</span>
+					</td>
 					<td>
 						{% if not row.has_config %}<span class="badge dim">no config</span>
 						{% elif row.managed %}<span class="badge moss">active</span>
