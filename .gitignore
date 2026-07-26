@@ -139,6 +139,7 @@ twb.log
 twb.log.*
 
 # Local scratch / debug dumps / screenshots (not part of the project)
+/NOTES.local.md
 /bot
 /bot_output.txt
 /debug_overview.html
