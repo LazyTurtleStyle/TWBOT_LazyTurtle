@@ -159,14 +159,16 @@ If something looks stuck, the Overview banner tells you whether it's a captcha, 
 
 ## Using it from your phone
 
-The dashboard is a normal web page, so anything with a browser can drive it.
+The dashboard is a normal web page, so anything with a browser can drive it — **as long as it's on the same WiFi as the machine running the bot.**
 
 1. Find the IP of the machine running the bot (`ip a` on Linux, `ipconfig` on Windows) — something like `192.168.1.42`.
-2. On your phone, open `http://192.168.1.42:5000/`.
+2. On your phone, connected to your home WiFi, open `http://192.168.1.42:5000/`.
 
-Windows, Linux and Docker all bind the dashboard to your whole network already. To keep it to the local machine only, run `HOST=127.0.0.1 ./start.sh`.
+That address is a private one: it only exists inside your own network. On mobile data, or anywhere away from home, your phone has no route to it and the page will simply time out. **To reach it from outside, use a VPN like [Tailscale](https://tailscale.com/) or WireGuard** — your phone then joins your home network from anywhere, and the same address works.
 
-> **Never port-forward the dashboard to the internet.** It has no login — anyone who finds it controls your account. To reach it from outside your home, use a VPN like [Tailscale](https://tailscale.com/) or WireGuard.
+Windows, Linux and Docker all bind the dashboard to your whole local network already. To keep it to the bot's own machine only, run `HOST=127.0.0.1 ./start.sh`.
+
+> **Never port-forward the dashboard to the internet** to get around this. It has no login of any kind — anyone who finds the open port controls your bot and your account.
 
 **Jumping into the game yourself:** the `browser-extension/` folder holds a small Chrome/Edge extension that restores your Tribal Wars session in one click, so opening the game in your browser doesn't invalidate the bot's session. Download it, pre-configured, from **http://localhost:5000/app/tw-open**, then in Chrome/Edge go to `chrome://extensions`, enable **Developer mode**, and use **Load unpacked**.
 
