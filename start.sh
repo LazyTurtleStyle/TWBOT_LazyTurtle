@@ -20,18 +20,31 @@ SESSION="twb"
 PORT="${PORT:-5000}"
 HOST="${HOST:-0.0.0.0}"
 
+cd "$(dirname "$0")"
+
+# Prefer the virtualenv created by install.sh; fall back to a system python3 so
+# existing setups that pip-installed globally keep working unchanged.
+if [ -x ".venv/bin/python" ]; then
+    PY="$(pwd)/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PY="python3"
+else
+    echo "No Python found. Run ./install.sh first."
+    exit 1
+fi
+
 # Worlds to launch; an empty entry ("") means the default (no --world) bot.
 WORLDS=("$@")
 [ ${#WORLDS[@]} -eq 0 ] && WORLDS=("")
 
-if tmux has-session -t "$SESSION" 2>/dev/null; then
+if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Session '$SESSION' is already running, attaching..."
     exec tmux attach -t "$SESSION"
 fi
 
 # Build the bot command for a world ("" = default).
 botcmd() {
-    if [ -n "$1" ]; then echo "python3 twb.py --world $1"; else echo "python3 twb.py"; fi
+    if [ -n "$1" ]; then echo "$PY twb.py --world $1"; else echo "$PY twb.py"; fi
 }
 
 # Integrity-check each world before launching.
@@ -39,8 +52,8 @@ for w in "${WORLDS[@]}"; do
     echo "Verifying bot integrity${w:+ for world $w}"
     if ! $(botcmd "$w") -i; then
         echo "It looks like the bot failed to start${w:+ for world $w}."
-        echo "Please re-check the config or re-install the bot, and see"
-        echo "https://github.com/stefan2200/TWB/issues if it persists."
+        echo "Please re-check the config or re-run ./install.sh, and see"
+        echo "https://github.com/LazyTurtleStyle/TWBOT_LazyTurtle/issues if it persists."
         exit 1
     fi
 done
@@ -49,23 +62,53 @@ done
 # leftovers from a killed session) so they don't run twice.
 for w in "${WORLDS[@]}"; do
     if [ -n "$w" ]; then
-        pkill -f "twb.py --world $w\$" 2>/dev/null
+        pkill -f "twb\.py --world $w\$" 2>/dev/null
     else
-        pkill -f "python3 twb.py\$" 2>/dev/null
+        pkill -f "twb\.py\$" 2>/dev/null
     fi
 done
 
-# First world creates the session window; the rest get their own panes.
-tmux new-session -d -s "$SESSION" -n bot "$(botcmd "${WORLDS[0]}")"
-for w in "${WORLDS[@]:1}"; do
-    tmux split-window -t "$SESSION:bot" "$(botcmd "$w")"
+# Kill any stray web panel left over from manual restarts, or the new one dies
+# with "address already in use".
+pkill -f "server\.py $PORT" 2>/dev/null && sleep 1
+
+# Preferred layout: everything in one tmux session, one pane per process, so you
+# can watch the bots and detach with Ctrl-B D while they keep running.
+if command -v tmux >/dev/null 2>&1; then
+    # First world creates the session window; the rest get their own panes.
+    tmux new-session -d -s "$SESSION" -n bot "$(botcmd "${WORLDS[0]}")"
+    for w in "${WORLDS[@]:1}"; do
+        tmux split-window -t "$SESSION:bot" "$(botcmd "$w")"
+        tmux select-layout -t "$SESSION:bot" tiled >/dev/null
+    done
+
+    # One shared web panel for all worlds.
+    tmux split-window -t "$SESSION:bot" "cd webmanager && $PY server.py $PORT $HOST"
     tmux select-layout -t "$SESSION:bot" tiled >/dev/null
+
+    exec tmux attach -t "$SESSION"
+fi
+
+# No tmux (minimal VPS, fresh Raspberry Pi, macOS without Homebrew): run the same
+# processes detached with nohup and log to cache/logs/. tmux is nicer - install it
+# with `sudo apt install tmux` / `brew install tmux` - but this works everywhere.
+echo "tmux is not installed - starting in the background instead."
+mkdir -p cache/logs
+PIDFILE="cache/twb.pids"
+: > "$PIDFILE"
+
+for w in "${WORLDS[@]}"; do
+    logname="cache/logs/bot${w:+-$w}.out"
+    nohup $(botcmd "$w") >> "$logname" 2>&1 &
+    echo $! >> "$PIDFILE"
+    echo "  bot${w:+ $w} started (pid $!), output: $logname"
 done
 
-# One shared web panel for all worlds. Kill any stray panel left over from
-# manual restarts first, or the new one dies with "address already in use".
-pkill -f "python3 server.py $PORT" 2>/dev/null && sleep 1
-tmux split-window -t "$SESSION:bot" "cd webmanager && python3 server.py $PORT $HOST"
-tmux select-layout -t "$SESSION:bot" tiled >/dev/null
+nohup sh -c "cd webmanager && exec $PY server.py $PORT $HOST" >> cache/logs/panel.out 2>&1 &
+echo $! >> "$PIDFILE"
+echo "  dashboard started (pid $!), output: cache/logs/panel.out"
 
-exec tmux attach -t "$SESSION"
+echo ""
+echo "Dashboard: http://localhost:$PORT/"
+echo "Follow the log:  tail -f cache/logs/bot*.out"
+echo "Stop everything: kill \$(cat $PIDFILE)"

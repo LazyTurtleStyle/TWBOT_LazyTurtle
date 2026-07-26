@@ -1,0 +1,32 @@
+# TWB - Tribal Wars Bot (LazyTurtle fork)
+#
+#   docker compose up -d        start (builds the image the first time)
+#   docker compose logs -f      watch what the bot is doing
+#   docker compose restart      restart after changing a config by hand
+#   docker compose down         stop
+#
+# Then open http://localhost:5000/ and add your world there.
+# Settings live in .env - copy .env.example to .env to change them.
+
+services:
+  twb:
+    build: .
+    image: twb-lazyturtle:latest
+    container_name: twb
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      # Your timezone, so active_hours and night scavenging line up with the game.
+      TZ: "${TZ:-Europe/Amsterdam}"
+      # Space-separated worlds to auto-start, e.g. "nl99 nl98".
+      # Leave empty to start them from the dashboard by hand instead.
+      WORLDS: "${WORLDS:-}"
+    volumes:
+      # Your worlds: config, cookies, cache and reports. This is the data that
+      # matters - back this folder up.
+      - ./worlds:/app/worlds
+      # Building/unit templates, so you can edit them without rebuilding.
+      - ./templates:/app/templates
+      # Logs from a no-world (single-world) run.
+      - ./cache:/app/cache

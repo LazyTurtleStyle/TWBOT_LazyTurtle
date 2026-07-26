@@ -1,0 +1,25 @@
+# Keep the image small and free of local state / secrets.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Runtime data - these are bind-mounted from the host instead.
+worlds/
+cache/
+config.json
+config.bak
+.env
+
+# Local-only material that has no business in a container.
+.claude/
+.design-sync/
+design/
+design-system/
+*.png
+*.JPG
+CODE_REVIEW.md
+TODO.md
