@@ -8,6 +8,10 @@ This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan220
 
 *The dashboard: every village at a glance, live troop counts, what the bot just did, and whether anything is heading your way.*
 
+### A note on servers
+
+This is played and tested almost entirely on **Dutch (`.nl`) worlds**. Nothing is deliberately NL-only — world settings are read from the server, and market-specific details like the account portal domain are worked out from your world's own address — but the `.net`, `.de` and other markets have had far less real play behind them, and the odd thing may well be broken there. If you hit something market-specific, [open an issue](https://github.com/LazyTurtleStyle/TWBOT_LazyTurtle/issues) and say which server you're on.
+
 ### About bans
 
 The bot doesn't log in for you. It rides on **your own browser session** — you paste in your cookies, and you solve any captcha yourself, in your own browser. That's the main reason it stays quiet: to the server, the traffic comes from a session a human opened and a human unblocks.
