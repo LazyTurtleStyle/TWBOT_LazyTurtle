@@ -4,6 +4,10 @@ An open source bot that plays [Tribal Wars](https://www.tribalwars.net/) for you
 
 This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan2200/TWB) — the original bot, heavily extended through vibe coding: a rebuilt web dashboard, multi-world support, scavenging, an attack planner, Telegram alerts and a long list of smaller fixes. See [What's new in this fork](#whats-new-in-this-fork).
 
+![The TWB dashboard](readme/img/dashboard-overview.png)
+
+*The dashboard: every village at a glance, live troop counts, what the bot just did, and whether anything is heading your way.*
+
 ### About bans
 
 The bot doesn't log in for you. It rides on **your own browser session** — you paste in your cookies, and you solve any captcha yourself, in your own browser. That's the main reason it stays quiet: to the server, the traffic comes from a session a human opened and a human unblocks.
@@ -31,11 +35,19 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - Full scavenging support: auto-unlock, per-group policies, a troop picker, night consolidation (runs sized to return before the window closes) and pausing while under attack
 - Per-village toggles for farming, building and recruiting
 
+![Farms and scavenging settings](readme/img/dashboard-farms.png)
+
+*Every farming knob in one place, each with a plain-English explanation of what it does.*
+
 **Attacking & defence**
 - Attack planner with timed auto-send, inline target ETAs and map deep links
 - Incoming attack tracking with in-game tagging
 - Automatic defensive support, unit evacuation and support-sniping
 - Cancel-sniping *(alpha)* and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
+
+![Attack planner](readme/img/dashboard-attack.png)
+
+*Tracked targets with live travel times, so you can schedule a hit instead of doing the maths yourself.*
 
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
@@ -119,6 +131,8 @@ The bot needs your browser's session to act as you. This is the one manual step,
 ## Setting up your world
 
 With the bot running, open **http://localhost:5000/** and go to **Configure → Settings** in the left sidebar.
+
+![Adding a world on the settings page](readme/img/dashboard-setup.png)
 
 ### 1. Add your world
 
