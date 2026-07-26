@@ -171,6 +171,57 @@ If something looks stuck, the Overview banner tells you whether it's a captcha, 
 
 ---
 
+## Opening the game yourself, without killing the bot
+
+Sooner or later you'll want to play in your own browser — after a reboot, or just to look around. There's a trap here worth understanding before you hit it.
+
+Tribal Wars keeps you logged in with cookies on **two** domains:
+
+| Domain | Holds | Who has it |
+|---|---|---|
+| `<your world>.tribalwars.nl` | the world session (`sid`, `cid`, …) | the bot |
+| `www.tribalwars.nl` — the account portal | the login (`PHPSESSID`, `nl_auth`, …) | your browser only |
+
+(Swap in your own market — `.net`, `.de`, `.co.uk`. The dashboard works out the portal domain from your world's address and shows it on the Session panel.)
+
+The bot only holds the world cookies. So if you log in through the portal and click into your world the normal way, **Tribal Wars mints a brand new world session and the bot's session dies** — you come back to a stalled bot and have to paste a fresh cookie string.
+
+The session-restore extension avoids that: it injects the bot's own cookies into your browser and opens the world directly, so you and the bot share one session. Three one-time steps.
+
+### Step 1 — Save your portal cookies
+
+The bot can't read these itself (they're on a domain it never visits), so you hand them over once.
+
+1. Open **www.tribalwars.nl** in your browser and make sure you're logged in.
+2. Press `F12` → **Network** tab → `F5` to refresh.
+3. Click the **first** request in the list.
+4. Under **Request Headers**, copy the whole value of the `cookie:` line.
+5. In the dashboard's **Overview**, find the **Session** panel on the right, paste it into **Portal cookies**, and press **Save portal cookies**. The badge flips to `saved`.
+
+![The Session panel, with the game session and portal cookie fields](readme/img/session-panel.png)
+
+*Same panel holds both: the top box is your world session, the bottom one your portal cookies.*
+
+### Step 2 — Install the extension
+
+1. Open **http://localhost:5000/app/tw-open** and click **Download extension**. Unzip it to a folder you won't delete.
+2. In Chrome or Edge, go to `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked**, and pick that folder.
+
+![The Open Game page with the extension install steps](readme/img/session-restore-extension.png)
+
+The download is already configured for your server and world — there's nothing to fill in. The pill on that page flips to **extension installed ✓** once Chrome has it.
+
+### Step 3 — Use it
+
+Click the **TWB Session Restore** toolbar icon, or the **Open game** button on the dashboard. Either one injects both sets of cookies and opens your world already logged in, with the bot still running.
+
+**When you need to redo it:**
+
+- **After logging into the portal through TW's normal login form** — that invalidates your stored portal cookies, so re-save them (step 1). Logging into the *portal* alone doesn't kill the bot's world session; only entering a world through it does.
+- **If the bot's session truly dies** — paste a fresh cookie string into the **Session** box, and the extension works off that again.
+
+---
+
 ## Using it from your phone
 
 The dashboard is a normal web page, so anything with a browser can drive it — **as long as it's on the same WiFi as the machine running the bot.**
@@ -184,7 +235,7 @@ Windows, Linux and Docker all bind the dashboard to your whole local network alr
 
 > **Never port-forward the dashboard to the internet** to get around this. It has no login of any kind — anyone who finds the open port controls your bot and your account.
 
-**Jumping into the game yourself:** the `browser-extension/` folder holds a small Chrome/Edge extension that restores your Tribal Wars session in one click, so opening the game in your browser doesn't invalidate the bot's session. Download it, pre-configured, from **http://localhost:5000/app/tw-open**, then in Chrome/Edge go to `chrome://extensions`, enable **Developer mode**, and use **Load unpacked**.
+**Jumping into the game yourself:** see [Opening the game yourself, without killing the bot](#opening-the-game-yourself-without-killing-the-bot).
 
 ---
 

@@ -1228,8 +1228,29 @@ class DataReader:
             return False
         cache_dir = DataReader.data_path("cache")
         with open(os.path.join(cache_dir, "portal_cookies.json"), 'w') as f:
-            json.dump({"domain": "www.tribalwars.nl", "cookies": cookies}, f, indent=2)
+            json.dump({"domain": DataReader.portal_domain(), "cookies": cookies}, f, indent=2)
         return True
+
+    @staticmethod
+    def portal_domain(host=None):
+        """The account portal host for a world, e.g. www.tribalwars.nl.
+
+        Worlds live on <world>.tribalwars.<tld> and the portal that owns the
+        login cookies is www.tribalwars.<tld>, so derive it from the game
+        endpoint instead of hardcoding one market. Hardcoding .nl silently
+        broke session restore everywhere else: the portal cookies got injected
+        onto a domain the player never visits.
+
+        Pass a game hostname, or leave it out to use the active world's.
+        """
+        if host is None:
+            endpoint = (DataReader.get_session() or {}).get("endpoint") or ""
+            # Cheap parse - the endpoint is always scheme://host/path.
+            host = endpoint.split("://")[-1].split("/")[0]
+        parts = [p for p in (host or "").split(".") if p]
+        if len(parts) >= 3:
+            return "www." + ".".join(parts[1:])
+        return "www.tribalwars.nl"
 
     @staticmethod
     def portal_cookies_get():

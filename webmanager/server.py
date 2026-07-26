@@ -1293,7 +1293,8 @@ def tw_cookies_export():
 
     cookie_list = make_entries(game_cookies, game_domain)
     if portal_cookies:
-        cookie_list += make_entries(portal_cookies, "www.tribalwars.nl")
+        cookie_list += make_entries(
+            portal_cookies, DataReader.portal_domain(game_domain))
 
     resp = jsonify(cookie_list)
     resp.headers["Content-Disposition"] = (
@@ -1440,6 +1441,7 @@ def get_home():
     return render_template('bot.html', data=data, session=session,
                            overview=OverviewBuilder.build(data),
                            quick=quick_settings_state(),
+                           portal_domain=DataReader.portal_domain(),
                            portal_saved=bool(DataReader.portal_cookies_get()))
 
 
