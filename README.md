@@ -1,33 +1,71 @@
 # TWB — Tribal Wars Bot
 
-An open source bot that plays [Tribal Wars](https://www.tribalwars.net/) for you: it builds, recruits, farms, scavenges, trades, researches, defends and nobles — while you keep playing in your browser alongside it.
+An open source bot that plays [Tribal Wars](https://www.tribalwars.net/) for you: it builds, recruits, farms, scavenges, trades, researches, defends and nobles, while you keep playing in your browser alongside it.
 
-This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan2200/TWB), with a rebuilt web dashboard, multi-world support, scavenging, Telegram notifications, an attack planner and a lot more (see [What this fork adds](#what-this-fork-adds)).
+This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan2200/TWB) — the original bot, heavily extended through vibe coding: a rebuilt web dashboard, multi-world support, scavenging, an attack planner, Telegram alerts and a long list of smaller fixes. See [What's new in this fork](#whats-new-in-this-fork).
 
-> **Read this first:** using a bot is against the Tribal Wars rules and can get your account banned. The safer you set it up (sane delays, active hours, a real user agent, logging in from your browser now and then) the lower the risk — but the risk never reaches zero. Use it on an account you can afford to lose.
+### About bans
+
+The bot doesn't log in for you. It rides on **your own browser session** — you paste in your cookies, and you solve any captcha yourself, in your own browser. That's the main reason it stays quiet: to the server, the traffic comes from a session a human opened and a human unblocks.
+
+Running it this way, I have **not seen a ban yet**.
+
+That is not a promise. Botting is against the Tribal Wars rules, detection changes over time, and a careless config — hammering the server, running 24/7 with no active hours, a fake user agent — will get you noticed. **Don't use an account you're not willing to lose.**
 
 ---
 
-## Quick start
+## What's new in this fork
 
-Pick the section for your device. All three end in the same place: a dashboard at **http://localhost:5000/** where you add your world and press Start.
+On top of upstream's building, recruiting, research, market, farming and noble automation:
 
-You need **Python 3.10 or newer** for the Windows/Linux routes — the installers check for you. The Docker route needs no Python at all.
+**A real dashboard**
+- Rebuilt "war-room" web interface: village overview with live resources, troops and build queues, per-village detail pages, and a config editor with search
+- Start and stop your bot from the browser, watch the live log, and get warned by a silent-stall detector when the bot has quietly stopped doing anything
+- Farm and scavenge status per village at a glance
 
-<details open>
-<summary><b>🪟 Windows</b></summary>
+**Multi-world**
+- One installation plays several worlds at once, each with its own config, session and cache, all from a single dashboard with a world switcher
 
-1. Download this repository (green **Code** button → **Download ZIP**) and unzip it somewhere permanent, like `C:\TWB`.
-2. Double-click **`start.bat`**.
+**Farming & scavenging**
+- Farm Assistant integration and a built-in combat simulator
+- Full scavenging support: auto-unlock, per-group policies, a troop picker, night consolidation (runs sized to return before the window closes) and pausing while under attack
+- Per-village toggles for farming, building and recruiting
 
-That's it. The first run installs Python's dependencies into a private folder (`.venv\`), checks everything works, then opens the dashboard in your browser.
+**Attacking & defence**
+- Attack planner with timed auto-send, inline target ETAs and map deep links
+- Incoming attack tracking with in-game tagging
+- Automatic defensive support, unit evacuation and support-sniping
+- Cancel-sniping *(alpha)* and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
 
-If Windows says Python is missing, the installer opens the download page for you — during installation **tick "Add Python to PATH"** on the first screen, then double-click `start.bat` again.
+**Staying alive**
+- Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
+- Captcha auto-resume: solve it in your browser and the bot picks up where it left off, no restart
+- A browser extension that restores your game session in one click, so opening the game yourself doesn't kill the bot's session
+- Socket timeouts, world-aware re-auth, crash recovery, daily login bonus claiming, premium point trading
 
-</details>
+Anything marked *(alpha)* works but is less tested — switch it on knowing that.
 
-<details open>
-<summary><b>🐧 Linux, macOS & Raspberry Pi</b></summary>
+---
+
+## Setting it up
+
+Two steps on any machine: **install it**, then **give it your world and cookies**. Install instructions per platform are below; everything after that is the same everywhere.
+
+You'll want **Python 3.10 or newer** — the installers check, and tell you if it's missing.
+
+### 🪟 Windows
+
+1. Download this repository: green **Code** button → **Download ZIP**.
+2. Unzip it somewhere permanent, like `C:\TWB` (not your Downloads folder).
+3. Double-click **`start.bat`**.
+
+That's the whole install. The first run sets up the dependencies in a private `.venv\` folder, checks everything imports, then opens the dashboard at **http://localhost:5000/** in your browser.
+
+If Windows says Python is missing, the installer opens the download page for you. During that install, **tick "Add Python to PATH"** on the first screen — it's easy to miss, and nothing works without it. Then double-click `start.bat` again.
+
+To stop the bot, close the console window. To start it again, double-click `start.bat`.
+
+### 🐧 Linux, macOS & Raspberry Pi
 
 ```bash
 git clone https://github.com/LazyTurtleStyle/TWBOT_LazyTurtle.git
@@ -36,84 +74,116 @@ cd TWBOT_LazyTurtle
 ./start.sh            # starts the bot + dashboard
 ```
 
-`start.sh` puts everything in a [tmux](https://github.com/tmux/tmux/wiki) session so you can watch the panes and detach with `Ctrl-B` then `D` while it keeps running. Re-run `./start.sh` to attach again. No tmux installed? It falls back to running in the background and tells you where the logs are.
+The dashboard is then at **http://localhost:5000/**.
 
-On Debian/Ubuntu/Raspberry Pi OS you may need `sudo apt install python3-venv` first — the installer says so if it does.
+`start.sh` runs everything in a [tmux](https://github.com/tmux/tmux/wiki) session, so you can watch the panes and detach with `Ctrl-B` then `D` while it keeps running. Run `./start.sh` again to reattach. If tmux isn't installed it runs in the background instead, and prints where the logs are.
 
-</details>
+On Debian, Ubuntu and Raspberry Pi OS you may need `sudo apt install python3-venv` first — `install.sh` says so if you do.
 
-<details open>
-<summary><b>🐳 Docker (any OS, NAS, VPS)</b></summary>
+### 🐳 Docker (optional, for a NAS or VPS)
 
 ```bash
 git clone https://github.com/LazyTurtleStyle/TWBOT_LazyTurtle.git
 cd TWBOT_LazyTurtle
-cp .env.example .env      # set your timezone, optional
+cp .env.example .env      # set your timezone
 docker compose up -d
 ```
 
-Open http://localhost:5000/ and add your world there. One container runs both the dashboard and your bots — the dashboard's Start/Stop buttons control them.
-
-```bash
-docker compose logs -f     # watch the bot work
-docker compose restart     # after editing a config by hand
-docker compose down        # stop
-```
-
-Your data lives in `worlds/` on the host, so it survives rebuilds — back that folder up. Once a world runs well, put its name in `.env` as `WORLDS=nl99` so it starts by itself after a reboot.
-
-</details>
+One container runs the dashboard and your bots together. `docker compose logs -f` to watch it, `docker compose down` to stop. Your data stays on the host in `worlds/`.
 
 ---
 
-## First run: getting your world in
+## Getting your cookies
 
-The bot plays through **your own browser session**, which is how it gets past the login and captcha. So it needs three things, all entered on the dashboard under **Configure → Settings**:
+The bot needs your browser's session to act as you. This is the one manual step, and you'll repeat it every day or two as the session expires.
 
-| Field | Where to get it |
-|---|---|
-| **World URL** | Log into your world and copy the address bar, e.g. `https://nl99.tribalwars.nl/game.php?village=12345&screen=overview` |
-| **User agent** | Google "what is my user agent" and paste the result. Matching your real browser lowers detection. |
-| **Cookie string** | See below |
+**In Chrome or Edge:**
 
-**Finding the cookie string (Chrome/Edge/Firefox):** press `F12` → **Network** tab → refresh the page → click the first `game.php` request → scroll to **Request Headers** → copy the whole value of the `cookie:` header.
+1. Log into your Tribal Wars world as normal.
+2. Press `F12` to open developer tools, and click the **Network** tab.
+3. Press `F5` to refresh the page.
+4. Click the first request in the list — it's called **`game.php`**.
+5. Scroll down to **Request Headers** and find the line starting with `cookie:`.
+6. Copy the **entire value** after `cookie:` — a long string of `name=value;` pairs.
 
 ![Where to find the cookie string](readme/network.JPG)
 
-Paste all three into the dashboard, press create, and the bot starts playing. Your villages get added automatically as you conquer them.
+**In Firefox:** the same steps — `F12` → **Network** → refresh → click `game.php` → **Headers** → **Request Headers** → copy the `Cookie` value.
 
-> **Keep the session alive:** log out and back in through your browser once or twice a day and paste the fresh cookie string into the dashboard. A single session running for 24h straight is a strong ban signal. If a captcha appears, just solve it in your browser on the same session — the bot notices and resumes on its own.
+> **Keep the session healthy.** Log out and back in through your browser once or twice a day, and paste the fresh cookie string into the dashboard. One session running 24 hours straight is a strong bot signal.
+>
+> **If a captcha appears,** solve it in your browser on that same session. The bot notices it clear and resumes on its own — no restart needed.
 
 ---
 
-## Using it from your phone or another PC
+## Setting up your world
+
+With the bot running, open **http://localhost:5000/** and go to **Configure → Settings** in the left sidebar.
+
+### 1. Add your world
+
+Under **Add a world**, fill in three fields:
+
+| Field | What to put in it |
+|---|---|
+| **Game URL** | The address bar of your logged-in world, e.g. `https://nl99.tribalwars.nl/game.php?village=12345&screen=overview` |
+| **Browser user agent** | Google "what is my user agent" and paste the result. Matching your real browser lowers detection. |
+| **Login cookie** | The long string you just copied. Marked optional in the UI, but fill it in — without it the bot stops and asks for it in the console instead. |
+
+Press create. The bot works out the world name from the URL, writes its config and starts playing. Your villages are added automatically as you conquer them.
+
+### 2. Go through the settings
+
+Still under **Configure**: **Settings** holds the things you set once, and **All settings** exposes everything with a search box. Worth a look before you leave it running:
+
+- **Bot** — `active_hours` (e.g. `6-23`, so it sleeps at night like a human) and `delay_factor`. These two matter most for staying unnoticed.
+- **Building** and **Recruitment** — which template the bot builds and recruits towards. Templates live under **Templates** in the sidebar if you want to shape your own.
+- **Farms** — ⚠️ **read [readme/farm_checklist.md](readme/farm_checklist.md) before switching farming on.** It's easy to miss a setting that leaves farming silently disabled, or pointed at the wrong villages.
+- **Market** — resource balancing and premium point trading.
+- **Notifications (Telegram)** — optional, but worth it. The page walks you through @BotFather and has a "send test message" button.
+- **Default village template** — the settings each newly conquered village inherits.
+
+Config changes are picked up while the bot runs; no restart needed.
+
+### 3. Watch it play
+
+The sidebar is grouped by what you're doing:
+
+- **Overview** — what every village is doing right now, recent loot, last activity. **Bot logs** shows the live log.
+- **Operations** — **Villages** (per-village detail and toggles), **Attack** (planner and timed sends), **Defense**, **Farms & scavenging**, **World map**.
+- **Modules** — quick jumps into the building, recruitment and market config.
+
+If something looks stuck, the Overview banner tells you whether it's a captcha, a dead session, or a genuine stall.
+
+---
+
+## Using it from your phone
 
 The dashboard is a normal web page, so anything with a browser can drive it.
 
 1. Find the IP of the machine running the bot (`ip a` on Linux, `ipconfig` on Windows) — something like `192.168.1.42`.
 2. On your phone, open `http://192.168.1.42:5000/`.
 
-`start.sh`, `start.bat` and Docker all bind the dashboard to your whole network already. To restrict it to the local machine instead, run `HOST=127.0.0.1 ./start.sh`.
+Windows, Linux and Docker all bind the dashboard to your whole network already. To keep it to the local machine only, run `HOST=127.0.0.1 ./start.sh`.
 
 > **Never port-forward the dashboard to the internet.** It has no login — anyone who finds it controls your account. To reach it from outside your home, use a VPN like [Tailscale](https://tailscale.com/) or WireGuard.
 
-**Bonus — jump straight into the game:** the `browser-extension/` folder holds a small Chrome/Edge extension that restores your Tribal Wars session in one click, so you can open the game in your browser without invalidating the bot's session after a reboot. Download it from the dashboard at **http://localhost:5000/app/tw-open** (it comes pre-configured for your server and world), then in Chrome/Edge go to `chrome://extensions`, enable **Developer mode**, and use **Load unpacked**.
+**Jumping into the game yourself:** the `browser-extension/` folder holds a small Chrome/Edge extension that restores your Tribal Wars session in one click, so opening the game in your browser doesn't invalidate the bot's session. Download it, pre-configured, from **http://localhost:5000/app/tw-open**, then in Chrome/Edge go to `chrome://extensions`, enable **Developer mode**, and use **Load unpacked**.
 
 ---
 
-## Running more than one world
+## Playing more than one world
 
-One copy of the bot plays several worlds at once, each with its own config, session and cache, all from a single dashboard:
+One copy of the bot plays several worlds at once, each with its own config, session and cache:
 
 ```bash
-./start.sh nl99 nl98        # two worlds, one shared dashboard
+./start.sh nl99 nl98        # Linux/macOS/Pi
+start.bat nl99               # Windows
 ```
 
-Each world keeps its data in `worlds/<name>/` (`config.json` + `cache/`). Templates are shared. A **World** dropdown appears in the dashboard navbar to switch between them; Start/Stop and status target the selected world.
+Each world keeps its data in `worlds/<name>/`; templates are shared. A **World** dropdown appears in the dashboard navbar to switch between them, and start/stop targets the selected world. On Docker, set `WORLDS=nl99 nl98` in `.env`.
 
-On Docker, set `WORLDS=nl99 nl98` in `.env`. On Windows, `start.bat nl99`.
-
-Running plain `./start.sh` with no world name uses the project root as before, so existing single-world setups keep working unchanged.
+Running plain `./start.sh` with no world name uses the project root, so single-world setups keep working unchanged.
 
 ---
 
@@ -121,51 +191,20 @@ Running plain `./start.sh` with no world name uses the project root as before, s
 
 | Setup | How |
 |---|---|
-| **Docker** | Already handled — `restart: unless-stopped` brings it back after a crash or reboot. |
-| **Raspberry Pi / VPS / home server** | `sudo cp deploy/twb.service /etc/systemd/system/` — edit the user and paths inside, then `sudo systemctl enable --now twb`. Watch it with `journalctl -u twb -f`. |
-| **Windows PC** | Leave the `start.bat` window open. For always-on use, a Pi or a cheap VPS is far kinder to your electricity bill. |
-
----
-
-## What this fork adds
-
-On top of upstream's building/recruiting/research/market/farming/snob automation:
-
-**Dashboard**
-- Rebuilt "war-room" interface: village overview with live resources, troops and build queues, per-village detail pages, config editor with search, and a first-run setup page
-- Multi-world switcher, Start/Stop per world, live bot log, and a silent-stall detector that tells you when the bot has quietly stopped doing anything
-- Farm and scavenge status per village at a glance
-
-**Farming & scavenging**
-- Farm Assistant integration and a built-in combat simulator
-- Full scavenging support: auto-unlock, per-group policies, troop picker, night consolidation (runs sized so they return before the window closes), and pausing while under attack
-- Per-village toggles for farming, building and recruiting
-
-**Attacking & defence**
-- Attack planner with timed auto-send, inline target ETAs and map deep links
-- Incoming attack tracking with in-game tagging
-- Defence: automatic support, unit evacuation, and support-sniping
-- Cancel-sniping *(alpha)* and an automated barbarian "shaper" that razes walls with axe+ram *(alpha)*
-
-**Reliability & quality of life**
-- Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
-- Captcha auto-resume — solve it in your browser and the bot picks up where it left off, no restart
-- Session-restore browser extension, socket timeouts, world-aware re-auth, crash recovery
-- Daily login bonus claiming, premium point trading, per-1000 market trades
-
-Features marked *(alpha)* work but are less tested — turn them on knowing that.
+| **Docker** | Already handled — it restarts after a crash or reboot. |
+| **Raspberry Pi / VPS** | `sudo cp deploy/twb.service /etc/systemd/system/`, edit the user and paths inside, then `sudo systemctl enable --now twb`. Watch it with `journalctl -u twb -f`. |
+| **Windows PC** | Leave the `start.bat` window open. For always-on play, a Pi or cheap VPS is far kinder to your power bill. |
 
 ---
 
 ## Updating
 
 ```bash
-git pull                       # Linux/macOS/Pi + Docker
-./install.sh                   # refresh dependencies
-docker compose up -d --build   # Docker only, instead of install.sh
+git pull && ./install.sh          # Linux/macOS/Pi
+docker compose up -d --build      # Docker
 ```
 
-On Windows: download the new ZIP, copy your `config.json`, `worlds/` and `cache/` folders across, then run `setup.bat` once.
+On Windows: download the new ZIP, copy your `worlds/` folder across (and `config.json`, if you run a single world), then run `setup.bat` once.
 
 ---
 
@@ -173,12 +212,13 @@ On Windows: download the new ZIP, copy your `config.json`, `worlds/` and `cache/
 
 | Symptom | Fix |
 |---|---|
-| **"Bot protection" / captcha in the log** | Solve the captcha in your browser on the same session. The bot polls and resumes automatically. |
-| **Bot runs but nothing happens** | Check the dashboard's stall banner. Usually a dead session — paste a fresh cookie string. Also check your in-game report filters aren't filing reports into groups the bot never reads. |
-| **"Not enough resources" spam** | Normal. The bot retries as resources come in. |
-| **Dashboard unreachable from your phone** | Check the firewall on the host, and that you used the machine's LAN IP rather than `localhost`. |
+| **"Bot protection" / captcha in the log** | Solve the captcha in your browser on the same session. The bot resumes by itself. |
+| **Bot runs but nothing happens** | Usually a dead session — paste a fresh cookie string. Also check your in-game report filters aren't filing reports into groups the bot never reads. |
+| **"Not enough resources" in the log** | Normal. The bot retries as resources come in. |
+| **Farming does nothing** | Work through [readme/farm_checklist.md](readme/farm_checklist.md). |
+| **Dashboard unreachable from your phone** | Check the host's firewall, and that you used its LAN IP rather than `localhost`. |
 | **Windows: `python` is not recognised** | Reinstall Python with **Add Python to PATH** ticked, then run `setup.bat`. |
-| **Everything is broken after an update** | Run `./install.sh` (or `setup.bat`) to refresh dependencies. |
+| **Broken after an update** | Run `./install.sh` (or `setup.bat`) to refresh dependencies. |
 
 Still stuck? Open an issue at [TWBOT_LazyTurtle/issues](https://github.com/LazyTurtleStyle/TWBOT_LazyTurtle/issues), or ask in the upstream project's [Discord](https://discord.gg/8PuzHjttMy).
 
@@ -186,15 +226,15 @@ Still stuck? Open an issue at [TWBOT_LazyTurtle/issues](https://github.com/LazyT
 
 ## More documentation
 
-- [readme/readme.md](readme/readme.md) — how the bot plays a world from day one to nobling
+- [readme/readme.md](readme/readme.md) — how the bot plays a world, from your first buildings to nobling
 - [readme/configs.md](readme/configs.md) and [ConfigReadme.md](ConfigReadme.md) — every config option explained
-- [readme/farm_checklist.md](readme/farm_checklist.md) — **run through this before turning farming on**; it's easy to miss a setting that leaves farming silently disabled
+- [readme/farm_checklist.md](readme/farm_checklist.md) — run through this before turning farming on
 - [CHANGELOG.md](CHANGELOG.md) — what changed between versions
 
 ---
 
 ## Credits & licence
 
-Built on [stefan2200/TWB](https://github.com/stefan2200/TWB) — all credit for the original bot goes there. This fork adds the dashboard, multi-world support and the features listed above.
+Built on [stefan2200/TWB](https://github.com/stefan2200/TWB) — all credit for the original bot goes there. This fork adds the dashboard, multi-world support and everything under [What's new](#whats-new-in-this-fork).
 
 Licensed under the GPL — see [LICENSE.md](LICENSE.md).
