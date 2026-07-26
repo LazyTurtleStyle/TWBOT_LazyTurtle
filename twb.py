@@ -735,6 +735,18 @@ class TWB:
             logging.getLogger("NobleBarb").warning(
                 "Noble-barb pass failed: %s", exc)
 
+    def heartbeat(self):
+        """Stamp proof that the main loop is still turning.
+
+        Called as the loop makes progress - not just once per cycle. A full
+        cycle over several villages takes far longer than the watchdog's
+        threshold (which only budgets for the configured sleep), so stamping
+        once at the top made a healthy multi-village bot look hung for the
+        back half of every cycle.
+        """
+        FileManager.save_json_file_atomic(
+            {"ts": int(time.time()), "runs": self.runs}, "cache/heartbeat.json")
+
     def run(self):
         """
         Run the bot
@@ -822,8 +834,7 @@ class TWB:
             # non-blocking wrappers and keep logging even when this loop is stuck
             # (e.g. waiting out a captcha in WebWrapper._await_captcha_clear).
             # OverviewBuilder uses staleness here as a generic "bot stalled" signal.
-            FileManager.save_json_file_atomic(
-                {"ts": int(time.time()), "runs": self.runs}, "cache/heartbeat.json")
+            self.heartbeat()
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
                 sleep = 0
@@ -918,6 +929,9 @@ class TWB:
                         village.village_set_name = template
 
                     village.run(config=config)
+                    # Each village is minutes of work; stamp as we go so the
+                    # watchdog sees progress instead of one silent gap.
+                    self.heartbeat()
 
                     if (
                             village.get_config(
@@ -963,6 +977,10 @@ class TWB:
                     % (sleep / 60, dt_next.time())
                 )
                 sys.stdout.flush()
+                # Stamp after the post-cycle work (farm manager, pruning) and
+                # before the long sleep, so a healthy idle bot is never older
+                # than its own configured delay.
+                self.heartbeat()
                 time.sleep(sleep)
 
     def start(self):
