@@ -422,7 +422,8 @@ class IncomingManager:
             Notification.send(
                 "TWB: incoming-attack tracking is logged out - the session "
                 "cookie has expired. Refresh the cookie; attacks are NOT being "
-                "detected until you do."
+                "detected until you do.",
+                category="session",
             )
             last_notified = now
         FileManager.save_json_file(
@@ -435,7 +436,7 @@ class IncomingManager:
         state = FileManager.load_json_file(SESSION_STATE_CACHE)
         if state and state.get("logged_out"):
             self.logger.info("Incoming poll session restored")
-            Notification.send("TWB: incoming-attack tracking session restored.")
+            Notification.send("TWB: incoming-attack tracking session restored.", category="session")
             FileManager.save_json_file({"logged_out": False}, SESSION_STATE_CACHE)
 
     # -- in-game label endpoint capture -------------------------------------

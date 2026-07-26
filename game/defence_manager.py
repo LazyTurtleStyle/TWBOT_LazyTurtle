@@ -1,9 +1,12 @@
 import json
 import logging
+import math
 import random
 import re
+import time
 
 from core.extractors import Extractor
+from core.filemanager import FileManager
 
 
 class DefenceManager:
@@ -23,7 +26,9 @@ class DefenceManager:
 
     defensive_units = ["spear", "sword", "archer", "marcher", "spy"]
 
-    hide_units = ["snob", "axe"]
+    # Units that are pointless (or too precious) to leave home during an
+    # attack: the whole off plus the noble. Defensive units stay and fight.
+    hide_units = ["snob", "axe", "light", "marcher", "ram", "catapult"]
 
     flags = {}
 
@@ -103,8 +108,9 @@ class DefenceManager:
         if self.detect_incoming(main):
             self.under_attack = True
             ok = False
-            if self.auto_evacuate and with_defence:
-                self.evacuate()
+            # Evacuation is triggered from Village.run *after* the troop counts
+            # are refreshed, so the send uses live numbers (and works on the
+            # first cycle too) - not from here.
         else:
             if not with_defence:
                 self.under_attack = False
@@ -135,26 +141,94 @@ class DefenceManager:
             self.logger.info("Area OK for village %s, nice and quiet", self.village_id)
             # All is well
 
+    @staticmethod
+    def villages_with_incomings():
+        """Own village ids that currently have an incoming attack, according
+        to the incoming poller's cache (arrivals still in the future)."""
+        targeted = set()
+        now = time.time()
+        try:
+            files = FileManager.list_directory(
+                "cache/incomings", ends_with=".json")
+        except Exception:
+            return targeted
+        for name in files:
+            entry = FileManager.load_json_file(f"cache/incomings/{name}") or {}
+            arrival = entry.get("arrival")
+            if entry.get("target_id") and (arrival is None or arrival > now):
+                targeted.add(str(entry["target_id"]))
+        return targeted
+
+    @staticmethod
+    def _managed_locations():
+        """{village_id: [x, y]} for every managed village in the cache."""
+        locations = {}
+        try:
+            files = FileManager.list_directory(
+                "cache/managed", ends_with=".json")
+        except Exception:
+            return locations
+        for name in files:
+            entry = FileManager.load_json_file(f"cache/managed/{name}") or {}
+            loc = (entry.get("public") or {}).get("location")
+            if isinstance(loc, list) and len(loc) == 2:
+                locations[name[:-len(".json")]] = loc
+        return locations
+
     def evacuate(self):
+        """Dodge the fragile units out to the nearest own village that has no
+        incoming attack itself. They arrive as support and stay there until
+        pulled back manually (there is no auto-return)."""
         if not self.units:
             return False
         to_hide = {}
         for u in self.hide_units:
             if u in self.units.troops and int(self.units.troops[u]) > 0:
                 to_hide[u] = int(self.units.troops[u])
-        if to_hide and len(self.my_other_villages) == 1:
-            # good luck ;)
+        if not to_hide:
             return False
-        for v_obj in self.my_other_villages:
-            vid, attack_state = v_obj
-            if vid == self.village_id:
-                continue
-            if not attack_state:
-                self.logger.info(
-                    "Evacuating troops from village %s: %s", vid, str(to_hide)
-                )
-                self.support(vid, troops=to_hide)
+        # under_attack is account-wide (player.incomings); the incoming
+        # poller's cache says which village the attacks actually target. Only
+        # skip when the cache positively points at other villages - an empty
+        # cache (poller off/behind) must not stop a dodge.
+        targeted = self.villages_with_incomings()
+        if targeted and str(self.village_id) not in targeted:
+            self.logger.debug(
+                "Incoming attacks target other villages - village %s stays put",
+                self.village_id
+            )
+            return False
+        locations = self._managed_locations()
+        here = locations.get(str(self.village_id))
+        candidates = [
+            vid for vid in locations
+            if vid != str(self.village_id) and vid not in targeted
+        ]
+        if not candidates:
+            self.logger.warning(
+                "Village %s wants to evacuate %s but no safe own village is "
+                "known - troops stay home", self.village_id, str(to_hide)
+            )
+            return False
+
+        # Nearest safe village first, so the troops are back in range soonest.
+        def _distance(vid):
+            if not here:
+                return 9999.0
+            loc = locations[vid]
+            return math.hypot(loc[0] - here[0], loc[1] - here[1])
+
+        for vid in sorted(candidates, key=_distance):
+            self.logger.info(
+                "Evacuating troops from village %s to %s: %s",
+                self.village_id, vid, str(to_hide)
+            )
+            if self.support(vid, troops=to_hide, coords=locations[vid]):
                 return True
+            self.logger.warning(
+                "Evacuation send to village %s failed, trying the next one", vid
+            )
+        return False
 
     def flag_logic(self, set_flag):
         if not self.manage_flags_enabled:
@@ -264,7 +338,7 @@ class DefenceManager:
         if upgraded:
             return self.manage_flags()
 
-    def support(self, vid, troops=None):
+    def support(self, vid, troops=None, coords=None):
         url = f"game.php?village={self.village_id}&screen=place&target={vid}"
         pre_support = self.wrapper.get_url(url)
         pre_data = {}
@@ -276,10 +350,11 @@ class DefenceManager:
         else:
             pre_data.update(self.units.troops)
 
-        if vid not in self.map.map_pos:
-            return False
-
-        x, y = self.map.map_pos[vid]
+        if not coords:
+            if not self.map or vid not in self.map.map_pos:
+                return False
+            coords = self.map.map_pos[vid]
+        x, y = coords
         post_data = {"x": x, "y": y, "target_type": "coord", "support": "Ondersteunen"}
         pre_data.update(post_data)
 

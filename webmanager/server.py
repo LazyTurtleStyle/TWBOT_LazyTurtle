@@ -638,10 +638,13 @@ def setup_page():
 
 @app.route('/app/notification/test', methods=['POST'])
 def notification_test():
-    """Send a test Telegram message using the currently saved config."""
+    """Send a test Telegram message using the selected world's saved config."""
     try:
         from core.notification import Notification
-        ok, err = Notification.test()
+        # Pass the active world's config explicitly: the web process's
+        # FileManager is not world-aware (only DataReader is), so letting
+        # Notification.test() read config.json itself would hit the wrong file.
+        ok, err = Notification.test(config=DataReader.config_grab())
     except Exception as exc:  # e.g. telegram lib missing
         ok, err = False, str(exc)
     return jsonify({"ok": ok, "error": err})

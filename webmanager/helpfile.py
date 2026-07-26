@@ -10,6 +10,13 @@ help_file = {
     'notifications.enabled': 'Send push notifications to Telegram.',
     'notifications.channel_id': 'The Telegram chat/channel id the bot posts to.',
     'notifications.token': 'The Telegram bot API token, obtained from @BotFather.',
+    'notifications.notify_startup': 'Notify when the bot starts up ("TWB is starting up").',
+    'notifications.notify_crash': 'Notify when the bot crashes or gives up after repeated crashes.',
+    'notifications.notify_session': 'Notify when the session/cookie is logged out (bot idle, or incoming attacks not being detected) and when it recovers. Recommended to keep on.',
+    'notifications.notify_captcha': 'Notify when a captcha / bot protection is hit (bot paused until you solve it) and when it clears.',
+    'notifications.notify_village': 'Notify about village/world changes: a village lost (conquered/nobled), an unreadable overview, or host-vs-server clock skew.',
+    'notifications.notify_farm': 'Notify when a player-farm run auto-stops.',
+    'notifications.notify_attack': 'Notify about attack-job outcomes: noble jobs, snipes and cancel-snipes.',
     'bot': 'Set global bot configuration variables',
     'bot.active_hours': 'The hours when the bot should use active_delay (this does not impact attack timings)',
     'bot.delay_factor': 'Multiplier on the base 5-7 second action delay. Higher is slower and safer; very low values will probably cause a ban.',
@@ -77,6 +84,7 @@ help_file = {
     'market.trade_multiplier': 'Set to true if the world supports uneven trade ratios',
     'market.trade_multiplier_value': 'Trade ratio bias, only used when uneven ratios (trade_multiplier) are enabled. Lower values give you more resources per trade (1.0 = even).',
     'market.trade_max_per_hour': 'The amount of trades the bot can do in 1 hour',
+    'market.trade_round_to_1000': 'Round offer amounts to the nearest 1000 (a merchant\'s carrying capacity). Non-round offers mostly get ignored by other players since they leave a merchant trip half-empty.',
     'market.trade_for_premium': 'Account-wide on/off switch for trading left-over resources for premium points. Also needs the per-village toggle enabled, and the world to actually have a premium market. Doing this too much could result in a ban.',
     'world.knight_enabled': 'The world has knights enabled',
     'world.flags_enabled': 'Capability marker only: does this world have flags? It no longer drives any behaviour - actual flag management lives on the Flags tab.',
@@ -113,7 +121,7 @@ help_file = {
     'village.scavenge_unlock_hq_3': 'Headquarters level at which scavenge option 3 should be unlocked (default 8).',
     'village.scavenge_unlock_hq_4': 'Headquarters level at which scavenge option 4 should be unlocked (default 15 — costly, so wait until the warehouse can hold it).',
     'village.snobs': 'The amount of snobs to create in the current village',
-    'village.evacuate_fragile_units_on_attack': 'Automatically evacuate fragile units (axe, snob) to nearby safe villages in case of an attack',
+    'village.evacuate_fragile_units_on_attack': 'Dodge: when an attack is incoming on this village, send the off units (axe, light, marcher, ram, catapult) and nobles as support to the nearest own village that is not under attack itself. They stay there until you pull them back manually. Works on its own; the global manage_defence switch is not required.',
     'village.support_others': 'Allows the sending of automatic support',
     'village.support_others_factor': 'Factor of units to use in support operation (only defensive ones)',
     'village.support_others_max_villages': 'The max amount of villages to send support to (total 2 * 25% of troops)',
@@ -221,6 +229,13 @@ section_setup = {
 # for a section fall into an automatic "Other" group at the bottom, so missing or
 # newly added keys are never dropped.
 config_groups = {
+    'notifications': [
+        ('Connection', ['enabled', 'token', 'channel_id']),
+        ('Which messages to receive', ['notify_session', 'notify_captcha',
+                                       'notify_crash', 'notify_village',
+                                       'notify_farm', 'notify_attack',
+                                       'notify_startup']),
+    ],
     'bot': [
         ('Timing & activity', ['active_hours', 'delay_factor', 'active_delay',
                                'inactive_delay', 'inactive_still_active',
@@ -255,7 +270,7 @@ config_groups = {
                                 'shaper_max_travel_hours']),
     ],
     'market': [
-        ('Trading', ['auto_trade', 'auto_remove', 'max_trade_duration', 'trade_max_per_hour']),
+        ('Trading', ['auto_trade', 'auto_remove', 'max_trade_duration', 'trade_max_per_hour', 'trade_round_to_1000']),
         ('Uneven ratios', ['trade_multiplier', 'trade_multiplier_value']),
         ('Premium', ['trade_for_premium']),
     ],

@@ -151,7 +151,8 @@ class WebWrapper:
             "session; the bot resumes automatically.")
         Notification.send(
             "Bot protection hit! Solve the captcha in a browser on the same "
-            "session - the bot auto-resumes when it clears.")
+            "session - the bot auto-resumes when it clears.",
+            category="captcha")
         FileManager.save_json_file_atomic(
             {"since": int(time.time())}, self.CAPTCHA_BLOCK_FILE)
         while True:
@@ -172,7 +173,7 @@ class WebWrapper:
                 heartbeat["ts"] = int(time.time())
                 FileManager.save_json_file_atomic(heartbeat, "cache/heartbeat.json")
                 self.logger.info("Captcha cleared - resuming.")
-                Notification.send("Captcha cleared, bot resumed.")
+                Notification.send("Captcha cleared, bot resumed.", category="captcha")
                 return res
             # Still blocked: keep the banner marker present even if it was cleared
             # manually before the captcha was actually solved.

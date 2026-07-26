@@ -105,6 +105,7 @@ class ResourceManager:
     last_trade = 0
     trade_max_per_hour = 1
     trade_max_duration = 2
+    trade_round_to_1000 = False
     wrapper = None
     village_id = None
     do_premium_trade = False
@@ -357,6 +358,16 @@ class ResourceManager:
         self.last_trade = int(time.time())
         return True
 
+    def round_to_merchant_capacity(self, amount):
+        """
+        Rounds a trade amount to the nearest multiple of 1000 (a merchant's
+        carrying capacity). Other players mostly ignore offers that aren't
+        round thousands since they leave a merchant trip half-empty.
+        """
+        step = 1000
+        rounded = int(round(amount / step)) * step
+        return max(step, rounded)
+
     def drop_existing_trades(self):
         """
         Removes an existing trade if resources are needed elsewhere or it expired
@@ -449,6 +460,9 @@ class ResourceManager:
                     )
                     how_many = self.max_trade_amount
                 biased = int(how_many * self.trade_bias)
+                if self.trade_round_to_1000:
+                    how_many = self.round_to_merchant_capacity(how_many)
+                    biased = self.round_to_merchant_capacity(biased)
                 if self.actual[plenty] < biased:
                     self.logger.debug("Cannot trade because insufficient resources")
                     return

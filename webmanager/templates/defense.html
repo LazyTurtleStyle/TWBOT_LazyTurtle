@@ -364,8 +364,9 @@
 	train — watch the result closely the first time you use it.
 	Support snipe: pick an incoming attack and land defensive support on the exact millisecond,
 	{{ -snipe.default_offset_ms }}&nbsp;ms before the hit by default (a negative offset lands before, a positive
-	one after — e.g. in a train gap). Every village offers one option per unit pace it has at home; the bot
-	fires each send so the server's own travel time lands it on target.</p>
+	one after — e.g. in a train gap). Tick which villages send and type the exact troop counts yourself for
+	each (off units too, for a ram-pace or full-off snipe) - the send walks at the slowest unit you enter. The
+	bot fires each send so the server's own travel time lands it on target.</p>
 
 <!-- Armed / past snipes -->
 <div class="card mb-3">
@@ -463,29 +464,24 @@
 		<div class="form-row">
 			<div class="form-group col-6 col-md-2">
 				<label>Group</label>
-				<select class="form-control form-control-sm" id="sn-group" onchange="snipeRecalc()">
+				<select class="form-control form-control-sm" id="sn-group" onchange="snipeBuildRows()">
 					<option value="all">all villages</option>
 				</select>
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Hit ms <small class="text-muted">(.000–.999)</small></label>
 				<input type="number" class="form-control form-control-sm" id="sn-hit-ms" min="0" max="999" value="0"
-					onchange="snipeRecalc()">
+					onchange="snipeRecalcAll()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Land offset ms <small class="text-muted">(&lt;0 = before)</small></label>
 				<input type="number" class="form-control form-control-sm" id="sn-offset" min="-5000" max="5000"
-					value="{{ snipe.default_offset_ms }}" onchange="snipeRecalc()">
-			</div>
-			<div class="form-group col-6 col-md-2">
-				<label>% of troops home</label>
-				<input type="number" class="form-control form-control-sm" id="sn-pct" min="1" max="100" value="100"
-					onchange="snipeRecalc()">
+					value="{{ snipe.default_offset_ms }}" onchange="snipeRecalcAll()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Speed boost <small class="text-muted">(e.g. 1.2)</small></label>
 				<input type="number" class="form-control form-control-sm" id="sn-boost" min="0.5" max="2" step="0.05"
-					value="1.0" onchange="snipeRecalc()">
+					value="1.0" onchange="snipeRecalcAll()">
 			</div>
 		</div>
 		<div class="form-row">
@@ -503,14 +499,10 @@
 					value="{{ snipe.default_min_pct }}">
 			</div>
 		</div>
-		<div class="table-responsive">
-			<table class="table table-sm def-table mb-2">
-				<thead><tr>
-					<th></th><th>Village</th><th>Pace</th><th>Send at</th><th>Send in</th><th>Units</th>
-				</tr></thead>
-				<tbody id="sn-options-body"></tbody>
-			</table>
-		</div>
+		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself —
+			pace is whichever unit you enter is slowest, so mixing in a ram or axe makes the whole send walk at
+			that pace.</p>
+		<div id="sn-options-body"></div>
 		<div class="text-danger small mb-2" id="sn-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="snipeArm()">Arm selected snipes</button>
 		<button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('snipe-options').style.display='none'">Close</button>
@@ -572,17 +564,19 @@ let csForm = { village_id: null, incoming_id: null, arrival: null };
 
 // Shared between the real arm form and the test tab: unit grid (defensive
 // units prefilled with everything at home), barb target prefill, unit readout.
+// Every FORM_UNITS entry gets a row regardless of current home count - off
+// units are usually away when an attack lands, but the snipe may still fire
+// well after they're due back, so 0-at-home now must not hide the input.
 function csnipeUnitGrid(grid, v, unitClass) {
 	grid.innerHTML = '';
 	CSNIPE.form_units.forEach(function(u) {
 		const home = (v.home && v.home[u]) || 0;
-		if (!home) return;
 		const prefill = CSNIPE.prefill_units.indexOf(u) >= 0 ? home : 0;
 		grid.insertAdjacentHTML('beforeend',
 			'<div class="form-group col-4 col-md-2 unit-input">' +
 			'<label>' + u + ' <small class="text-muted">/' + home + '</small></label>' +
 			'<input type="number" class="form-control form-control-sm ' + unitClass + '" data-unit="' + u + '"' +
-			' min="0" max="' + home + '" value="' + prefill + '"></div>');
+			' min="0" value="' + prefill + '"></div>');
 	});
 }
 
@@ -748,8 +742,6 @@ function cstArm() {
 // --- support-snipe tab ---
 const SNIPE = {{ snipe|tojson }};
 let snForm = { incoming_id: null, target_id: null, arrival: null };
-let snOpts = [];
-
 function esc(s) {
 	const d = document.createElement('div');
 	d.textContent = String(s == null ? '' : s);
@@ -788,23 +780,82 @@ function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 		'— support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('sn-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	document.getElementById('sn-error').textContent = '';
-	snipeRecalc();
+	snipeBuildRows();
 	const panel = document.getElementById('snipe-options');
 	panel.style.display = '';
 	panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function snipeRecalc() {
-	if (!snForm.target_id) return;
-	const tbody = document.getElementById('sn-options-body');
+// Every unit that can walk as support, in one grid per village - off units
+// included (a ram or axe in the mix just makes the whole send walk at that
+// pace). Prefilled with the classic defensive set at full home count; the
+// rest start at 0 and are opt-in by typing a number. Shown regardless of
+// current home count since troops still marching back may be home by send.
+function snipeUnitGrid(grid, home) {
+	grid.innerHTML = '';
+	SNIPE.units.filter(function(u) { return SNIPE.speeds[u]; }).forEach(function(u) {
+		const h = (home && home[u]) || 0;
+		const prefill = (SNIPE.default_units || []).indexOf(u) >= 0 ? h : 0;
+		grid.insertAdjacentHTML('beforeend',
+			'<div class="form-group col-3 col-md-2 unit-input mb-1">' +
+			'<label class="mb-0">' + u + ' <small class="text-muted">/' + h + '</small></label>' +
+			'<input type="number" class="form-control form-control-sm sn-unit-count" data-unit="' + u + '"' +
+			' min="0" value="' + prefill + '"></div>');
+	});
+}
+
+// Recomputes one village card's pace (slowest unit with a count > 0),
+// distance-derived send moment and countdown - called on every keystroke in
+// that card's unit grid, and whenever the shared hit/offset/boost fields
+// change (snipeRecalcAll), without touching what the user has typed.
+function snipeRowRecalc(row) {
 	const target = SNIPE.villages[snForm.target_id];
-	if (!target || !target.coords) {
-		tbody.innerHTML = '<tr><td colspan="6" class="text-muted">target coordinates unknown</td></tr>';
+	const v = SNIPE.villages[row.getAttribute('data-village-id')];
+	const infoEl = row.querySelector('.sn-row-info');
+	let slowest = null, slowUnit = null, any = false;
+	row.querySelectorAll('.sn-unit-count').forEach(function(inp) {
+		const n = parseInt(inp.value, 10) || 0;
+		if (n <= 0) return;
+		any = true;
+		const u = inp.getAttribute('data-unit');
+		const sp = SNIPE.speeds[u];
+		if (sp == null) return;
+		if (slowest === null || sp > slowest) { slowest = sp; slowUnit = u; }
+	});
+	if (!any) {
+		infoEl.innerHTML = '<span class="text-muted">no units entered</span>';
 		return;
 	}
-	const land = snipeLandMs();
-	const pct = Math.max(1, Math.min(100, parseInt(document.getElementById('sn-pct').value, 10) || 100));
+	if (slowUnit === null || !target || !target.coords || !v.coords) {
+		infoEl.innerHTML = '<span class="text-muted">—</span>';
+		return;
+	}
 	const boost = Math.max(0.1, parseFloat(document.getElementById('sn-boost').value) || 1.0);
+	const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
+	const travel = dist * slowest / (SNIPE.world_speed * SNIPE.unit_speed) * 60 / boost;
+	const send = Math.round(snipeLandMs() - travel * 1000);
+	row.dataset.sendMs = send;
+	row.dataset.paceUnit = slowUnit;
+	if (send < Date.now() + 45000) {
+		infoEl.innerHTML = '<span class="text-danger">too late at ' + slowUnit + ' pace, '
+			+ dist.toFixed(1) + ' fields</span>';
+	} else {
+		infoEl.innerHTML = slowUnit + ' pace · ' + dist.toFixed(1) + ' fields · send at '
+			+ fmtMs(send) + ' · <span class="sn-eta" data-epoch-ms="' + send + '">…</span>';
+	}
+}
+
+function snipeRecalcAll() {
+	document.querySelectorAll('.sn-row').forEach(snipeRowRecalc);
+}
+
+function snipeBuildRows() {
+	const body = document.getElementById('sn-options-body');
+	const target = SNIPE.villages[snForm.target_id];
+	if (!target || !target.coords) {
+		body.innerHTML = '<p class="text-muted small">target coordinates unknown</p>';
+		return;
+	}
 	const gid = document.getElementById('sn-group').value;
 	let allowed = null;
 	if (gid !== 'all') {
@@ -812,50 +863,33 @@ function snipeRecalc() {
 		allowed = {};
 		((g && g.villages) || []).forEach(function(id) { allowed[String(id)] = 1; });
 	}
-	snOpts = [];
-	Object.values(SNIPE.villages).forEach(function(v) {
-		if (v.id === snForm.target_id || !v.coords) return;
-		if (allowed && !allowed[v.id]) return;
-		const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
-		const present = SNIPE.units.filter(function(u) { return (v.home[u] || 0) > 0 && SNIPE.speeds[u]; });
-		// One option per distinct pace: the command walks at its slowest
-		// unit, so pace unit X takes along every unit at least as fast.
-		const seen = {};
-		present.forEach(function(pu) {
-			const pace = SNIPE.speeds[pu];
-			const included = present.filter(function(u) { return SNIPE.speeds[u] <= pace; });
-			const key = included.join(',');
-			if (seen[key]) return;
-			seen[key] = 1;
-			const travel = dist * pace / (SNIPE.world_speed * SNIPE.unit_speed) * 60 / boost;
-			const send = Math.round(land - travel * 1000);
-			if (send < Date.now() + 45000) return; // cannot make it anymore
-			const units = {};
-			included.forEach(function(u) {
-				const n = Math.floor((v.home[u] || 0) * pct / 100);
-				if (n > 0) units[u] = n;
-			});
-			if (!Object.keys(units).length) return;
-			snOpts.push({ village: v, pace_unit: pu, units: units, send: send, distance: dist });
-		});
+	const rows = Object.values(SNIPE.villages).filter(function(v) {
+		return v.id !== snForm.target_id && v.coords && (!allowed || allowed[v.id]);
 	});
-	snOpts.sort(function(a, b) { return a.send - b.send; });
-	if (!snOpts.length) {
-		tbody.innerHTML = '<tr><td colspan="6" class="text-muted">no option reaches this landing moment in time'
-			+ (allowed ? ' (within this group)' : '') + '</td></tr>';
+	if (!rows.length) {
+		body.innerHTML = '<p class="text-muted small">no eligible villages' + (allowed ? ' in this group' : '') + '</p>';
 		return;
 	}
-	tbody.innerHTML = snOpts.map(function(o, i) {
-		const chips = Object.keys(o.units).map(function(u) { return u + ' ' + o.units[u]; }).join(' · ');
-		return '<tr>'
-			+ '<td><input type="checkbox" class="sn-opt" data-idx="' + i + '"></td>'
-			+ '<td><strong>' + esc(o.village.name) + '</strong> <small class="text-muted coord">'
-				+ o.village.coords[0] + '|' + o.village.coords[1] + '</small></td>'
-			+ '<td>' + esc(o.pace_unit) + ' <small class="text-muted">' + o.distance.toFixed(1) + ' fields</small></td>'
-			+ '<td class="coord">' + fmtMs(o.send) + '</td>'
-			+ '<td><span class="sn-eta" data-epoch-ms="' + o.send + '">…</span></td>'
-			+ '<td class="small">' + esc(chips) + '</td></tr>';
+	body.innerHTML = rows.map(function(v) {
+		return '<div class="card card-body py-2 mb-2 sn-row" data-village-id="' + v.id + '">'
+			+ '<div class="form-row align-items-center mb-1">'
+			+ '<div class="col-auto"><input type="checkbox" class="sn-opt"></div>'
+			+ '<div class="col"><strong>' + esc(v.name) + '</strong> <small class="text-muted coord">'
+				+ v.coords[0] + '|' + v.coords[1] + '</small></div>'
+			+ '</div>'
+			+ '<div class="form-row sn-units"></div>'
+			+ '<div class="small mt-1 sn-row-info"></div>'
+			+ '</div>';
 	}).join('');
+	rows.forEach(function(v) {
+		const row = body.querySelector('.sn-row[data-village-id="' + v.id + '"]');
+		const grid = row.querySelector('.sn-units');
+		snipeUnitGrid(grid, v.home);
+		grid.querySelectorAll('.sn-unit-count').forEach(function(inp) {
+			inp.addEventListener('input', function() { snipeRowRecalc(row); });
+		});
+		snipeRowRecalc(row);
+	});
 	tickSnipe();
 }
 
@@ -873,11 +907,22 @@ setInterval(tickSnipe, 1000);
 function snipeArm() {
 	const err = document.getElementById('sn-error');
 	const options = [];
-	document.querySelectorAll('.sn-opt:checked').forEach(function(cb) {
-		const o = snOpts[parseInt(cb.getAttribute('data-idx'), 10)];
-		if (o) options.push({ village_id: o.village.id, pace_unit: o.pace_unit, units: o.units });
+	document.querySelectorAll('.sn-row').forEach(function(row) {
+		const cb = row.querySelector('.sn-opt');
+		if (!cb.checked) return;
+		const units = {};
+		row.querySelectorAll('.sn-unit-count').forEach(function(inp) {
+			const n = parseInt(inp.value, 10) || 0;
+			if (n > 0) units[inp.getAttribute('data-unit')] = n;
+		});
+		if (!Object.keys(units).length || !row.dataset.paceUnit) return;
+		options.push({
+			village_id: row.getAttribute('data-village-id'),
+			pace_unit: row.dataset.paceUnit,
+			units: units,
+		});
 	});
-	if (!options.length) { err.textContent = 'tick at least one option first'; return; }
+	if (!options.length) { err.textContent = 'tick at least one village with units entered'; return; }
 	const body = {
 		incoming_id: snForm.incoming_id,
 		target_village_id: snForm.target_id,

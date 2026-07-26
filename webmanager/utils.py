@@ -2139,9 +2139,13 @@ class SnipeOverview:
     style, and arms the checked ones in one go.
     """
 
-    # Units offered as snipe support, and the paces the options are built
-    # from. Spy/militia are useless as support and nobles are never risked.
-    SNIPE_UNITS = ["spear", "sword", "archer", "marcher", "heavy", "knight"]
+    # Every unit that can walk as support - off units included, so a ram-pace
+    # or full-off snipe is possible. Militia never travels and nobles are
+    # never risked. DEFAULT_UNITS is what starts ticked in the options panel:
+    # the classic defensive snipe set.
+    SNIPE_UNITS = ["spear", "sword", "axe", "archer", "spy", "light",
+                   "marcher", "heavy", "knight", "ram", "catapult"]
+    DEFAULT_UNITS = ["spear", "sword", "archer", "marcher", "heavy", "knight"]
 
     DEFAULT_OFFSET_MS = snipe_engine.DEFAULT_OFFSET_MS if snipe_engine else -100
     DEFAULT_MIN_PCT = snipe_engine.DEFAULT_MIN_PCT if snipe_engine else 80
@@ -2178,6 +2182,7 @@ class SnipeOverview:
             "snipes": active + done,
             "active_count": len(active),
             "units": cls.SNIPE_UNITS,
+            "default_units": cls.DEFAULT_UNITS,
             "speeds": {u: speeds.get(u) for u in cls.SNIPE_UNITS
                        if speeds.get(u)},
             "world_speed": ws,

@@ -54,12 +54,14 @@ class Village:
         self.wrapper = wrapper
 
     def get_config(self, section, parameter, default=None):
+        # A missing key just means an older config predates the parameter;
+        # every caller supplies a default, so this is debug noise, not a warning.
         if section not in self.config:
-            self.logger.warning("Configuration section %s does not exist!" % section)
+            self.logger.debug("Configuration section %s does not exist", section)
             return default
         if parameter not in self.config[section]:
-            self.logger.warning(
-                "Configuration parameter %s:%s does not exist!" % (section, parameter)
+            self.logger.debug(
+                "Configuration parameter %s:%s does not exist", section, parameter
             )
             return default
         return self.config[section][parameter]
@@ -69,8 +71,8 @@ class Village:
             return default
         vdata = self.config["villages"][village_id]
         if parameter not in vdata:
-            self.logger.warning(
-                "Village %s configuration parameter %s does not exist!",
+            self.logger.debug(
+                "Village %s configuration parameter %s does not exist",
                 village_id, parameter
             )
             return default
@@ -167,6 +169,9 @@ class Village:
             self.def_man = DefenceManager(
                 wrapper=self.wrapper, village_id=self.village_id
             )
+        # The map is only built later (farming), so keep re-wiring it until it
+        # exists instead of copying the None once at creation time.
+        if not self.def_man.map and self.area:
             self.def_man.map = self.area
 
         if not self.def_man.units and self.units:
@@ -810,6 +815,9 @@ class Village:
             self.resman.trade_max_duration = self.get_config(
                 section="market", parameter="max_trade_duration", default=1
             )
+            self.resman.trade_round_to_1000 = self.get_config(
+                section="market", parameter="trade_round_to_1000", default=False
+            )
             if self.get_config(
                     section="market", parameter="trade_multiplier", default=False
             ):
@@ -874,6 +882,12 @@ class Village:
         self.set_unit_wanted_levels()
 
         self.units.update_totals()
+        # Dodge the fragile units now that the troop counts are fresh. This is
+        # deliberately independent of the global units.manage_defence switch:
+        # the per-village toggle alone decides.
+        if self.def_man and self.def_man.under_attack and self.def_man.auto_evacuate:
+            if self.def_man.evacuate():
+                self.units.update_totals()
         self.run_unit_upgrades()
         self.run_snob_recruit()
         self.do_recruit()

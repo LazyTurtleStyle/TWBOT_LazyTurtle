@@ -301,7 +301,8 @@ class TWB:
             if not was_logged_out:  # notify once per logout, not every cycle
                 Notification.send(
                     "TWB: main bot session is logged out (cookie expired). "
-                    "Villages are not lost; refresh the cookie to resume."
+                    "Villages are not lost; refresh the cookie to resume.",
+                    category="session",
                 )
             return overview_page, config
 
@@ -342,7 +343,8 @@ class TWB:
                 Notification.send(
                     "TWB: could not read any villages from the overview while "
                     "logged in (possible page change). Keeping the known village "
-                    "list and retrying; villages are NOT lost."
+                    "list and retrying; villages are NOT lost.",
+                    category="village",
                 )
             # found_villages is intentionally left unchanged; skip prune below too.
             return overview_page, config
@@ -394,7 +396,7 @@ class TWB:
                 "timezone/clock to match the server." % (int(skew), skew / 60.0)
             )
             logging.getLogger("twb").warning(msg)
-            Notification.send("TWB: " + msg)
+            Notification.send("TWB: " + msg, category="village")
         else:
             logging.getLogger("twb").info(
                 "Host clock is within %ds of server time (skew %ds)",
@@ -465,7 +467,8 @@ class TWB:
         for vid in lost:
             print("Village %s is no longer owned (conquered/nobled) - removing it" % vid)
             Notification.send(
-                "TWB: village %s was lost (conquered/nobled). Removing it from the bot." % vid)
+                "TWB: village %s was lost (conquered/nobled). Removing it from the bot." % vid,
+                category="village")
             config["villages"].pop(vid, None)
             FileManager.remove_file("cache/managed/%s.json" % vid)
             # Drop it from the in-memory managed list so the run loop stops touching it.
@@ -557,10 +560,18 @@ class TWB:
         poller = self._make_poller_wrapper(config)
         low = int(config["bot"].get("incoming_check_min", 300))
         high = int(config["bot"].get("incoming_check_max", 570))
+        first = True
         while self.should_run:
-            time.sleep(random.randint(low, high))
-            if not self.should_run:
-                break
+            # Poll immediately on the first pass instead of sleeping first - a
+            # restart otherwise leaves the dashboard's live incomings cache
+            # empty (and trusted as authoritative) for up to `high` seconds,
+            # during which an actual attack silently doesn't show.
+            if first:
+                first = False
+            else:
+                time.sleep(random.randint(low, high))
+                if not self.should_run:
+                    break
             # Mirror the main loop's activity window so we don't poll all night
             # on an otherwise dormant account.
             if not self.is_active_hours(config=config) and not config["bot"].get(
@@ -729,7 +740,7 @@ class TWB:
         Run the bot
         TODO: make less messy
         """
-        Notification.send("TWB is starting up")
+        Notification.send("TWB is starting up", category="startup")
         config = self.config()
         if not self.internet_online():
             print("Internet seems to be down, waiting till its back online...")
@@ -758,6 +769,12 @@ class TWB:
         )
 
         self.wrapper.start()
+        # A fresh process can't already be inside the captcha-wait loop that owns
+        # this marker (core/request.py's _await_captcha_clear), so any leftover
+        # file here is necessarily orphaned by a previous instance that was
+        # killed/restarted while blocked - clear it or the dashboard is stuck
+        # reporting "captcha" forever despite a perfectly healthy heartbeat.
+        FileManager.remove_file(WebWrapper.CAPTCHA_BLOCK_FILE)
         if not config["bot"].get("user_agent", None):
             print(
                 "No custom user agent was supplied, this will likely get you banned."
@@ -984,13 +1001,13 @@ def main():
             if t.wrapper and t.wrapper.reporter:
                 t.wrapper.reporter.report(0, "TWB_EXCEPTION", str(e))
             print("I crashed :(   %s" % str(e))
-            Notification.send("TWB crashed: %s" % str(e))
+            Notification.send("TWB crashed: %s" % str(e), category="crash")
             # Write the full traceback to the rotating log file (cache/twb.log)
             # as well as stderr, so the crash survives the tmux pane / restart.
             logging.getLogger("twb").exception("I crashed :( %s", str(e))
             traceback.print_exc()
 
-    Notification.send("TWB has crashed 3 times, exiting")
+    Notification.send("TWB has crashed 3 times, exiting", category="crash")
 
 
 def resolve_world_dir():

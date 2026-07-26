@@ -585,6 +585,7 @@ class TroopManager:
                     self.logger.debug(
                         f"Current Haul: {curr_haul} = Gather Batch ({gather_batch}) * Batch Multiplier {available_selection} ({batch_multiplier[available_selection - 1]})")
 
+                    sent_units = {}
                     for item in haul_dict:
                         item, carry = item.split(":")
                         if item == "knight":
@@ -608,6 +609,8 @@ class TroopManager:
                             troops_int -= troops_selected
                             troops[item] = str(troops_int)
                             payload["squad_requests[0][candidate_squad][unit_counts][%s]" % item] = str(troops_selected)
+                            if troops_selected > 0:
+                                sent_units[item] = troops_selected
                         else:
                             payload["squad_requests[0][candidate_squad][unit_counts][%s]" % item] = "0"
                     payload["squad_requests[0][candidate_squad][carry_max]"] = str(curr_haul)
@@ -623,6 +626,10 @@ class TroopManager:
                     self.last_gather = int(time.time())
                     cycle_haul += scavenge_loot(available_selection, curr_haul)
                     self.logger.info(f"Using troops for gather operation: {available_selection}")
+                    self.logger.info(
+                        "Gather operation %s squad: %s (carry=%d)",
+                        available_selection, sent_units, curr_haul,
+                    )
                 else:
                     # Gathering already exists or locked, try next lower option
                     continue
@@ -661,6 +668,7 @@ class TroopManager:
                         "squad_requests[0][use_premium]": "false",
                     }
                     total_carry = 0
+                    sent_units = {}
                     for item in haul_dict:
                         item, carry = item.split(":")
                         if item == "knight":
@@ -681,6 +689,14 @@ class TroopManager:
                                 "squad_requests[0][candidate_squad][unit_counts][%s]" % item
                                 ] = str(count)
                             total_carry += int(carry) * count
+                            if count > 0:
+                                sent_units[item] = count
+                            if consolidate:
+                                # Leave the unused remainder in `troops` so a
+                                # lower tier (smaller loot factor -> bigger
+                                # time-capped carry budget) can pick it up
+                                # below instead of it sitting idle overnight.
+                                troops[item] = str(int(troops[item]) - count)
                         else:
                             payload[
                                 "squad_requests[0][candidate_squad][unit_counts][%s]" % item
@@ -697,10 +713,15 @@ class TroopManager:
                         self.last_gather = int(time.time())
                         cycle_haul += scavenge_loot(selection, total_carry)
                         self.logger.info(f"Using troops for gather operation: {selection}")
-                        if consolidate:
-                            # Night mode: everything went into this single
-                            # highest-level run; don't feed the lower levels.
+                        self.logger.info(
+                            "Gather operation %s squad: %s (carry=%d)",
+                            selection, sent_units, total_carry,
+                        )
+                        if not consolidate:
+                            # Normal mode: one option per cycle.
                             break
+                        # Night mode: keep falling through to the next lower
+                        # tier with whatever troops are left over.
                 else:
                     # Gathering already exists or locked, try next lower option
                     continue

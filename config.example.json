@@ -16,7 +16,14 @@
   "notifications": {
     "enabled": false,
     "channel_id": "",
-    "token": ""
+    "token": "",
+    "notify_startup": true,
+    "notify_crash": true,
+    "notify_session": true,
+    "notify_captcha": true,
+    "notify_village": true,
+    "notify_farm": true,
+    "notify_attack": true
   },
   "bot": {
     "active_hours": "6-23",
@@ -124,6 +131,7 @@
     "trade_multiplier": true,
     "trade_multiplier_value": 1.0,
     "trade_max_per_hour": 1,
+    "trade_round_to_1000": false,
     "trade_for_premium": false
   },
   "world": {

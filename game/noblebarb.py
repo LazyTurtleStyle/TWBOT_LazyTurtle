@@ -201,7 +201,7 @@ class NobleBarbManager:
         self._log(job, reason)
         Notification.send("TWB noble job %s (%s|%s): %s" % (
             "finished" if done else "stopped",
-            job.get("target_x"), job.get("target_y"), reason))
+            job.get("target_x"), job.get("target_y"), reason), category="attack")
 
     def _troops_at_home(self, village_id):
         managed = FileManager.load_json_file("cache/managed/%s.json" % village_id)

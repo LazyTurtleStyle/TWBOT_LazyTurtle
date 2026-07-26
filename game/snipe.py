@@ -86,7 +86,7 @@ def _finish(snipe_id, status, result, path=None, notify=True, **fields):
                   finished=int(time.time()), **fields)
     csnipe._event(snipe_id, "%s: %s" % (status, result), path=_path(path))
     if notify:
-        Notification.send("TWB snipe %s: %s" % (status, result))
+        Notification.send("TWB snipe %s: %s" % (status, result), category="attack")
 
 
 def _event(snipe_id, message, path=None):

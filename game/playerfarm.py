@@ -277,7 +277,8 @@ class PlayerFarmManager:
             Notification.send(
                 "TWB player farm stopped: %s (%s|%s) - %s" % (
                     farm.get("target_name") or "?", farm.get("target_x"),
-                    farm.get("target_y"), stop_reason))
+                    farm.get("target_y"), stop_reason),
+                category="farm")
         farm.update(updates)
 
         def mut(commands):
@@ -432,7 +433,8 @@ class PlayerFarmManager:
                 "TWB player farm stopped: %s (%s|%s) - the game refuses the "
                 "attack (%s). Points protection?" % (
                     farm.get("target_name") or "?", farm.get("target_x"),
-                    farm.get("target_y"), error))
+                    farm.get("target_y"), error),
+                category="farm")
         farm.update(updates)
 
         def mut(commands):

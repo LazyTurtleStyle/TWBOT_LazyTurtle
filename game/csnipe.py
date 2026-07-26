@@ -252,7 +252,7 @@ def _finish(snipe_id, status, result, path=None, notify=True, **fields):
            finished=int(time.time()), **fields)
     _event(snipe_id, "%s: %s" % (status, result), path=path)
     if notify:
-        Notification.send("TWB c-snipe %s: %s" % (status, result))
+        Notification.send("TWB c-snipe %s: %s" % (status, result), category="attack")
 
 
 # -- server clock ------------------------------------------------------------
