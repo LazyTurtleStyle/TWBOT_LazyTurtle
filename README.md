@@ -175,6 +175,10 @@ If something looks stuck, the Overview banner tells you whether it's a captcha, 
 
 The dashboard is a normal web page, so anything with a browser can drive it — **as long as it's on the same WiFi as the machine running the bot.**
 
+<img src="readme/img/dashboard-mobile.png" alt="The dashboard on a phone" width="320">
+
+*The layout reflows for a phone: tiles stack into two columns, and wide tables scroll sideways on their own so the page doesn't.*
+
 1. Find the IP of the machine running the bot (`ip a` on Linux, `ipconfig` on Windows) — something like `192.168.1.42`.
 2. On your phone, connected to your home WiFi, open `http://192.168.1.42:5000/`.
 

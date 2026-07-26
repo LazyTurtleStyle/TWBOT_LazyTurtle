@@ -238,7 +238,12 @@
 	.troop-cols .trow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 	.troop-cols .trow img.ticon { width: 18px; height: 18px; flex: none; image-rendering: -webkit-optimize-contrast; }
 	.troop-cols .trow .tn { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
-	@media (max-width: 520px) { .troop-cols { grid-template-columns: 1fr; } }
+	/* Must match .troop-cols.troop-cols-4's specificity, or the two-column rule
+	   above keeps winning on a phone and the panel stays ~434px wide - which
+	   dragged the whole page past the screen edge. */
+	@media (max-width: 520px) {
+		.troop-cols, .troop-cols.troop-cols-4 { grid-template-columns: 1fr; }
+	}
 
 	/* ---------- Activity feed ---------- */
 	.feed { display: flex; flex-direction: column; }
@@ -378,8 +383,29 @@
 	@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 	@media (max-width: 860px) {
 		body { padding: 12px; }
-		.app { grid-template-columns: 1fr; }
+		/* minmax(0,1fr), not 1fr: a bare 1fr track is minmax(auto,1fr) and
+		   refuses to shrink below its widest content, so one wide table would
+		   stretch the whole column past the screen edge. */
+		.app { grid-template-columns: minmax(0, 1fr); }
 		.nav-demo { position: static; }
+
+		/* Wide tables (villages, tracked targets, defence) are far wider than a
+		   phone. Give each one its own horizontal scroller so you can swipe
+		   through the columns, instead of the whole page sliding sideways and
+		   the right-hand columns being unreachable. */
+		table.tw, table.table {
+			display: block;
+			width: 100%;
+			max-width: 100%;
+			overflow-x: auto;
+			-webkit-overflow-scrolling: touch;
+		}
+		/* Flex/grid children default to min-width:auto, which means "never
+		   shrink below your content" - one wide table then pushes the whole
+		   column past the screen edge. Let them shrink so the scroller above
+		   is the thing that overflows, never the page. */
+		.stack, .panel, .card, .panel-body, .card-body,
+		.grid-2 > *, .app > * { min-width: 0; }
 	}
 
 	/* ============================================================
