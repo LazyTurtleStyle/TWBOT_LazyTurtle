@@ -520,51 +520,61 @@ class Village:
         self.attack.report_max_age_hours = self.get_config(
             section="farms", parameter="report_max_age_hours", default=24
         )
+        self.attack.max_kind_refusals = self.get_config(
+            section="farms", parameter="max_kind_refusals", default=3
+        )
+
+    def setup_attack_manager(self):
+        """
+        Loads the map and wires up the attack manager, the shared setup behind both
+        the farm pass and the barb shaper. Returns False when this village should not
+        be attacking at all this cycle (forced peace, attacking disabled, no map).
+        """
+        if self.forced_peace or not self.units.can_attack:
+            return False
+        if not self.area:
+            self.area = Map(wrapper=self.wrapper, village_id=self.village_id)
+        self.area.get_map()
+        if not self.area.villages:
+            return False
+        self.logger.info(
+            "%d villages from map cache, (your location: %s)",
+                len(self.area.villages),
+                ":".join([str(x) for x in self.area.my_location])
+        )
+        if not self.attack:
+            self.attack = AttackManager(
+                wrapper=self.wrapper,
+                village_id=self.village_id,
+                troopmanager=self.units,
+                map=self.area,
+            )
+            self.attack.repman = self.rep_man
+
+        if self.forced_peace_today:
+            self.logger.info("Forced peace time coming up today!")
+            self.attack.forced_peace_time = self.forced_peace_today_start
+        self.set_farm_options()
+        return True
 
     def run_farming(self):
         """
-        Runs the farming logic
+        Runs the farming logic. Needs setup_attack_manager() to have returned True.
         """
-        if not self.forced_peace and self.units.can_attack:
-            if not self.area:
-                self.area = Map(wrapper=self.wrapper, village_id=self.village_id)
-            self.area.get_map()
-            if self.area.villages:
-                self.logger.info(
-                    "%d villages from map cache, (your location: %s)",
-                        len(self.area.villages),
-                        ":".join([str(x) for x in self.area.my_location])
+        if (
+                self.get_config(section="farms", parameter="farm", default=False)
+                and self.get_village_config(
+                    self.village_id, parameter="farm_enabled", default=True
                 )
-                if not self.attack:
-                    self.attack = AttackManager(
-                        wrapper=self.wrapper,
-                        village_id=self.village_id,
-                        troopmanager=self.units,
-                        map=self.area,
-                    )
-                    self.attack.repman = self.rep_man
-
-                if self.forced_peace_today:
-                    self.logger.info("Forced peace time coming up today!")
-                    self.attack.forced_peace_time = self.forced_peace_today_start
-                self.set_farm_options()
-
-                if (
-                        self.get_config(section="farms", parameter="farm", default=False)
-                        and self.get_village_config(
-                            self.village_id, parameter="farm_enabled", default=True
-                        )
-                        and not self.def_man.under_attack
-                ):
-                    self.attack.extra_farm = self.get_village_config(
-                        self.village_id, parameter="additional_farms", default=[]
-                    )
-                    self.attack.max_farms = self.get_config(
-                        section="farms", parameter="max_farms", default=25
-                    )
-                    self.attack.run()
-
-                self.run_barb_shaper()
+                and not self.def_man.under_attack
+        ):
+            self.attack.extra_farm = self.get_village_config(
+                self.village_id, parameter="additional_farms", default=[]
+            )
+            self.attack.max_farms = self.get_config(
+                section="farms", parameter="max_farms", default=25
+            )
+            self.attack.run()
 
     def run_barb_shaper(self):
         """
@@ -896,9 +906,18 @@ class Village:
         # Refresh forced-peace state before farming so run_farming() can skip
         # sending attacks during (or arriving into) a configured peace window.
         self.check_forced_peace()
-        self.run_farming()
-
+        can_attack = self.setup_attack_manager()
+        # The shaper runs before scavenging because both want axes and the shaper
+        # only ever takes a capped slice; scavenging then sweeps up whatever is
+        # left. The farm pass is the slow part of the cycle (one request per
+        # target) and only uses cavalry, so it goes last - waiting on it just
+        # kept the scavenge runs sitting at home.
+        if can_attack:
+            self.run_barb_shaper()
         self.do_gather()
+        if can_attack:
+            self.run_farming()
+
         self.go_manage_market()
 
         self.set_cache_vars()

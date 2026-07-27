@@ -69,6 +69,12 @@ class AttackManager:
     _last_farm_run = 0
     _next_farm_run_delay = 0
 
+    # Once the troops a Farm Assistant template needs are gone, every remaining target
+    # refuses the exact same way - and each refusal still costs a request plus its
+    # delay. Give up on a kind (A/B/C) after this many refusals in a row; the next run
+    # starts fresh. Set to 0 to keep hammering (the old behaviour).
+    max_kind_refusals = 3
+
     forced_peace_time = None
 
     # Don't mess with these they are in the config file
@@ -84,6 +90,9 @@ class AttackManager:
         self.village_id = village_id
         self.troopmanager = troopmanager
         self.map = map
+        # Per-run refusal bookkeeping, see max_kind_refusals
+        self._kind_refusals = {}
+        self._exhausted_kinds = set()
 
     def run(self):
         """
@@ -103,8 +112,16 @@ class AttackManager:
             return False
         self.get_targets()
         self.farm_icons = self.fetch_farm_icons()
+        self._kind_refusals = {}
+        self._exhausted_kinds = set()
         # Limits the amount of villages that are farmed from the current village
         for target in self.targets[0: self.max_farms]:
+            if len(self._exhausted_kinds) >= 3:
+                self.logger.info(
+                    "%s: no troops left for any farm template, ending the farm pass",
+                    self.village_id,
+                )
+                break
             self.send_farm(target)
         self._last_farm_run = now
         self._next_farm_run_delay = random.randint(
@@ -289,6 +306,12 @@ class AttackManager:
         transient: we just skip and let the next farm cycle retry, never a permanent
         block on the target.
         """
+        if kind in self._exhausted_kinds:
+            self.logger.debug(
+                "Skipping target %s, %s farms already gave up this run", vid, kind
+            )
+            return
+
         if kind == "scout":
             result = self.farm_template(vid, self.template_id_scout)
         elif kind == "minimal":
@@ -297,6 +320,7 @@ class AttackManager:
             result = self.farm_from_report(report_id)
 
         if result and not (isinstance(result, dict) and result.get("error")):
+            self._kind_refusals[kind] = 0
             self.logger.info(
                 "Farm Assistant [%s] %s -> %s", kind, self.village_id, vid
             )
@@ -310,6 +334,19 @@ class AttackManager:
             self.logger.debug(
                 "Skipping target %s this cycle, Farm Assistant send was refused: %s", vid, result
             )
+            # The refusal is almost always "not enough units": the template's troops
+            # are out farming already. Retrying it on every remaining target burns a
+            # request (and its delay) each time for a send that cannot succeed, so
+            # stop this kind for the rest of the run once it keeps refusing.
+            refusals = self._kind_refusals.get(kind, 0) + 1
+            self._kind_refusals[kind] = refusals
+            if self.max_kind_refusals and refusals >= self.max_kind_refusals:
+                self._exhausted_kinds.add(kind)
+                self.logger.info(
+                    "%s: Farm Assistant refused %d %s sends in a row (out of troops?) "
+                    "- no more %s farms this run",
+                    self.village_id, refusals, kind, kind,
+                )
 
     def get_targets(self):
         """

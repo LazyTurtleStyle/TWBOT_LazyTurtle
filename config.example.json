@@ -113,6 +113,7 @@
     "minimal_loss_tolerance": 0.5,
     "report_freshness_hours": 6,
     "report_max_age_hours": 24,
+    "max_kind_refusals": 3,
     "gather_group_policies": {},
     "noble_barb": true,
     "barb_shaper": false,
