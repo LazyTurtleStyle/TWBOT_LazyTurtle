@@ -35,7 +35,7 @@
 	<b>what the world is</b>, <b>how the bot runs</b>, and <b>what each feature does</b>.
 	Toggles and dropdowns save instantly; numbers and text save with the bar below.</p>
 
-{# ---------- Tier 0 — Worlds ---------- #}
+{# ---------- Tier 0, Worlds ---------- #}
 <div class="tier once" id="worlds">
 	<div class="tier-head">
 		<span class="tnum">0</span>
@@ -56,7 +56,7 @@
 				<input type="text" id="nw_url" class="field" placeholder="https://nl99.tribalwars.nl/game.php?screen=overview"></label>
 			<label style="display:block;margin-bottom:8px">Browser user agent
 				<input type="text" id="nw_ua" class="field" placeholder="Mozilla/5.0 … (search &quot;what is my user agent&quot;)"></label>
-			<label style="display:block;margin-bottom:8px">Login cookie <span class="faint">(optional — lets the bot run without prompting)</span>
+			<label style="display:block;margin-bottom:8px">Login cookie <span class="faint">(optional, lets the bot run without prompting)</span>
 				<textarea id="nw_cookie" rows="2" class="field mono" style="font-size:12px" placeholder="Paste your full browser cookie string here"></textarea></label>
 			<label class="faint" style="display:block;margin-bottom:8px"><input type="checkbox" id="nw_start" checked> Start the bot right after creating</label>
 			<div class="flex" style="gap:10px;align-items:center">
@@ -67,13 +67,13 @@
 	</div>
 </div>
 
-{# ---------- Tier 1 — World configuration (set-once, receded) ---------- #}
+{# ---------- Tier 1, World configuration (set-once, receded) ---------- #}
 <div class="tier once">
 	<div class="tier-head">
 		<span class="tnum">1</span>
 		<div class="th-text">
 			<h3>World configuration</h3>
-			<div class="desc">Stable facts about world {{ active_world or 'this world' }}. Set once when you join — you'll rarely touch these again.</div>
+			<div class="desc">Stable facts about world {{ active_world or 'this world' }}. Set once when you join, you'll rarely touch these again.</div>
 		</div>
 		<span class="badge dim">set once</span>
 	</div>
@@ -81,20 +81,20 @@
 		{% if 'server' in sections %}<div>{{ sections['server']|safe }}</div>{% endif %}
 		{% if 'world' in sections %}
 		<div>
-			<div class="subhead">World features — what exists on {{ active_world or 'this world' }}</div>
+			<div class="subhead">World features, what exists on {{ active_world or 'this world' }}</div>
 			{{ sections['world']|safe }}
 		</div>
 		{% endif %}
 	</div>
 </div>
 
-{# ---------- Tier 2 — Bot operation ---------- #}
+{# ---------- Tier 2, Bot operation ---------- #}
 <div class="tier">
 	<div class="tier-head">
 		<span class="tnum">2</span>
 		<div class="th-text">
 			<h3>Bot operation</h3>
-			<div class="desc">How the bot runs account-wide — timing, activity window, randomization, captcha &amp; identity.</div>
+			<div class="desc">How the bot runs account-wide, timing, activity window, randomization, captcha &amp; identity.</div>
 		</div>
 	</div>
 	<div class="tier-body">
@@ -102,10 +102,10 @@
 	</div>
 </div>
 
-{# ---------- Tier 3 — Feature modules ---------- #}
+{# ---------- Tier 3, Feature modules ---------- #}
 <div class="section-head" style="margin-top:4px">
 	<div><span class="tnum">3</span> <b style="font-family:var(--display);font-size:19px;margin-left:8px">Feature modules</b>
-		<div class="desc faint" style="font-size:12.5px;margin-top:2px">What each part of the bot does. Each module is independent — its enable toggle is the first row.</div></div>
+		<div class="desc faint" style="font-size:12.5px;margin-top:2px">What each part of the bot does. Each module is independent, its enable toggle is the first row.</div></div>
 </div>
 {% set modules = [
 	('building', 'Building', '⚒', 'Construction queue & build order'),
@@ -221,7 +221,7 @@
 			body: body
 		}).then(function(r){ return r.json(); }).then(function(resp){
 			if (resp.ok) {
-				status.textContent = 'Created ' + resp.world + (resp.started ? ' and started ✓' : ' ✓') + ' — switching…';
+				status.textContent = 'Created ' + resp.world + (resp.started ? ' and started ✓' : ' ✓') + ', switching…';
 				setTimeout(function(){ location.href = '/world/select?world=' + encodeURIComponent(resp.world); }, 900);
 			} else {
 				status.textContent = resp.error || 'Failed to create world';

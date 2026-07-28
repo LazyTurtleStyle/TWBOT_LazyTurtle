@@ -32,7 +32,7 @@
 {% block content %}
 {% if not detail.has_snapshot %}
 <div class="situation warn"><div><div class="sit-state">No live data yet</div>
-	<div class="sit-sub">The bot hasn't scraped this village yet — run it once to populate the dashboard. You can still configure it below.</div></div></div>
+	<div class="sit-sub">The bot hasn't scraped this village yet, run it once to populate the dashboard. You can still configure it below.</div></div></div>
 {% endif %}
 
 <div class="vdetail-grid">
@@ -112,9 +112,9 @@
 					<div class="so-body">
 						<div>Option {{ opt.option }}</div>
 						<div class="so-sub">
-							{% if opt.locked %}Locked — unlock in-game
+							{% if opt.locked %}Locked, unlock in-game
 							{% elif opt.running %}Gathering{% if opt.loot %} · ~{{ opt.loot|kshort }} loot{% endif %}{% if opt.return_at %} · returns <span class="inc-eta" data-arrival="{{ opt.return_at }}">…</span>{% endif %}
-							{% else %}Idle — troops available{% endif %}
+							{% else %}Idle, troops available{% endif %}
 						</div>
 					</div>
 					{% if opt.running %}<span class="badge moss">running</span>
@@ -123,7 +123,7 @@
 				</div>
 				{% endfor %}
 				{% else %}
-				<span class="muted">No scavenging data yet — enable scavenging for this village and run the bot once.</span>
+				<span class="muted">No scavenging data yet, enable scavenging for this village and run the bot once.</span>
 				{% endif %}
 			</div>
 		</div>

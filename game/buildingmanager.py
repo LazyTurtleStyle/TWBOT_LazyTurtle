@@ -110,7 +110,7 @@ class BuildingManager:
         self.levels = tmp
         existing_queue = Extractor.active_building_queue(main_data)
         # Real number of buildings queued in the in-game HQ right now (max 2, or
-        # 5 with premium) — surfaced on the dashboard, distinct from self.queue
+        # 5 with premium), surfaced on the dashboard, distinct from self.queue
         # which is the bot's full planned build order.
         self.queue_count_ingame = existing_queue
         if existing_queue == 0:

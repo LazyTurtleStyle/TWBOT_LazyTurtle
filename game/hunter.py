@@ -1,6 +1,6 @@
 """Timed, coordinated multi-attack chains ("trains"/precision snipes).
 
-STATUS: WIP prototype, intentionally kept for later — NOT wired into the run loop
+STATUS: WIP prototype, intentionally kept for later, NOT wired into the run loop
 (nothing imports this module). The finished timed-send path today is
 `game/attack_scheduler.py`; this is the earlier sketch of the same idea (schedule
 waves, then launch them at an exact moment back-to-back).

@@ -61,7 +61,7 @@ class TwStats:
                 output[upgrade_building][building_level] = village_population
 
         # Write through the active world's data dir (worlds/<name>/cache/world/),
-        # creating it if needed — matches the world-aware read in get_cache().
+        # creating it if needed, matches the world-aware read in get_cache().
         target = FileManager._resolve("cache/world/buildings_%s.json" % world)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "w", encoding="utf-8") as f:

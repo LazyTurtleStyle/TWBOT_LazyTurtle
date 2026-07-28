@@ -1294,7 +1294,7 @@ class DataReader:
         p = DataReader.data_path("cache", "portal_cookies.json")
         if not os.path.exists(p):
             # Portal cookies are account-level (www.tribalwars.nl), not
-            # world-level — fall back to the newest copy from any world.
+            # world-level, fall back to the newest copy from any world.
             candidates = glob.glob(os.path.join(
                 DataReader.project_root(), "worlds", "*", "cache", "portal_cookies.json"))
             if not candidates:
@@ -1870,7 +1870,7 @@ class OverviewBuilder:
                     trades_24h += 1
 
         # Real in-game HQ build queue (how many buildings are actually queued
-        # now, across all villages) — not the bot's planned build order.
+        # now, across all villages), not the bot's planned build order.
         active_build_items = sum(
             cls._to_int((vd or {}).get("active_building_queue", 0))
             for vd in managed.values()

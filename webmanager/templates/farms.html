@@ -52,7 +52,7 @@
 <div class="d-flex align-items-center mt-3 mb-2">
   <h3 class="mb-0">Farms &amp; scavenging</h3>
   <span class="ml-3" style="min-width:120px">{{ toggle('farm', 'farm', f.farm) }}</span>
-  <span class="ml-2 text-muted">Master switch — turns farming on/off account-wide.</span>
+  <span class="ml-2 text-muted">Master switch, turns farming on/off account-wide.</span>
 </div>
 
 <ul class="nav nav-tabs mb-3" id="farm-tabs">
@@ -78,18 +78,18 @@
     <div class="card config-card">
       <div class="card-header">In-game Farm Assistant templates (A / B)</div>
       <div class="card-body">
-        {{ row('A — scout template id (template_id_scout)',
+        {{ row('A, scout template id (template_id_scout)',
                num('farm', 'template_id_scout', f.template_id_scout, '1', 'e.g. 1234'),
                'The id of your in-game <strong>A (scout)</strong> Farm Assistant template. Find it by
                 clicking that template\'s send button once in-game and reading <code>template_id</code>
                 from the network request.') }}
-        {{ row('B — minimal template id (template_id_minimal)',
+        {{ row('B, minimal template id (template_id_minimal)',
                num('farm', 'template_id_minimal', f.template_id_minimal, '1', 'e.g. 1235'),
                'The id of your in-game <strong>B (minimal)</strong> fallback template, found the same way.') }}
         {{ row('B template troops (template_minimal_troops)',
                text('farm', 'template_minimal_troops', f.template_minimal_troops, '{"light": 5, "spy": 1}'),
                'Exactly what the B template sends, as JSON e.g. <code>{"light": 5, "spy": 1}</code>.
-                There is no API to read this back — if it is wrong the wall-risk check silently does nothing.') }}
+                There is no API to read this back. If it is wrong the wall-risk check silently does nothing.') }}
       </div>
     </div>
 
@@ -106,7 +106,7 @@
                 still valid reports fall back to the minimal template (B).') }}
         {{ row('Report max age hours (report_max_age_hours)',
                num('farm', 'report_max_age_hours', f.report_max_age_hours, '1', '24'),
-               'A report older than this (or missing) is no longer trusted — the village is re-scouted (A).') }}
+               'A report older than this (or missing) is no longer trusted. The village is re-scouted (A).') }}
       </div>
     </div>
   </div>
@@ -129,7 +129,7 @@
                'How many nearby villages to check per run.') }}
         {{ row('Farm player-owned (find_player_owned)',
                toggle('farm', 'find_player_owned', f.find_player_owned),
-               'Off by default. Only enable to farm player villages (skipped 23:00–08:00 either way) — dangerous.') }}
+               'Off by default. Only enable to farm player villages (skipped 23:00–08:00 either way). Dangerous.') }}
         {{ row('Ignore higher-point targets (attack_higher_points)',
                toggle('farm', 'attack_higher_points', f.attack_higher_points),
                'When on, villages with more points than the farming village are skipped.') }}
@@ -170,10 +170,10 @@
                'Send idle troops on scavenging runs (world must have scavenging unlocked).') }}
         {{ row('Runs used (gather_selection)',
                '<select class="form-control form-control-sm" data-scope="scavenge" data-param="gather_selection">'
-               ~ '<option value="1"' ~ (' selected' if sc.gather_selection|string == '1' else '') ~ '>1 — highest only</option>'
+               ~ '<option value="1"' ~ (' selected' if sc.gather_selection|string == '1' else '') ~ '>1, highest only</option>'
                ~ '<option value="2"' ~ (' selected' if sc.gather_selection|string == '2' else '') ~ '>2</option>'
                ~ '<option value="3"' ~ (' selected' if sc.gather_selection|string == '3' else '') ~ '>3</option>'
-               ~ '<option value="4"' ~ (' selected' if sc.gather_selection|string == '4' else '') ~ '>4 — all unlocked</option>'
+               ~ '<option value="4"' ~ (' selected' if sc.gather_selection|string == '4' else '') ~ '>4, all unlocked</option>'
                ~ '</select>',
                'How many of the scavenging options to use (they must be unlocked in-game first).') }}
         {{ row('Advanced split (advanced_gather)',
@@ -194,7 +194,7 @@
         </div>
         {{ row('Scavenge when attacked (gather_when_attacked)',
                toggle('scavenge', 'gather_when_attacked', sc.gather_when_attacked),
-               'Keep scavenging while an attack is incoming. Only arm this when you judged the incoming harmless (e.g. a lone scout run) — flip it off again when a real attack is inbound. Night consolidation is always suspended while under attack. Set it per village from the village config if only one village is hit; a group policy below overrides this flag.') }}
+               'Keep scavenging while an attack is incoming. Only arm this when you judged the incoming harmless (e.g. a lone scout run), flip it off again when a real attack is inbound. Night consolidation is always suspended while under attack. Set it per village from the village config if only one village is hit; a group policy below overrides this flag.') }}
         <div class="fs-setting">
           <div class="config-row">
             <div class="config-row-label"><span class="config-row-name">Scavenging policy per group <span class="badge badge-warning">alpha</span></span></div>
@@ -207,13 +207,13 @@
                   <option value="always"{% if r.policy == 'always' %} selected{% endif %}>Scavenge, even when attacked</option>
                 </select>
                 <strong>{{ r.name }}</strong>
-                {% if r.missing %}<span class="badge badge-danger" title="no in-game group with this name/id is cached (deleted or renamed?) — the policy does nothing until it exists again">not found</span>
+                {% if r.missing %}<span class="badge badge-danger" title="no in-game group with this name/id is cached (deleted or renamed?). The policy does nothing until it exists again">not found</span>
                 {% else %}<span class="badge badge-secondary">{{ r.type }}</span>
                 <span class="text-muted">{{ r.villages }} village{{ 's' if r.villages != 1 else '' }}</span>{% endif %}
                 <button class="btn btn-sm btn-outline-danger py-0 scav-group-del" data-group="{{ r.key }}" title="remove this policy">&times;</button>
               </div>
               {% else %}
-              <div class="text-muted mb-1">No group policies set — all villages follow their own settings.</div>
+              <div class="text-muted mb-1">No group policies set: all villages follow their own settings.</div>
               {% endfor %}
               {% if sc.group_policy_unassigned %}
               <div class="mt-1">
@@ -230,11 +230,11 @@
                 <button class="btn btn-sm btn-outline-success py-0" id="scav-group-add">Add</button>
               </div>
               {% elif not sc.village_groups and not sc.group_policy_rows %}
-              <span class="text-muted">No in-game village groups found — create manual/dynamic groups in TribalWars first; the incoming tracker picks them up within the hour.</span>
+              <span class="text-muted">No in-game village groups found, create manual/dynamic groups in TribalWars first; the incoming tracker picks them up within the hour.</span>
               {% endif %}
             </div>
           </div>
-          <div class="fs-help text-muted">Give an in-game manual/dynamic group a scavenging policy — any group, whatever its name (e.g. a
+          <div class="fs-help text-muted">Give an in-game manual/dynamic group a scavenging policy, any group, whatever its name (e.g. a
             front-line group &rarr; <strong>Never</strong> so troops stay home at all times even with scavenging enabled; mobile defense
             &rarr; <strong>pause when attacked</strong>, normal scavenging that always stops for incomings; a safe/rim group &rarr;
             <strong>even when attacked</strong>, keeps scavenging through incomings). Groups without a policy follow the per-village
@@ -243,7 +243,7 @@
         </div>
         {{ row('Night consolidate (gather_night_consolidate)',
                toggle('scavenge', 'gather_night_consolidate', sc.gather_night_consolidate),
-               'During the window below, send ALL troops into one long run on the highest level instead of splitting — to cover an unattended night. Turn off if you expect incoming attacks.') }}
+               'During the window below, send ALL troops into one long run on the highest level instead of splitting, to cover an unattended night. Turn off if you expect incoming attacks.') }}
         {{ row('Night window (hours)',
                'From <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="scavenge" data-param="gather_night_start" value="'
                ~ sc.gather_night_start ~ '"> to <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="scavenge" data-param="gather_night_end" value="'
@@ -301,10 +301,10 @@
   sending village, troop package and cadence, and the bot judges every report: it stops the target and
   pings you when a run dies (red), a unit type is wiped, defenders show up in the report, or the loot no
   longer beats {{ playerfarms.profit_factor }}&times; the resource value of the losses. A stopped target
-  only resumes when <em>you</em> re-enable it. Targets the game refuses to attack (points protection —
+  only resumes when <em>you</em> re-enable it. Targets the game refuses to attack (points protection,
   grey on the map) stop themselves after two rejected sends.
   {% if playerfarms.night_skip %}Runs hold fire between 23:00–08:00.{% endif %}
-  {% if not playerfarms.enabled %}<br><strong class="text-danger">farms.player_farm is disabled in config —
+  {% if not playerfarms.enabled %}<br><strong class="text-danger">farms.player_farm is disabled in config,
   nothing will be sent.</strong>{% endif %}
 </div>
 
@@ -317,7 +317,7 @@
     {{ row('Prioritize over barb farming (player_farm_priority)',
            toggle('farm', 'player_farm_priority', playerfarms.priority),
            'Send player-farm runs <strong>before</strong> the villages run their barb farming and
-            scavenging, so the hit list gets first claim on the light cavalry — player farms are the
+            scavenging, so the hit list gets first claim on the light cavalry, player farms are the
             more consistent income, barbs are contested.') }}
     {{ row('Skip nights (player_farm_night_skip)',
            toggle('farm', 'player_farm_night_skip', playerfarms.night_skip),
@@ -388,7 +388,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="text-muted">Hit list is empty — add a cleared village below.</td></tr>
+        <tr><td colspan="9" class="text-muted">Hit list is empty, add a cleared village below.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -432,13 +432,13 @@
       </div>
       {% endfor %}
     </div>
-    <small class="text-muted d-block mb-2">Tip: keep a spy in every run — a surviving spy shows the
+    <small class="text-muted d-block mb-2">Tip: keep a spy in every run, a surviving spy shows the
       defender's troops and remaining resources, which is exactly what the auto-stop judges.</small>
 
     <div class="card bg-transparent border mb-2">
       <div class="card-body py-2">
-        <strong class="small">Production calculator</strong>
-        <small class="text-muted">— mine levels auto-fill from the newest scout report for the coords;
+        <strong class="small">Production calculator,</strong>
+        <small class="text-muted">mine levels auto-fill from the newest scout report for the coords;
           adjust them (or type them from a report) to recompute.</small>
         <div class="form-row mt-2">
           {% for m, lbl in [('wood', 'Timber'), ('stone', 'Clay'), ('iron', 'Iron'), ('storage', 'Warehouse')] %}
@@ -463,7 +463,7 @@
 {% set sh = farms.shaper %}
 <div id="pane-shaper" style="display:none">
 <div class="alert alert-warning fs-intro" role="alert">
-  <strong>Alpha — not yet fired at a live wall.</strong> Sends <strong>axe + ram</strong> attacks at the
+  <strong>Alpha, not yet fired at a live wall.</strong> Sends <strong>axe + ram</strong> attacks at the
   closest barbarian villages whose last scout report shows a wall above the level set below, so the
   farm loop stops bleeding light cavalry on them. It only engages targets a report has proven
   <em>empty</em>, sizes the ram count to raze the wall to 0 in one hit, and adds enough axes that even
@@ -471,9 +471,9 @@
   shows the new wall level; a target is only re-hit once a <em>newer</em> report still shows a wall.
 </div>
 <div class="alert alert-secondary fs-intro" role="alert">
-  It stays idle for a village when scavenging claims its axes — uncheck <em>Axe</em> in the
+  It stays idle for a village when scavenging claims its axes, uncheck <em>Axe</em> in the
   <a href="#scavenge" onclick="showFarmPane('scavenge')">Scavenging</a> unit picker to free them, or enable
-  <em>Share axes with scavenging</em> below (ideally with an axe limit) — and it never sends while the village
+  <em>Share axes with scavenging</em> below (ideally with an axe limit), and it never sends while the village
   is under attack. Rams must exist in the village; it won't recruit them for you.
 </div>
 
@@ -511,7 +511,7 @@
         {{ row('Max travel time, hours (shaper_max_travel_hours)',
                num('farm', 'shaper_max_travel_hours', sh.max_travel_hours, '1', '0'),
                'Skip targets whose one-way <strong>ram</strong> travel time exceeds this (0 = no limit).
-                Rams are the slowest unit in the send, so this caps the whole attack — e.g. 12 keeps the
+                Rams are the slowest unit in the send, so this caps the whole attack, e.g. 12 keeps the
                 round trip within a day.') }}
       </div>
     </div>
@@ -567,7 +567,7 @@
 </div>
 </div><!-- /pane-shaper -->
 
-<div id="fs-saved" class="alert alert-success py-1 px-3">Saved — applies next bot cycle</div>
+<div id="fs-saved" class="alert alert-success py-1 px-3">Saved, applies next bot cycle</div>
 {% endblock %}
 
 {% block scripts %}
@@ -689,7 +689,7 @@
   // --- production calculator ---
   function pfRenderEstimate(est) {
     if (!est || !est.found) {
-      $('#pf-calc-out').html('<span class="text-muted">No scout intel for these coords yet — ' +
+      $('#pf-calc-out').html('<span class="text-muted">No scout intel for these coords yet, ' +
         'enter the mine levels manually (or scout it first).</span>');
       return;
     }

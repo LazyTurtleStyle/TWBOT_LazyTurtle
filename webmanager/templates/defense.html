@@ -101,8 +101,8 @@
 
 <!-- Per-village table -->
 <div class="card">
-	<div class="card-header py-2"><strong>Villages</strong>
-		<small class="text-muted">— under attack first</small></div>
+	<div class="card-header py-2"><strong>Villages,</strong>
+		<small class="text-muted">under attack first</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -138,7 +138,7 @@
 							<span class="unit-chip text-muted">{{ u }} {{ v.def_troops[u]|comma }}</span>
 							{% endif %}
 						{% endfor %}
-						{% if not v.def_total %}<small class="text-muted">— none at home</small>{% endif %}
+						{% if not v.def_total %}<small class="text-muted">none at home</small>{% endif %}
 					</td>
 				</tr>
 				{% else %}
@@ -167,17 +167,17 @@
 
 <div id="pane-csnipe" style="display:none">
 <p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
-	train — watch the event log closely the first time you use it.
+	train. Watch the event log closely the first time you use it.
 	Cancel-snipe: the defense dodges out toward a far barb and, by cancelling
 	that command at exactly the halfway moment, walks back in <em>milliseconds</em> after the first hit of a
-	noble train — home in the gap, in front of the nobles. The bot engages {{ csnipe.default_lead_min }} min
+	noble train, home in the gap, in front of the nobles. The bot engages {{ csnipe.default_lead_min }} min
 	before the return moment (cancels are only allowed within {{ csnipe.cancel_seconds // 60 }} min of sending
 	on this world, and the cancel is the halfway point).</p>
 
 <!-- Armed / past snipes -->
 <div class="card mb-3">
-	<div class="card-header py-2"><strong>Snipes</strong>
-		<small class="text-muted">— active first</small></div>
+	<div class="card-header py-2"><strong>Snipes,</strong>
+		<small class="text-muted">active first</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -185,7 +185,7 @@
 				<th>Target</th><th>Result</th><th></th>
 			</tr></thead>
 			<tbody>
-				{{ csnipe_rows(csnipe.snipes, 'No snipes armed yet — pick an incoming attack below.') }}
+				{{ csnipe_rows(csnipe.snipes, 'No snipes armed yet. Pick an incoming attack below.') }}
 			</tbody>
 		</table>
 	</div>
@@ -193,8 +193,8 @@
 
 <!-- Incoming attacks to snipe -->
 <div class="card">
-	<div class="card-header py-2"><strong>Incoming attacks</strong>
-		<small class="text-muted">— pick the train's first hit and arm a snipe on it</small></div>
+	<div class="card-header py-2"><strong>Incoming attacks,</strong>
+		<small class="text-muted">pick the train's first hit and arm a snipe on it</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -262,14 +262,14 @@
 		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
 		<small class="text-muted d-block mb-2">The troops below dodge out and land back <strong>no earlier than</strong>
 			first hit + aim, typically 30–90&nbsp;ms after it: the server credits a cancelled command's travel
-			in whole seconds, so the return keeps the <em>send's</em> millisecond — the bot fires throwaway
+			in whole seconds, so the return keeps the <em>send's</em> millisecond, the bot fires throwaway
 			one-unit probes at the barb first to measure today's send timing, then aims the real send just past
 			your target (without probe time it falls back to a blind +150&nbsp;ms buffer, achieving
 			150–400&nbsp;ms). A badly-jittered send costs +2&nbsp;s (late, never early). <strong>Lone incoming:
 			use 300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; 100&nbsp;ms gaps are
-			makeable when calibration succeeds — check the log's "send bias" line.
+			makeable when calibration succeeds. Check the log's "send bias" line.
 			<strong>Tight gap (both sides fatal):</strong> also fill "no later than +ms" (e.g. the next hit's
-			offset minus a margin) — the bot then aims the middle of that window and, when a measured send
+			offset minus a margin), the bot then aims the middle of that window and, when a measured send
 			would miss it, cancels the attempt immediately and re-fires on a later 2-second slot until one
 			lands inside (needs a few minutes of lead; ~10–15&nbsp;s per retry, up to 8 tries).</small>
 		<div class="form-row" id="cs-units"></div>
@@ -283,7 +283,7 @@
 <div id="pane-csnipetest" style="display:none">
 <p class="text-muted small mt-1">Dry-run the cancel snipe with no incoming attack: pick a village, set the
 	moment the troops must be back home, and the bot runs the <em>exact</em> same flow it would against a real
-	train — send toward a far barb, measure the send to the millisecond, cancel at the halfway moment. The
+	train, send toward a far barb, measure the send to the millisecond, cancel at the halfway moment. The
 	result row shows the achieved return and its ±ms against your target, so you can verify the timing on
 	this world/connection before trusting it with a real train. Use the same troops you would dodge with.</p>
 
@@ -325,15 +325,15 @@
 		</div>
 		<small class="text-muted d-block mb-2" id="cst-barb-hint"></small>
 		<small class="text-muted d-block mb-2">The two fields together are the full return moment
-			HH:MM:SS<strong>:mmm</strong> — the ms field is <em>part of the time</em>, not a margin. A time in
+			HH:MM:SS<strong>:mmm</strong>. The ms field is <em>part of the time</em>, not a margin. A time in
 			the past means <strong>tomorrow</strong>. Aim at a non-zero millisecond (e.g. .250): an uncancelled
 			return always lands on .000, so hitting near your ms proves the cancel mechanic worked. Like a real
-			snipe the return is never early — expect it 30–90&nbsp;ms late when the send-bias probes succeed
+			snipe the return is never early, expect it 30–90&nbsp;ms late when the send-bias probes succeed
 			(watch the log), 150–400&nbsp;ms without them, +2&nbsp;s on a badly-jittered send; the ±ms badge on
 			the result is your verdict, and it reads the achieved return from the in-game command list, not the
 			cancel screen. With <strong>Window +ms</strong> set the return must land within that many ms past
 			the target: the bot aims mid-window and re-fires missed sends (cancel, wait home, next 2-second
-			slot) until one is inside — the result line then reports window HIT or MISSED. Try +100 to see the
+			slot) until one is inside, the result line then reports window HIT or MISSED. Try +100 to see the
 			retry loop work.</small>
 		<div class="form-row" id="cst-units"></div>
 		<div class="text-danger small mb-2" id="cst-error"></div>
@@ -343,8 +343,8 @@
 
 <!-- Test snipes -->
 <div class="card mt-3">
-	<div class="card-header py-2"><strong>Test snipes</strong>
-		<small class="text-muted">— active first</small></div>
+	<div class="card-header py-2"><strong>Test snipes,</strong>
+		<small class="text-muted">active first</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -352,7 +352,7 @@
 				<th>Target</th><th>Result</th><th></th>
 			</tr></thead>
 			<tbody>
-				{{ csnipe_rows(csnipe.snipes|selectattr('test')|list, 'No test snipes yet — arm one above.') }}
+				{{ csnipe_rows(csnipe.snipes|selectattr('test')|list, 'No test snipes yet. Arm one above.') }}
 			</tbody>
 		</table>
 	</div>
@@ -361,17 +361,17 @@
 
 <div id="pane-snipe" style="display:none">
 <p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
-	train — watch the result closely the first time you use it.
+	train. Watch the result closely the first time you use it.
 	Support snipe: pick an incoming attack and land defensive support on the exact millisecond,
 	{{ -snipe.default_offset_ms }}&nbsp;ms before the hit by default (a negative offset lands before, a positive
-	one after — e.g. in a train gap). Tick which villages send and type the exact troop counts yourself for
+	one after, e.g. in a train gap). Tick which villages send and type the exact troop counts yourself for
 	each (off units too, for a ram-pace or full-off snipe) - the send walks at the slowest unit you enter. The
 	bot fires each send so the server's own travel time lands it on target.</p>
 
 <!-- Armed / past snipes -->
 <div class="card mb-3">
-	<div class="card-header py-2"><strong>Snipes</strong>
-		<small class="text-muted">— active first</small></div>
+	<div class="card-header py-2"><strong>Snipes,</strong>
+		<small class="text-muted">active first</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -415,7 +415,7 @@
 					</td>
 				</tr>
 				{% else %}
-				<tr><td colspan="7" class="text-muted">No snipes armed yet — pick an incoming attack below.</td></tr>
+				<tr><td colspan="7" class="text-muted">No snipes armed yet. Pick an incoming attack below.</td></tr>
 				{% endfor %}
 			</tbody>
 		</table>
@@ -424,8 +424,8 @@
 
 <!-- Incoming attacks to snipe -->
 <div class="card">
-	<div class="card-header py-2"><strong>Incoming attacks</strong>
-		<small class="text-muted">— pick one to see the snipe options of every village</small></div>
+	<div class="card-header py-2"><strong>Incoming attacks,</strong>
+		<small class="text-muted">pick one to see the snipe options of every village</small></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -499,7 +499,7 @@
 					value="{{ snipe.default_min_pct }}">
 			</div>
 		</div>
-		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself —
+		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself,
 			pace is whichever unit you enter is slowest, so mixing in a ram or axe makes the whole send walk at
 			that pace.</p>
 		<div id="sn-options-body"></div>
@@ -586,13 +586,13 @@ function csnipeBarbPrefill(v, txId, tyId, hintId) {
 		document.getElementById(tyId).value = v.barb.y;
 		document.getElementById(hintId).textContent =
 			'Suggested barb: ' + (v.barb.name || '') + ' ' + v.barb.x + '|' + v.barb.y +
-			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav) — ' +
+			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav), ' +
 			'any target works as long as the troops are still under way at the cancel moment.';
 	} else {
 		document.getElementById(txId).value = '';
 		document.getElementById(tyId).value = '';
 		document.getElementById(hintId).textContent =
-			'No barb suggestion available (map cache empty?) — enter target coords manually.';
+			'No barb suggestion available (map cache empty?). Enter target coords manually.';
 	}
 }
 
@@ -611,7 +611,7 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	csForm = { village_id: String(villageId), incoming_id: commandId, arrival: arrival };
 	const d = new Date(arrival * 1000);
 	document.getElementById('cs-context').textContent =
-		'— ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+		'· ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
 	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
@@ -686,7 +686,7 @@ function csnipeDisarm(id) {
 			o.textContent = v.name + (v.coords ? ' (' + v.coords[0] + '|' + v.coords[1] + ')' : '');
 			sel.appendChild(o);
 		});
-	// Default return moment: 25 min out — enough room for the default 18 min
+	// Default return moment: 25 min out, enough room for the default 18 min
 	// engage lead plus arming time.
 	const d = new Date(Date.now() + 25 * 60000);
 	document.getElementById('cst-time').value =
@@ -777,7 +777,7 @@ function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 	snForm = { incoming_id: commandId, target_id: String(villageId), arrival: arrival };
 	const d = new Date(arrival * 1000);
 	document.getElementById('sn-context').textContent =
-		'— support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+		'· support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('sn-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	document.getElementById('sn-error').textContent = '';
 	snipeBuildRows();

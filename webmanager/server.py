@@ -260,7 +260,7 @@ def preprocess_template_select(key, value, category, village_id=None):
     if current and current not in names:
         names.append(current)
     vattr = (' data-village-id="%s"' % village_id) if village_id else ''
-    label = 'Off — do not %s in this village' % (
+    label = 'Off, do not %s in this village' % (
         'build' if category == 'builder' else 'recruit')
     out = '<select data-type-option="%s"%s data-type="select" class="form-control">' % (key, vattr)
     out += '<option value="false"%s>%s</option>' % (
@@ -1273,7 +1273,7 @@ def tw_cookies_export():
     game_cookies = session.get("cookies") or {}
     if not game_cookies:
         # No world selected (e.g. extension fetch without the dashboard's
-        # world cookie) — fall back to the most recently active world.
+        # world cookie), fall back to the most recently active world.
         import glob
         candidates = glob.glob(os.path.join(
             DataReader.project_root(), "worlds", "*", "cache", "session.json"))
@@ -1372,7 +1372,7 @@ def tw_proxy(subpath=''):
     cookies = session.get("cookies") or {}
     endpoint = session.get("endpoint") or ""
     if not endpoint or endpoint == "None":
-        return "No game endpoint configured — run the bot first.", 503
+        return "No game endpoint configured. Run the bot first.", 503
 
     parsed = urlparse(endpoint)
     base = "%s://%s" % (parsed.scheme, parsed.netloc)
@@ -1409,7 +1409,7 @@ def tw_proxy(subpath=''):
 
     html = tw_resp.text
 
-    # Strip ALL JavaScript — TW's JS detects the wrong hostname and redirects.
+    # Strip ALL JavaScript, TW's JS detects the wrong hostname and redirects.
     # The overview HTML is fully server-rendered so this gives a clean read-only snapshot.
     html = re.sub(r'<script\b[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r'<noscript\b[^>]*>.*?</noscript>', '', html, flags=re.DOTALL | re.IGNORECASE)

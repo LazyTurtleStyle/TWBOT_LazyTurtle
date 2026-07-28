@@ -67,7 +67,7 @@
 				<div class="step-body">
 					<a class="btn btn-ember btn-sm" href="/app/tw-extension.zip">Download extension</a>
 					<span style="margin-left:8px">and unzip it to a permanent folder on your PC (one-time).</span>
-					<br>The download is pre-configured for this server and world <strong>{{ active_world or 'default' }}</strong> — no setup needed.
+					<br>The download is pre-configured for this server and world <strong>{{ active_world or 'default' }}</strong>, no setup needed.
 				</div>
 			</div>
 			<div class="step">
@@ -81,7 +81,7 @@
 			<div class="step">
 				<div class="step-n">3</div>
 				<div class="step-body">
-					From then on: click the <strong>TWB Session Restore</strong> toolbar icon — or the
+					From then on: click the <strong>TWB Session Restore</strong> toolbar icon, or the
 					<strong>Open game</strong> button on the dashboard. Both inject the bot's cookies
 					(game world + portal) and open <code>{{ endpoint or 'the game' }}</code> already logged in.
 					No new login, the bot keeps running.
@@ -91,7 +91,7 @@
 	</div>
 
 	<p class="note">
-		Only log in through TW's normal login form when the bot session has truly died —
+		Only log in through TW's normal login form when the bot session has truly died,
 		then paste the fresh game cookie and portal cookies into the dashboard's Session panel once,
 		and the extension takes over again.
 	</p>
@@ -115,7 +115,7 @@ function openGame() {
 	if (document.documentElement.hasAttribute('data-twb-ext')) {
 		window.postMessage({type: 'twb-open-game', world: activeWorld}, '*');
 	} else {
-		alert('Extension not detected — follow the install steps below, then reload this page.');
+		alert('Extension not detected, follow the install steps below, then reload this page.');
 	}
 }
 </script>

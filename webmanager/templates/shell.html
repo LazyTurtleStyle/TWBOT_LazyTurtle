@@ -10,7 +10,7 @@
 	<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 	<style>
 	/* ============================================================
-	   TWB — "war-room command console" design system
+	   TWB, "war-room command console" design system
 	   Ported verbatim from the design handoff (styles.css). The
 	   Bootstrap re-skin layer at the bottom themes the components
 	   that older pages still use into the same palette.
@@ -18,7 +18,7 @@
 	:root {
 		--bg:        #15130E;  /* flat warm iron (grid removed for calm) */
 		--bg-grid:   #1b1813;  /* legacy texture token, no longer painted */
-		--surface:   #211D17;  /* panel — reads by tone, not just a line */
+		--surface:   #211D17;  /* panel, reads by tone, not just a line */
 		--surface-2: #282318;  /* raised */
 		--line:      #322E28;  /* quieter hairline */
 		--line-soft: #29251f;
@@ -47,7 +47,7 @@
 	body {
 		margin: 0; padding: 28px;
 		background-color: var(--bg);
-		/* Flat base with one soft forge-glow up top — no grid lattice, far calmer. */
+		/* Flat base with one soft forge-glow up top, no grid lattice, far calmer. */
 		background-image: radial-gradient(125% 80% at 50% -20%, rgba(224,123,44,.05), transparent 55%);
 		background-attachment: fixed;
 		color: var(--ink); font-family: var(--body); font-size: 14px; line-height: 1.5;
@@ -409,7 +409,7 @@
 	}
 
 	/* ============================================================
-	   Bootstrap re-skin — themes the components older pages still
+	   Bootstrap re-skin, themes the components older pages still
 	   use into the war-room palette so every page stays cohesive.
 	   ============================================================ */
 	h5,h6,.h1,.h2,.h3,.h4,.h5 { font-family: var(--display); color: var(--ink); }
@@ -610,7 +610,7 @@
 		if (ws && !ws.contains(e.target)) ws.classList.remove('open');
 	});
 	// Config page: the sidebar Modules links are /config#<section>. Switch to the
-	// hash's tab on load AND on every hash change — clicking a Modules link while
+	// hash's tab on load AND on every hash change, clicking a Modules link while
 	// already on /config only changes the hash (no reload), so without the
 	// hashchange handler the visible tab would never follow the link.
 	function showConfigTab() {

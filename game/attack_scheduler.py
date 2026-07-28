@@ -158,7 +158,7 @@ def claim_due(path=None, lead=0.0, now=None):
 
     A command already in 'sending' whose claim is older than STALE_SENDING_SECONDS
     is treated as abandoned (the process that claimed it crashed mid-launch) and
-    is reclaimed too — otherwise it would stay 'sending' forever, never retried
+    is reclaimed too, otherwise it would stay 'sending' forever, never retried
     (only 'pending' is normally claimed) and never pruned."""
     now = now if now is not None else time.time()
     claimed = []

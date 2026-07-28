@@ -30,8 +30,8 @@
 <div id="pane-overview">
 <div class="card mb-3">
 	<div class="card-header py-2 d-flex align-items-center flex-wrap">
-		<span><strong>Tracked targets ({{ plan.targets|length }})</strong>
-		<small class="text-muted">— what the bot is currently farming / scouting</small></span>
+		<span><strong>Tracked targets ({{ plan.targets|length }}),</strong>
+		<small class="text-muted">what the bot is currently farming / scouting</small></span>
 		<span class="ml-auto d-flex align-items-center">
 			<small class="text-muted mr-1">ETA&nbsp;from</small>
 			<select id="o_origin" class="form-control form-control-sm" style="width:auto">
@@ -83,12 +83,12 @@
 <div class="row">
 	<div class="col-lg-5 mb-3">
 		<div class="card">
-			<div class="card-header py-2"><strong>Schedule an attack</strong>
-				<small class="text-muted">— auto-sends so troops land at the chosen time</small></div>
+			<div class="card-header py-2"><strong>Schedule an attack,</strong>
+				<small class="text-muted">auto-sends so troops land at the chosen time</small></div>
 			<div class="card-body">
 				<p class="small text-muted mb-2">
 					Best-effort timing (within ~a second). The bot must be running. Precisely-timed
-					auto-sends carry more ban risk than farming — use with care.
+					auto-sends carry more ban risk than farming, use with care.
 				</p>
 				<div class="form-group mb-2">
 					<label class="small mb-1">Origin (your village)</label>
@@ -118,11 +118,11 @@
 					</div>
 				</div>
 				<div class="form-group mb-2">
-					<label class="small mb-1">Arrive at (date &amp; time)
-						<span class="text-muted">— read in this browser's timezone</span></label>
+					<label class="small mb-1">Arrive at (date &amp; time),
+						<span class="text-muted">read in this browser's timezone</span></label>
 					<input id="s_arrival" type="datetime-local" step="1" class="form-control form-control-sm" />
 				</div>
-				<label class="small mb-1">Units to send <span class="text-muted">— type a number, or <code>all</code> to send every one home at send time</span></label>
+				<label class="small mb-1">Units to send<span class="text-muted">, type a number, or <code>all</code> to send every one home at send time</span></label>
 				<div id="s_units" class="form-row"></div>
 				<div id="s_avail" class="small text-muted mb-2"></div>
 				<div id="s_preview" class="small mb-2"></div>
@@ -208,7 +208,7 @@
 					<input id="arrival" type="time" step="1" class="form-control form-control-sm" />
 					<small class="text-muted">Adds a "send by" column so each unit lands at this time
 						(today, or tomorrow if it's already past). Read in this browser's
-						timezone — on a world in another timezone, enter the time you want
+						timezone, on a world in another timezone, enter the time you want
 						locally, not the one the game's clock shows.</small>
 				</div>
 				<div id="dist" class="small text-muted mb-2"></div>
@@ -238,7 +238,7 @@
 	what's there and repeats after the round trip. Multiple nobles go out as separate attacks seconds
 	apart. Auto-stops (never auto-resumes): conquered &#127881;, taken by another player, red report,
 	noble died without its hit landing, or the rally point refuses twice.
-	<strong>Jobs start disarmed — arm them yourself.</strong>
+	<strong>Jobs start disarmed, arm them yourself.</strong>
 </div>
 <div class="row">
 	<div class="col-lg-5 mb-3">
@@ -267,7 +267,7 @@
 						<input id="nb_ty" type="number" class="form-control form-control-sm" />
 					</div>
 				</div>
-				<label class="small mb-1">Escort per noble <span class="text-muted">— sent along with every noble attack</span></label>
+				<label class="small mb-1">Escort per noble<span class="text-muted">, sent along with every noble attack</span></label>
 				<div id="nb_units" class="form-row"></div>
 				<div class="form-group mb-2">
 					<label class="small mb-1">Escort trigger (%)</label>
@@ -533,7 +533,7 @@ function schedPreview() {
 	const send = new Date(arrive.getTime() - sec*1000);
 	const past = send < new Date();
 	el.innerHTML = 'Slowest travel '+fmtDur(sec)+' · send at <strong>'+fmtClock(send)+'</strong> '+
-		(past ? '<span class="text-danger">(already past — pick a later arrival)</span>'
+		(past ? '<span class="text-danger">(already past, pick a later arrival)</span>'
 		      : '<span class="text-success">✓</span>');
 }
 function copyPlanTarget() {

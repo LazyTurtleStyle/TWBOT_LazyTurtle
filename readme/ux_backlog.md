@@ -8,7 +8,7 @@ Status legend: `[ ]` todo · `[~]` partially exists · `[x]` done
 
 ---
 
-## P1 — Overview / status page
+## P1: Overview / status page
 
 The landing page (`/`, `bot.html`) is the thing you look at most, but today it mostly shows
 a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actually doing.
@@ -30,10 +30,10 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
   - Reports now feed **newest-first** (`sync()` previously took the *oldest* 100, so the
     feed was always days stale), and a dedicated **Incoming** card surfaces attacks/scouts
     against us so routine farming can't bury them.
-  - Fixed a Jinja gotcha: `resources.pop` resolved to the dict's `.pop` method — use
+  - Fixed a Jinja gotcha: `resources.pop` resolved to the dict's `.pop` method, use
     `resources['pop']`.
   - Incoming split into **"Under attack now"** (live, from each village's `under_attack`
-    flag; calm empty bar when clear) vs **"Recently hit by others"** (past, from reports) —
+    flag; calm empty bar when clear) vs **"Recently hit by others"** (past, from reports),
     so the loud alarm no longer fires for something that already happened.
   - **Build queue** shown as compact lettered chips (first = next up, highlighted) with the
     full building name + level on mouseover, plus a `+N` for the rest of the planned queue.
@@ -49,7 +49,7 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
     editor's in-game rename always reported `no_endpoint_yet` on multi-world installs:
     `rename_command_ingame` loaded the captured endpoint via the game module's
     `load_label_endpoint()`, whose relative `cache/world/...` path resolves against
-    `FileManager`'s data root — set only in the bot process (`--world`), so the web process
+    `FileManager`'s data root, set only in the bot process (`--world`), so the web process
     read the default world's (missing) cache. `DataReader.incoming_rename_ingame` now loads
     `incoming_label.json` world-aware and passes it as `label_cfg`. Verified live on an NL world
     (label applied in-game). Also added a third preset button next to fake/noble showing
@@ -59,7 +59,7 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
     individual command (origin village/player, arrival time, first-seen) under
     `cache/incomings/`. "Under attack now" is now driven off this live, pruned cache with real
     per-attack countdowns, walking-time tables and a slowest-unit auto-tag estimate, instead of
-    the coarse `under_attack` flag — which is only used as a fallback when the poller is disabled
+    the coarse `under_attack` flag, which is only used as a fallback when the poller is disabled
     or logged out. Resilient to cookie expiry: detects logged-out scrapes, warns once via
     notification, persists the rotating session so the poller and main loop stop fighting over
     the `sid`, and the dashboard shows a "tracking is logged out" banner instead of a false
@@ -80,7 +80,7 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
   flash. "TW" uses the parchment background `#ECD7AC`. Semantic colours (danger/warning
   rows, badges) are preserved across themes.
 
-## P2 — Bot configuration UX
+## P2: Bot configuration UX
 
 The config tabs (`/config`, `config.html`) expose every key as a flat list with terse,
 sometimes vague help text. Goal: readable, well-explained settings.
@@ -109,12 +109,12 @@ sometimes vague help text. Goal: readable, well-explained settings.
   (`helpfile.section_labels`) with a description spelling out that it's the bot's own action
   log/export (file or MySQL), *not* the in-game reports on the Status page.
 
-## P3 — Farms & scavenging (high priority tab)
+## P3: Farms & scavenging (high priority tab)
 
 - [x] **Edit the in-game A/B farm templates from the dashboard.** New dedicated **Farms &
   scavenging** page (`/farms`, `farms.html`, linked in the navbar) surfaces
   `farms.template_id_scout` (A), `farms.template_id_minimal` (B) and
-  `farms.template_minimal_troops` as editable inputs — these were previously `null`/dict in
+  `farms.template_minimal_troops` as editable inputs, these were previously `null`/dict in
   config and didn't even render on the config page. Grouped alongside the master switch,
   target selection, away times and the A/B/C risk & report-freshness settings, with inline
   help mirroring `readme/farm_checklist.md`. Writes via the existing `/app/config/set`.
@@ -129,7 +129,7 @@ sometimes vague help text. Goal: readable, well-explained settings.
   column on the Farms page, editable per village from the village config. Night
   consolidation stays suspended under attack regardless (`do_gather` in `game/village.py`).
   - [x] **Group policies (alpha, never live-fired):** `farms.gather_group_policies` maps an
-    in-game group (name, case-insensitive, or id) to a scavenging policy — `never` (troops
+    in-game group (name, case-insensitive, or id) to a scavenging policy, `never` (troops
     always home, front def; beats even `gather_enabled`), `pause_attacked` (scavenge but
     always stop for incomings, mobile def) or `always` (keep scavenging through incomings,
     safe/rim def). A policy is authoritative over the per-village `gather_when_attacked`
@@ -140,7 +140,7 @@ sometimes vague help text. Goal: readable, well-explained settings.
     `Village._gather_group_policy` / `do_gather` (`game/village.py`).
   - [ ] Possible refinement (not built): under-attack-only *unit* filter (e.g. scavenge
     with def units only while an incoming is up), `gather_attacked_exclude_units`.
-- [x] Farm/scavenge activity is already in the P1 overview — `OverviewBuilder` aggregates
+- [x] Farm/scavenge activity is already in the P1 overview, `OverviewBuilder` aggregates
   `farm_targets`, `scout_targets` and `scavenging_runs` counters, shown on the status page.
   - [x] Added **Recent loot** (summed farm haul) and **Last activity** (time of the most
     recent report) cards to the overview summary row, over the same ~100-report window as the
@@ -150,7 +150,7 @@ sometimes vague help text. Goal: readable, well-explained settings.
 
 Pattern request: create/edit templates inline instead of hand-writing `.txt` files.
 
-- [x] **Building templates** — `/building_templates` editor is finished. Rows render
+- [x] **Building templates**, `/building_templates` editor is finished. Rows render
   client-side from the template file and are fully editable: change building (select) /
   target level inline, **Add row**, **Delete** row, reorder with up/down arrows, then
   **Save** (POST JSON → `/app/template/building/save`, which validates building names against
@@ -158,15 +158,15 @@ Pattern request: create/edit templates inline instead of hand-writing `.txt` fil
   **Delete template** (`/app/template/building/delete`). Writer/remover live in
   `BuildingTemplateManager.template_save` / `template_delete`. This is the model the unit and
   village editors should follow.
-- [x] **Unit templates** — new form-based editor at `/unit_templates` (navbar + list/create/
+- [x] **Unit templates**, new form-based editor at `/unit_templates` (navbar + list/create/
   delete). Each troop template is edited as ordered **stages**: a gating building+level, a
-  "recruit totals" table (pick unit + amount — grouped into the on-disk
+  "recruit totals" table (pick unit + amount, grouped into the on-disk
   `build={building:{unit:amount}}` via the unit→building map), and an optional smith-upgrades
   table. Add/remove/reorder stages and rows, then Save (POST JSON → `/app/template/unit/save`,
   validated server-side). **Non-destructive**: legacy/extra stage keys (e.g. `farm`
-  compositions) are round-tripped untouched — verified against all existing troop templates.
+  compositions) are round-tripped untouched, verified against all existing troop templates.
   Backend: `UnitTemplateManager` + `normalize_unit_stage`.
-- [x] **Village templates** — a "village template" is not a separate file; it's the
+- [x] **Village templates**, a "village template" is not a separate file; it's the
   `village_template` settings block in `config.json` (which build/unit template a village uses
   + its behaviour toggles), already editable as a form on the **Default village template**
   config tab. Added the missing piece: an **apply-to-existing-villages** action, since the
@@ -206,22 +206,22 @@ into a "Setup / World" area, ideally a first-run wizard.
   behaviour (help text updated to say so); all flag behaviour moved to the new Flags tab and
   `game/village.py` reads `flags.manage` instead of `world.flags_enabled`.
 
-## Flag management (new feature — separate from the toggle above)
+## Flag management (new feature, separate from the toggle above)
 
 - [x] **Dedicated flag-management options.** New top-level `flags` config section (its own
   **Flags** config tab with a "How flag management works" reference card):
-  - `flags.manage` — master switch, independent of `world.flags_enabled`.
+  - `flags.manage`, master switch, independent of `world.flags_enabled`.
   - Per-village `flag_type` (on the Default village template tab and each village's page) as a
     labelled dropdown of the 8 TribalWars flag types (1 Resource, 2 Recruitment, 3 Attack,
     4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul; or Off). IDs read from the live
     flags screen so the labels are correct.
-  - `flags.auto_upgrade` — opt-in, OFF by default, so the bot never combines your flags
+  - `flags.auto_upgrade`, opt-in, OFF by default, so the bot never combines your flags
     unless asked.
   - No attack-time override: the configured flag stays put even under attack (per request).
   Backend: `DefenceManager.flag_type` / `auto_upgrade_flags`, `flag_logic` honours the
   per-village type, `manage_flags` only upgrades when opted in.
   - [x] **Defense overview page** (`/defense`, navbar **Defense**): per-village defensive
-    picture — who is under attack now (live from the incoming poller, with a "lands in"
+    picture, who is under attack now (live from the incoming poller, with a "lands in"
     countdown), incoming counts, and the defensive troops at home, plus account-wide totals.
     `DefenseOverview.build` in `webmanager/utils.py`.
     - [ ] Still to add: a manual "switch this village to the defense flag now" button on that
@@ -244,7 +244,7 @@ into a "Setup / World" area, ideally a first-run wizard.
   `BotManager` tracks/starts/stops each world's process by its `--world` cmdline). No `--world`
   = project root, unchanged. Foundation: `FileManager` data-dir + `DataReader.data_path`.
   `start.sh` takes world names (`./start.sh nl99 nl98`). See README "Running multiple worlds".
-  - [x] **"Create new world" from the UI** — done; see the same item under "Set-once
+  - [x] **"Create new world" from the UI**, done; see the same item under "Set-once
     configuration" above (Setup page card → `POST /app/world/create`).
 
 ## Attack planner (alpha)
@@ -255,21 +255,21 @@ into a "Setup / World" area, ideally a first-run wizard.
   moment, computed client-side from the world's real unit speeds) plus a **tracked-targets
   overview** (cache/attacks enriched from the village DB: coords, kind, points, owner, last hit).
   Backend: `AttackPlanner.build` + world-aware `DataReader.world_speeds()`.
-- [x] **Inline ETAs in the target list** — ETA column on the tracked-targets overview: travel
+- [x] **Inline ETAs in the target list**, ETA column on the tracked-targets overview: travel
   time of the fastest unit *at home* in a chosen origin (falls back to the world's fastest unit
   when there's no troop snapshot), computed client-side per row.
-- [ ] **Snipe / coordination helper** — given a target arrival time, compute send-by for several
+- [ ] **Snipe / coordination helper**, given a target arrival time, compute send-by for several
   origins at once (land-together planning). *(Single-origin timed lands are covered by the
-  Scheduler tab; snipe-on-defense is covered by the snipe/c-snipe engines — what's left here is
+  Scheduler tab; snipe-on-defense is covered by the snipe/c-snipe engines, what's left here is
   specifically multi-origin land-together math.)*
-- [x] **Auto noble barb (alpha, never live-fired)** — 4th tab on `/attacks`: jobs
+- [x] **Auto noble barb (alpha, never live-fired)**, 4th tab on `/attacks`: jobs
   (from-village → barb target, escort-per-noble package, escort %-trigger) that walk a barb's
   loyalty down until conquered. Loyalty from own reports (`extra["loyalty"]` parsed in
   `game/reports.py`; none = 100) + regen (speed/h); overshoot guard caps concurrent nobles at
-  `ceil(loyalty/35)` (max drop) so a lucky train never lands a spare noble on an owned village —
+  `ceil(loyalty/35)` (max drop) so a lucky train never lands a spare noble on an owned village,
   at 100 that means 3 first, then re-evaluate. Sends what's home and repeats (round-trip wait via
   `in_flight.back_at`). Multi-noble = sequential separate attacks (one noble per attack; extra
-  nobles in one attack add no loyalty drop); the in-game train/multi-send is NOT driven yet — the
+  nobles in one attack add no loyalty drop); the in-game train/multi-send is NOT driven yet, the
   first noble confirm page is dumped to `cache/world/noble_confirm.json` to build it from real
   markup later. Auto-stops: conquered (owner in managed cache / loyalty < 0), taken by another
   player (map-cache owner watch), red report, noble died without loyalty hit, 2 rally rejections.
@@ -277,20 +277,20 @@ into a "Setup / World" area, ideally a first-run wizard.
   `farms.noble_barb`); UI endpoints `/app/noble/*`.
   - [ ] Drive the in-game train/multi-send feature once a captured confirm page shows its form.
   - [ ] Optional: also read loyalty from other players' reports shared in-tribe (not parsed now).
-- [x] **Troop check** — the planner table shows an "At home" column from the origin's troop
+- [x] **Troop check**, the planner table shows an "At home" column from the origin's troop
   snapshot; units with none at home are muted with a red 0.
-- [x] **Barb shaper (alpha)** — 4th tab on `/farms`: axe+ram attacks raze the walls of the
+- [x] **Barb shaper (alpha)**, 4th tab on `/farms`: axe+ram attacks raze the walls of the
   closest barbs whose last scout report shows a wall above `farms.shaper_min_wall`, so farming
   stops bleeding LC. `game/barbshaper.py`: rams sized to full-raze in one clean win
   (≈ `2·W·1.09^W`, +10% safety), axe escort sized so worst-case-luck (−25%) losses stay under
   `shaper_loss_tolerance`; only engages report-proven-empty targets, re-hits only after a newer
   report still shows a wall, idles while scavenging claims the axes (axe not in
   `gather_exclude_units`), never sends under attack, spy rides along to refresh wall intel.
-  Untested against the live game — default off.
-- [x] **Map integration** — `/map`: hover previews a village, click pins it and shows
+  Untested against the live game, default off.
+- [x] **Map integration**, `/map`: hover previews a village, click pins it and shows
   "Plan attack" / "Schedule" buttons deep-linking to `/attacks?x=..&y=..#planner|#scheduler`
   (barbarian cells are clickable now too). The attacks page prefills both forms from `?x&y`.
-- [~] **(Bigger / riskier) Send from the UI** — largely superseded: the Scheduler tab already
+- [~] **(Bigger / riskier) Send from the UI**, largely superseded: the Scheduler tab already
   sends real attacks via `attack_scheduler` at a chosen arrival time. A "send now" button is
   the only missing piece, if ever wanted.
 
