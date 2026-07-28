@@ -19,7 +19,7 @@ Constraints, and how they shape the flow:
   way at C; otherwise they land on the barb and return on their own schedule.
   The server's own travel duration (from the confirm screen) is the
   authoritative check.
-- Return arithmetic (measured live, nl99 2026-07-08, via the test tab): the
+- Return arithmetic (measured live on an NL world, 2026-07-08, via the test tab): the
   server credits a cancelled command's under-way time in WHOLE seconds - the
   troops land back at S + 2k seconds (k = whole seconds under way at the
   cancel), keeping the send's millisecond offset exactly. The ms-precise

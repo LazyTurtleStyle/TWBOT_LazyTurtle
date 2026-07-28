@@ -12,9 +12,9 @@
 #
 # Examples:
 #   ./start.sh                 # default world + panel (unchanged behaviour)
-#   ./start.sh nl98           # the nl98 world + panel
-#   ./start.sh nl99 nl98     # two worlds + one shared panel
-#   PORT=5001 ./start.sh nl98 # panel on port 5001
+#   ./start.sh nl98            # the nl98 world + panel
+#   ./start.sh nl99 nl98       # two worlds + one shared panel
+#   PORT=5001 ./start.sh nl98  # panel on port 5001
 
 SESSION="twb"
 PORT="${PORT:-5000}"

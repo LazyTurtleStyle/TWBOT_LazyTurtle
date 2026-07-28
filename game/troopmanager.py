@@ -16,7 +16,7 @@ SCAVENGE_LOOT_FACTOR = {1: 0.10, 2: 0.25, 3: 0.50, 4: 0.75}
 
 # Scavenge run duration in seconds:
 #   ((carry^2 * 100 * loot_factor^2) ^ 0.45 + 1800) * world_speed ^ -0.55
-# Community formula, verified against a live nl99 (speed 2.0) option-IV run:
+# Community formula, verified against a live NL world (speed 2.0) option-IV run:
 # 39,160 carry predicted 16h10m, observed 16h09m.
 SCAVENGE_DURATION_EXPONENT = 0.45
 SCAVENGE_DURATION_BASE_SECONDS = 1800

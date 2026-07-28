@@ -51,7 +51,7 @@ a raw dump of reports. Goal: an at-a-glance dashboard of what the bot is actuall
     `load_label_endpoint()`, whose relative `cache/world/...` path resolves against
     `FileManager`'s data root — set only in the bot process (`--world`), so the web process
     read the default world's (missing) cache. `DataReader.incoming_rename_ingame` now loads
-    `incoming_label.json` world-aware and passes it as `label_cfg`. Verified live on nl99
+    `incoming_label.json` world-aware and passes it as `label_cfg`. Verified live on an NL world
     (label applied in-game). Also added a third preset button next to fake/noble showing
     `tag_auto` (the ≥ unit-speed estimate), which tags the incoming as that unit.
   - [x] **Live incoming-attack tracking.** A background poller (`game/incomings.py`,

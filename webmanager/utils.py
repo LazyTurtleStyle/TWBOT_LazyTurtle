@@ -1544,7 +1544,7 @@ class OverviewBuilder:
     def _farm_stall_state(cls, newest_combat_ts, watchdog):
         """Detect the 'silent stall': the main loop is alive during active hours
         and farming is on, but no attack/scout report has been ingested for
-        FARM_STALL_SECONDS. This is the nl99 signature - a degraded session that
+        FARM_STALL_SECONDS. This is the classic silent-stall signature - a degraded session that
         keeps the loop turning (fresh heartbeat) while report reading is dead.
         Returns {"stalled": bool, "since": ts, "age": secs}."""
         idle = {"stalled": False, "since": None, "age": None}

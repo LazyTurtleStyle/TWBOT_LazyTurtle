@@ -253,8 +253,8 @@ That address is a private one: it only exists inside your own network. On mobile
 One copy of the bot plays several worlds at once, each with its own config, session and cache:
 
 ```bash
-./start.sh nl99 nl98        # Linux/macOS/Pi
-start.bat nl99               # Windows
+./start.sh nl99 nl98          # Linux/macOS/Pi
+start.bat nl99                # Windows
 ```
 
 Each world keeps its data in `worlds/<name>/`; templates are shared. A **World** dropdown appears in the dashboard navbar to switch between them, and start/stop targets the selected world. On Docker, set `WORLDS=nl99 nl98` in `.env`.

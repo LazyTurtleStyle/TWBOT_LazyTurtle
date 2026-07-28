@@ -130,7 +130,7 @@ class ReportManager:
         """
         Read reports from every report folder. In-game report filters can file
         new reports straight into a group, so only polling the main folder can
-        silently miss everything (nl99 2026-07-09: all farm reports were
+        silently miss everything (seen live 2026-07-09: all farm reports were
         auto-filed into "Rooftochten"/"Farm-assistent" and farming stalled).
         """
         if not self.logger:

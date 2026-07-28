@@ -2,7 +2,7 @@
 
 The daily-bonus screen carries a DailyBonus.init(...) call whose first
 argument is the current reward cycle: chests keyed by day, one unlocking per
-login day (structure verified live on nl99). A chest is claimable when it is
+login day (structure verified live on an NL world). A chest is claimable when it is
 unlocked and not yet collected; claiming posts ajaxaction=open with the
 chest's day number, exactly like the in-game DailyBonus.openChest. Chests
 that are still locked (future days, or the premium-point unlocks) are left
