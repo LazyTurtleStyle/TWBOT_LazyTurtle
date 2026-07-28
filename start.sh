@@ -61,6 +61,28 @@ if [ ${#WORLDS[@]} -eq 0 ]; then
     esac
 fi
 
+# Named worlds must already be set up. Without this a typo (nl99 -> n199) is
+# indistinguishable from a new world: the bot creates worlds/<typo>/, finds no
+# config and waits for a world nobody is setting up, while the log stays empty.
+# Checked before the attach-to-running-session branch below, or a typo would
+# silently drop you into the session that is already running instead.
+for w in "${WORLDS[@]}"; do
+    [ -n "$w" ] || continue
+    [ -f "worlds/$w/config.json" ] && continue
+    echo "There is no world called '$w': worlds/$w/config.json does not exist."
+    have=()
+    for cfg in worlds/*/config.json; do
+        [ -f "$cfg" ] && have+=("$(basename "$(dirname "$cfg")")")
+    done
+    if [ ${#have[@]} -gt 0 ]; then
+        echo "Worlds set up here: ${have[*]}"
+        echo "Check the spelling, for example:  ./start.sh ${have[0]}"
+    else
+        echo "Open the dashboard and use 'Add world' to set one up first."
+    fi
+    exit 1
+done
+
 if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Session '$SESSION' is already running, attaching..."
     exec tmux attach -t "$SESSION"

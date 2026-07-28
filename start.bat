@@ -22,6 +22,12 @@ set "ABORT="
 if not defined WORLD call :PICK_WORLD
 if defined ABORT exit /b 1
 
+REM --- A named world has to be set up already -------------------------------------
+REM Without this a typo (nl99 -> n199) is indistinguishable from a new world: the
+REM bot creates worlds\<typo>\, finds no config there and waits for a world nobody
+REM is setting up, while this window shows nothing.
+if defined WORLD if not exist "%~dp0worlds\%WORLD%\config.json" goto BAD_WORLD
+
 REM --- First run? Install everything first ---------------------------------------
 if not exist "%VPY%" (
     echo First run detected - setting up. This only happens once.
@@ -90,6 +96,23 @@ goto :EOF
 set /a COUNT+=1
 set "FOUND=%~1"
 goto :EOF
+
+:BAD_WORLD
+echo.
+echo There is no world called "%WORLD%": worlds\%WORLD%\config.json does not exist.
+set "ANY="
+for /d %%W in ("%~dp0worlds\*") do if exist "%%~fW\config.json" set "ANY=1"
+if defined ANY (
+    echo Worlds set up here:
+    for /d %%W in ("%~dp0worlds\*") do if exist "%%~fW\config.json" echo    %%~nxW
+    echo.
+    echo Check the spelling and start one of those, for example: start.bat nl99
+) else (
+    echo Open the dashboard and use "Add world" to set one up first.
+)
+echo.
+pause
+exit /b 1
 
 :VERIFY_FAIL
 echo.

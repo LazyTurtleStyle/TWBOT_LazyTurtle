@@ -21,6 +21,7 @@ TWB - an open source Tribal Wars bot
 import collections
 import copy
 import datetime
+import difflib
 import json
 import logging
 import os
@@ -1183,6 +1184,32 @@ def configured_worlds():
     )
 
 
+def unknown_world(world):
+    """Refuse a --world that has no config, and say what to do instead. Exits.
+
+    A mistyped world name used to be indistinguishable from a new one: the data
+    dir was created on the spot, the bot found no config in it and waited for a
+    world that nothing was ever going to set up, logging nothing after the
+    integrity check. Nothing said the name was wrong - `nl99` and `n199` differ
+    by one glyph - and the empty directory stayed behind in worlds/, where it
+    also showed up in the dashboard's world switcher as a world you could select
+    and then see nothing in.
+    """
+    print("There is no world called '%s': worlds/%s/config.json does not exist."
+          % (world, world))
+    known = configured_worlds()
+    if known:
+        print("Worlds set up here: %s" % ", ".join(known))
+        close = difflib.get_close_matches(world, known, n=1, cutoff=0.6)
+        if close:
+            print("Did you mean '%s'?" % close[0])
+    print(
+        "To add a world, open the dashboard and use 'Add world' (it takes the "
+        "cookie too), or run: twb.py --setup --world %s" % world
+    )
+    sys.exit(1)
+
+
 def resolve_world_dir():
     """Honour `--world <name>`: point config.json + cache/ at worlds/<name>/.
 
@@ -1190,6 +1217,11 @@ def resolve_world_dir():
     fully separate config, session and cache per world. Must run before any
     config/cache access. With no --world the data dir stays the project root, so
     single-world setups are completely unchanged. Returns the world name or None.
+
+    An unset-up world name is rejected here (see unknown_world) rather than
+    created, so a typo cannot leave a stray directory or a bot waiting forever.
+    `--setup` is the one way to name a world that does not exist yet, because
+    that is a request to build its config.
     """
     global ACTIVE_WORLD
     world = None
@@ -1204,6 +1236,10 @@ def resolve_world_dir():
     # A single path segment only - never escape the worlds/ directory.
     world = os.path.basename(world.strip())
     data_dir = os.path.join(os.path.dirname(__file__), "worlds", world)
+    # Check before creating anything: unknown_world() must not leave the very
+    # directory behind that it is complaining does not exist.
+    if "--setup" not in argv and not os.path.isfile(os.path.join(data_dir, "config.json")):
+        unknown_world(world)
     os.makedirs(os.path.join(data_dir, "cache"), exist_ok=True)
     FileManager.set_data_dir(data_dir)
     ACTIVE_WORLD = world
