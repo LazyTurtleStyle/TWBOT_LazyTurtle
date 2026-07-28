@@ -127,6 +127,8 @@ The bot needs your browser's session to act as you. This is the one manual step,
 
 **In Firefox:** the same steps — `F12` → **Network** → refresh → click `game.php` → **Headers** → **Request Headers** → copy the `Cookie` value.
 
+**Where to paste it:** the dashboard — **http://localhost:5000/**, the **Session** box on the Overview page, then **Update session**. That's the only place. Never paste a cookie into the bot's console window: a terminal cuts long lines short, and a cookie string is long, so what you get is a session that looks accepted but comes back logged out on every cycle. The bot no longer asks for one there — if it has no session it prints where to paste and waits, then starts by itself within seconds of your paste.
+
 > **Keep the session healthy.** Log out and back in through your browser once or twice a day, and paste the fresh cookie string into the dashboard. One session running 24 hours straight is a strong bot signal.
 >
 > **If a captcha appears,** solve it in your browser on that same session. The bot notices it clear and resumes on its own — no restart needed.
@@ -147,9 +149,11 @@ Under **Add a world**, fill in three fields:
 |---|---|
 | **Game URL** | The address bar of your logged-in world, e.g. `https://nl99.tribalwars.nl/game.php?village=12345&screen=overview` |
 | **Browser user agent** | Google "what is my user agent" and paste the result. Matching your real browser lowers detection. |
-| **Login cookie** | The long string you just copied. Marked optional in the UI, but fill it in — without it the bot stops and asks for it in the console instead. |
+| **Login cookie** | The long string you just copied. Marked optional in the UI, but fill it in — the bot cannot play without a session, and this is the only place to give it one. |
 
 Press create. The bot works out the world name from the URL, writes its config and starts playing. Your villages are added automatically as you conquer them.
+
+On a brand-new copy the bot has nothing to run yet, so it prints *"No world set up yet"* and waits for exactly this form — the moment you press create it picks the world up and starts. No restart, and nothing to type in the console. (If you'd rather answer the questions in a terminal, `python twb.py --setup` still runs the old wizard; it can't take the cookie, though, so you'll come back here for that.)
 
 ### 2. Go through the settings
 
@@ -259,7 +263,9 @@ start.bat nl99                # Windows
 
 Each world keeps its data in `worlds/<name>/`; templates are shared. A **World** dropdown appears in the dashboard navbar to switch between them, and start/stop targets the selected world. On Docker, set `WORLDS=nl99 nl98` in `.env`.
 
-Running plain `./start.sh` with no world name uses the project root, so single-world setups keep working unchanged.
+Running plain `./start.sh` (or double-clicking `start.bat`) with no world name uses the project root, so single-world setups keep working unchanged. If there is no `config.json` in the project root and exactly one world under `worlds/` is set up, that world is started instead — so double-clicking can't walk you into setting the same account up a second time. With several worlds set up, it asks you to name one.
+
+Different worlds run side by side, but the **same account never runs twice**: a second bot on one account makes the two fight over the game session until one is permanently logged out. Starting one anyway just prints which process already has that account and exits.
 
 ---
 
@@ -289,7 +295,8 @@ On Windows: download the new ZIP, copy your `worlds/` folder across (and `config
 | Symptom | Fix |
 |---|---|
 | **"Bot protection" / captcha in the log** | Solve the captcha in your browser on the same session. The bot resumes by itself. |
-| **Bot runs but nothing happens** | Usually a dead session — paste a fresh cookie string. Also check your in-game report filters aren't filing reports into groups the bot never reads. |
+| **Bot runs but nothing happens** | Usually a dead session — paste a fresh cookie string **in the dashboard**, never in the console. Also check your in-game report filters aren't filing reports into groups the bot never reads. |
+| **`session looks logged out (cookie expired)` every cycle, but the game and the dashboard log look fine** | A second bot was started on the same account and the two logged each other out. Close the extra one — one bot per account. Newer versions refuse to start the second one and tell you which process already holds the account. |
 | **"Not enough resources" in the log** | Normal. The bot retries as resources come in. |
 | **Farming does nothing** | Work through [readme/farm_checklist.md](readme/farm_checklist.md). |
 | **Dashboard unreachable from your phone** | Check the host's firewall, and that you used its LAN IP rather than `localhost`. |

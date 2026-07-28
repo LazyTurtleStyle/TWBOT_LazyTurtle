@@ -1237,14 +1237,23 @@ def incoming_tag():
 
 @app.route('/app/session/set', methods=['POST'])
 def session_set():
+    # Report *why* a save failed instead of 500-ing into the page's generic
+    # "Error saving session" - pasting a cookie is the one thing every new user
+    # does before anything else works, so a blind failure there is expensive.
     raw = request.form.get("session", "")
-    return jsonify({"ok": DataReader.session_set(raw)})
+    try:
+        return jsonify({"ok": DataReader.session_set(raw)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
 
 
 @app.route('/app/portal-cookies/set', methods=['POST'])
 def portal_cookies_set():
     raw = request.form.get("cookies", "")
-    return jsonify({"ok": DataReader.portal_cookies_set(raw)})
+    try:
+        return jsonify({"ok": DataReader.portal_cookies_set(raw)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
 
 
 @app.route('/app/tw-open', methods=['GET'])

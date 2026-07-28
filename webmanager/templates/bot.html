@@ -336,7 +336,8 @@ function set_session_data() {
 	status.removeClass('text-success text-danger').text('Saving...');
 	$.post('/app/session/set', {session: raw})
 		.done(function(resp) {
-			status.text(resp && resp.ok ? 'Saved ✓ to {{ active_world or "default" }}' : 'No valid cookies found in that string');
+			if (resp && resp.ok) { status.text('Saved ✓ to {{ active_world or "default" }}'); }
+			else { status.text((resp && resp.error) || 'No valid cookies found in that string'); }
 		})
 		.fail(function() { status.text('Error saving session'); });
 }
@@ -350,7 +351,7 @@ function set_portal_cookies() {
 				status.text('Saved ✓');
 				$('#portal_saved_badge').text('saved').removeClass('dim').addClass('moss');
 			} else {
-				status.text('No valid cookies found');
+				status.text((resp && resp.error) || 'No valid cookies found');
 			}
 		})
 		.fail(function() { status.text('Error saving'); });

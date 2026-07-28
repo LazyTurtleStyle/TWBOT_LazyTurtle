@@ -4,7 +4,9 @@
 # Usage: ./start.sh [world ...]
 #   world   zero or more world names. Each runs `python3 twb.py --world <name>`
 #           out of worlds/<name>/. With no world it runs the default bot
-#           (python3 twb.py, root config.json) - exactly like before.
+#           (python3 twb.py, root config.json), or - if there is no root
+#           config.json and exactly one world under worlds/ is set up - that
+#           world, so you cannot accidentally set the same account up twice.
 #
 # Environment:
 #   PORT    web panel port (default 5000)
@@ -35,7 +37,29 @@ fi
 
 # Worlds to launch; an empty entry ("") means the default (no --world) bot.
 WORLDS=("$@")
-[ ${#WORLDS[@]} -eq 0 ] && WORLDS=("")
+if [ ${#WORLDS[@]} -eq 0 ]; then
+    # No world named. A top-level config.json means this is a single-world
+    # install - run it, unchanged. Otherwise use the world that is already set
+    # up under worlds/ rather than starting the default bot, which would walk
+    # into the first-run setup wizard and configure the same account a second
+    # time (two setups of one account = two bots logging each other out).
+    configured=()
+    if [ ! -f config.json ]; then
+        for cfg in worlds/*/config.json; do
+            [ -f "$cfg" ] || continue
+            configured+=("$(basename "$(dirname "$cfg")")")
+        done
+    fi
+    case ${#configured[@]} in
+        0) WORLDS=("") ;;   # nothing set up yet, or a single-world install
+        1) WORLDS=("${configured[0]}")
+           echo "Using the only world that is set up: ${configured[0]}" ;;
+        *) echo "Several worlds are set up under worlds/: ${configured[*]}"
+           echo "Say which one(s) to start, for example:"
+           echo "  ./start.sh ${configured[0]}"
+           exit 1 ;;
+    esac
+fi
 
 if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Session '$SESSION' is already running, attaching..."

@@ -4,7 +4,8 @@ REM
 REM Just double-click this file. The first run installs everything it needs.
 REM
 REM Usage from a command prompt (optional):
-REM   start.bat            single world (config.json in this folder)
+REM   start.bat            the world that is set up (config.json here, or the
+REM                        single world under worlds\)
 REM   start.bat nl99      a named world, data under worlds\nl99\
 REM
 REM The dashboard opens on http://localhost:5000/
@@ -15,6 +16,11 @@ cd /d "%~dp0"
 set "WORLD=%~1"
 set "PORT=5000"
 set "VPY=%~dp0.venv\Scripts\python.exe"
+
+REM --- No world name given? Use the one that is already set up --------------------
+set "ABORT="
+if not defined WORLD call :PICK_WORLD
+if defined ABORT exit /b 1
 
 REM --- First run? Install everything first ---------------------------------------
 if not exist "%VPY%" (
@@ -51,6 +57,38 @@ if defined WORLD (
 ) else (
     "%VPY%" twb.py
 )
+goto :EOF
+
+:PICK_WORLD
+REM A top-level config.json means this is a single-world install - leave it be.
+REM Otherwise, if exactly one world under worlds\ is set up, start that instead
+REM of the default bot: double-clicking this file would otherwise walk into the
+REM first-run setup wizard and configure the same account a second time, and two
+REM bots on one account log each other out.
+if exist "%~dp0config.json" goto :EOF
+set "COUNT=0"
+set "FOUND="
+for /d %%W in ("%~dp0worlds\*") do if exist "%%~fW\config.json" call :COUNT_WORLD "%%~nxW"
+if "%COUNT%"=="0" goto :EOF
+if not "%COUNT%"=="1" goto :MANY_WORLDS
+set "WORLD=%FOUND%"
+echo Using the only world that is set up: %FOUND%
+echo.
+goto :EOF
+
+:MANY_WORLDS
+echo Several worlds are set up under worlds\:
+for /d %%W in ("%~dp0worlds\*") do if exist "%%~fW\config.json" echo    %%~nxW
+echo.
+echo Say which one to start, for example:  start.bat %FOUND%
+echo.
+pause
+set "ABORT=1"
+goto :EOF
+
+:COUNT_WORLD
+set /a COUNT+=1
+set "FOUND=%~1"
 goto :EOF
 
 :VERIFY_FAIL

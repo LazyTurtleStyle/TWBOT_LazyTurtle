@@ -44,6 +44,11 @@ class WebWrapper:
     # same session) and auto-resumes - no console keypress or restart needed.
     CAPTCHA_POLL_SECONDS = 20
     CAPTCHA_BLOCK_FILE = "cache/captcha_block.json"
+    # With no usable session the bot waits for one to be pasted on the dashboard
+    # instead of prompting on the console; how often it re-checks the file, and
+    # how often it repeats the instructions while waiting.
+    COOKIE_POLL_SECONDS = 10
+    COOKIE_REMIND_SECONDS = 300
     # (connect, read) seconds. requests has no default timeout, so a connection
     # that hangs after the server starts throttling/blocking (common right
     # around a bot-protection trigger) would otherwise block the main loop
@@ -211,43 +216,98 @@ class WebWrapper:
             self.logger.warning("POST %s %s: %s", url, enc, str(e))
             return None
 
-    def start(self, ):
-        """
-        Start the bot and verify whether the last session is still valid
+    def start(self):
+        """Start the bot, waiting for a usable session if there is none yet.
+
+        The cookie is deliberately never read from the console. A console's line
+        input is far shorter than a TribalWars cookie header, so pasting one into
+        cmd.exe silently truncates it: the bot accepts the string, the server
+        does not, and every cycle from then on reports "cookie expired" with
+        nothing to explain why. The same prompt is also unanswerable for a bot
+        started from the dashboard, whose stdin is closed - input() there raises
+        EOFError and crashes the run.
+
+        So the session comes from cache/ only, and when there is none we wait for
+        one to appear rather than prompting. The dashboard's Overview page has no
+        length limit and writes both files, and the bot picks the paste up within
+        seconds - no restart.
+
+        Read through FileManager so the files resolve to the active world's data
+        dir (worlds/<name>/cache/), not just the project-root cache/.
         """
         session_data = FileManager.load_json_file("cache/session.json")
-        if session_data:
-            self.web.cookies.update(session_data['cookies'])
-            self._last_persisted_cookies = dict(session_data['cookies'])
-            get_test = self.get_url("game.php?screen=overview")
-            if "game.php" in get_test.url:
-                self.is_session_owner = True
+        if session_data and session_data.get("cookies"):
+            if self._session_works(session_data["cookies"]):
+                self.logger.info("Game Endpoint: %s", self.endpoint)
                 return True
             self.logger.warning("Current session cache not valid")
 
-        self.web.cookies.clear()
-        # Read through FileManager so the cookie file is found in the active
-        # world's data dir (worlds/<name>/cache/cookies.txt), not just the
-        # project-root cache/. Only prompt interactively as a last resort.
-        cinp = FileManager.read_file("cache/cookies.txt")
-        if cinp is not None:
+        raw = FileManager.read_file("cache/cookies.txt")
+        if raw and self._session_works(self._parse_cookie_string(raw)):
             print("Loaded cookies from cache/cookies.txt")
-        else:
-            cinp = input("Enter browser cookie string> ")
-        cookies = self._parse_cookie_string(cinp)
+            self.logger.info("Game Endpoint: %s", self.endpoint)
+            return True
+
+        return self._wait_for_session(tried=raw)
+
+    def _session_works(self, cookies):
+        """Load cookies into the jar; True if they give a logged-in game page.
+
+        Nothing is persisted until the cookies are proven good, so a dead paste
+        cannot overwrite a working cache/session.json.
+        """
+        if not cookies:
+            return False
+        self.web.cookies.clear()
         self.web.cookies.update(cookies)
-        self.logger.info("Game Endpoint: %s", self.endpoint)
-
-        for c in self.web.cookies:
-            cookies[c.name] = c.value
-
-        FileManager.save_json_file({
-            'endpoint': self.endpoint,
-            'server': self.server,
-            'cookies': cookies
-        }, "cache/session.json")
-        self._last_persisted_cookies = dict(cookies)
+        self._last_persisted_cookies = None
+        was_owner = self.is_session_owner
+        self.is_session_owner = False
+        test = self.get_url("game.php?screen=overview")
+        self.is_session_owner = was_owner
+        if not test or "game.php" not in test.url:
+            return False
         self.is_session_owner = True
+        self.persist_session()
+        return True
+
+    def _wait_for_session(self, tried=None):
+        """Block until a working cookie string shows up in cache/cookies.txt."""
+        path = FileManager.get_path("cache/cookies.txt")
+        message = (
+            "No usable session yet.\n"
+            "Open the dashboard (http://localhost:5000/ by default), paste your "
+            "browser cookie string into the Session box on the Overview page and "
+            "press 'Update session'.\n"
+            "Do NOT paste it into this window - a console cuts long lines short, "
+            "which is what makes a cookie look accepted but come back logged "
+            "out.\n"
+            "Waiting for %s - the bot starts by itself the moment it arrives."
+            % path
+        )
+        print(message)
+        self.logger.warning("Waiting for a session (paste the cookie on the dashboard)")
+        Notification.send(
+            "TWB is waiting for a session: paste your cookie string on the "
+            "dashboard's Overview page.", category="session")
+        last_reminder = time.time()
+        while True:
+            time.sleep(self.COOKIE_POLL_SECONDS)
+            raw = FileManager.read_file("cache/cookies.txt")
+            if raw and raw != tried:
+                tried = raw
+                if self._session_works(self._parse_cookie_string(raw)):
+                    print("Session accepted - starting.")
+                    self.logger.info("Session accepted, Game Endpoint: %s", self.endpoint)
+                    Notification.send("TWB session accepted, starting.", category="session")
+                    return True
+                print("That cookie string did not give a logged-in session. Copy "
+                      "the whole 'cookie:' header again and paste it on the "
+                      "dashboard.")
+                self.logger.warning("Pasted cookie string did not authenticate")
+            if time.time() - last_reminder > self.COOKIE_REMIND_SECONDS:
+                print(message)
+                last_reminder = time.time()
 
     @staticmethod
     def _parse_cookie_string(cinp):
@@ -269,9 +329,9 @@ class WebWrapper:
         """Re-establish the session from cache/cookies.txt without prompting.
 
         The main loop calls this when the overview comes back logged out, so a
-        fresh cookie string dropped into cache/cookies.txt recovers the bot
-        automatically - no restart, and no blocking input() like start() uses on
-        first run. Returns True when a valid game session is active afterwards.
+        fresh cookie string dropped into cache/cookies.txt (by hand or from the
+        dashboard) recovers the bot automatically - no restart. Returns True when
+        a valid game session is active afterwards.
         """
         # Read through FileManager so the cookie file resolves to the active
         # world's data dir (worlds/<name>/cache/cookies.txt), matching where the

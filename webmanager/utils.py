@@ -12,6 +12,7 @@ import time
 
 import psutil
 
+from core.instance_lock import InstanceLock
 from game import attack_scheduler
 
 try:
@@ -184,6 +185,20 @@ class DataReader:
         base = (os.path.join(DataReader.project_root(), "worlds", name)
                 if name else DataReader.project_root())
         return os.path.join(base, *parts)
+
+    @staticmethod
+    def ensure_data_dir(*parts):
+        """data_path, but the directory it points at is created first.
+
+        cache/ is gitignored, so a freshly unzipped copy has no cache directory
+        until the bot has run once (twb.py creates them at startup). Anything the
+        dashboard writes before that - pasting the very first cookie, most
+        obviously - has to create it, or the save fails with a FileNotFoundError
+        and the page just reports "Error saving session".
+        """
+        path = DataReader.data_path(*parts)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     @staticmethod
     def server_clock_offset():
@@ -1196,7 +1211,7 @@ class DataReader:
         if not cookies:
             return False
 
-        cache_dir = DataReader.data_path("cache")
+        cache_dir = DataReader.ensure_data_dir("cache")
         session_path = os.path.join(cache_dir, "session.json")
 
         endpoint, server = None, None
@@ -1248,7 +1263,7 @@ class DataReader:
         cookies = DataReader.parse_cookie_string(raw)
         if not cookies:
             return False
-        cache_dir = DataReader.data_path("cache")
+        cache_dir = DataReader.ensure_data_dir("cache")
         with open(os.path.join(cache_dir, "portal_cookies.json"), 'w') as f:
             json.dump({"domain": DataReader.portal_domain(), "cookies": cookies}, f, indent=2)
         return True
@@ -2338,12 +2353,31 @@ class BotManager:
         return ""
 
     @staticmethod
+    def _endpoint_for(world):
+        """The game endpoint configured for a world, or None if not set up."""
+        key = BotManager._world_key(world)
+        base = (os.path.join(DataReader.project_root(), "worlds", key)
+                if key else DataReader.project_root())
+        try:
+            with open(os.path.join(base, "config.json"), encoding="utf-8") as fh:
+                return json.load(fh).get("server", {}).get("endpoint")
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    @staticmethod
     def find_bot_pid(world=None):
         """Locate the running twb.py process for a given world.
 
         Matches a python process running twb.py whose --world matches (default
         world = no --world). Scanning by command line keeps the status accurate
         even when the bot was started by hand rather than through this UI.
+
+        Falls back to the account lock (core/instance_lock.py), which catches a
+        bot playing this same account under a *different* --world name - most
+        commonly start.bat launching the default world while the dashboard has
+        the same account selected as worlds/<name>. Without that fallback the
+        status reads "stopped" and "Start bot" launches a second instance, which
+        logs the first one out.
         """
         want = BotManager._world_key(world)
         for proc in psutil.process_iter(["pid", "cmdline"]):
@@ -2355,6 +2389,11 @@ class BotManager:
             runs_script = any(str(part).strip("'\"").endswith("twb.py") for part in cmdline)
             if runs_python and runs_script and BotManager._cmdline_world(cmdline) == want:
                 return proc.info["pid"]
+        endpoint = BotManager._endpoint_for(world)
+        if endpoint:
+            holder = InstanceLock.holder(endpoint)
+            if holder:
+                return holder.get("pid")
         return None
 
     def is_running(self, world=None):

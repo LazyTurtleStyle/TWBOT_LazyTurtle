@@ -36,6 +36,7 @@ import requests
 from core.notification import Notification
 from core.updater import check_update
 from core.filemanager import FileManager
+from core.instance_lock import InstanceLock
 from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
@@ -65,6 +66,13 @@ def setup_file_logging():
     """
     from logging.handlers import RotatingFileHandler
     try:
+        # Idempotent: called again after adopting a world so the log follows the
+        # new data dir instead of writing to two files at once.
+        root_logger = logging.getLogger()
+        for old in list(root_logger.handlers):
+            if isinstance(old, RotatingFileHandler):
+                root_logger.removeHandler(old)
+                old.close()
         log_path = FileManager._resolve("cache/twb.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         handler = RotatingFileHandler(
@@ -96,6 +104,18 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 os.chdir(os.path.dirname(os.path.realpath(__file__)))
+
+
+# Line-buffer stdout so progress reaches the log as it is printed. A bot started
+# from the dashboard has its stdout redirected to a file, where the default block
+# buffering can sit on "waiting for ..." messages for minutes - long enough to
+# look hung while it is patiently waiting for something the user has to do.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
+# The --world name this process was started with (None = default/root world).
+# Set by resolve_world_dir() before anything reads config or cache.
+ACTIVE_WORLD = None
 
 
 def signal_handler(sig, frame):
@@ -232,11 +252,20 @@ class TWB:
         template = FileManager.load_json_file("config.example.json")
 
         if not FileManager.path_exists("config.json"):
-            if self.manual_config():
-                return self.config()
-
-            print("No config file found. Exiting")
-            sys.exit(1)
+            # The console wizard is opt-in (twb.py --setup): its questions are
+            # answered better by the dashboard's Add-world form, which also takes
+            # the cookie - and a console truncates a pasted cookie. Waiting for
+            # the dashboard also means a bot started before its world exists
+            # adopts that world instead of walking the user through building a
+            # second config for the same account, which is how two bots end up
+            # on one account logging each other out (core/instance_lock.py).
+            if "--setup" in sys.argv:
+                if not self.manual_config():
+                    print("No config file found. Exiting")
+                    sys.exit(1)
+            elif not wait_for_world_setup():
+                sys.exit(1)
+            return self.config()
 
         config = FileManager.load_json_file("config.json", object_pairs_hook=collections.OrderedDict)
 
@@ -778,8 +807,24 @@ class TWB:
         Run the bot
         TODO: make less messy
         """
-        Notification.send("TWB is starting up", category="startup")
         config = self.config()
+        # One bot per account. A second instance on the same account does not
+        # run twice, it knocks the first one's session out (see
+        # core/instance_lock.py) - one bot keeps playing while the other logs
+        # "session looks logged out (cookie expired)" every cycle forever.
+        holder = InstanceLock.acquire(config["server"]["endpoint"], world=ACTIVE_WORLD)
+        if holder:
+            print(
+                "Another bot is already running for %s: %s.\n"
+                "Two bots on one account log each other out - not starting a "
+                "second one. Stop the other bot first (or use --world for a "
+                "different account)." % (
+                    config["server"]["server"], InstanceLock.describe(holder))
+            )
+            sys.exit(1)
+        # Only announce a start that is actually happening - a refused duplicate
+        # start should not push a "starting up" notification.
+        Notification.send("TWB is starting up", category="startup")
         if not self.internet_online():
             print("Internet seems to be down, waiting till its back online...")
             sleep = 0
@@ -1054,6 +1099,90 @@ def main():
     Notification.send("TWB has crashed 3 times, exiting", category="crash")
 
 
+# While no world is set up, how often to look for one and to repeat the how-to.
+SETUP_POLL_SECONDS = 10
+SETUP_REMIND_SECONDS = 300
+
+
+def wait_for_world_setup():
+    """Wait for a world to be set up from the dashboard, and adopt it.
+
+    A fresh copy has no config.json, and the console is the wrong place to build
+    one: the dashboard - which start.bat/start.sh have already opened - asks the
+    same questions in a form, writes worlds/<name>/config.json and seeds the
+    cookie in one go, with no console line-length limit to truncate it.
+
+    So instead of running the setup wizard here, wait for that world to appear
+    and take it. Setting the bot up then needs no console typing and no restart.
+    Returns False when it cannot tell which world was meant.
+    """
+    message = (
+        "No world set up yet.\n"
+        "Open the dashboard (http://localhost:5000/ by default) and use 'Add "
+        "world': paste the logged-in game URL, your browser's user agent and "
+        "your cookie string.\n"
+        "Waiting for %s - the bot picks it up by itself, no restart needed.\n"
+        "(Prefer a console wizard? Stop this and run: twb.py --setup)"
+        % FileManager.get_path("config.json")
+    )
+    print(message)
+    last_reminder = time.time()
+    while True:
+        if FileManager.path_exists("config.json"):
+            return True
+        worlds = configured_worlds()
+        if ACTIVE_WORLD is None and len(worlds) == 1:
+            print("Found world '%s' - using it." % adopt_configured_world())
+            return True
+        if ACTIVE_WORLD is None and len(worlds) > 1:
+            print(
+                "Several worlds are set up (%s) - start the one you mean by "
+                "name, for example:\n"
+                "    start.bat %s      (Windows)\n"
+                "    ./start.sh %s     (Linux/macOS/Pi)"
+                % (", ".join(worlds), worlds[0], worlds[0])
+            )
+            return False
+        if time.time() - last_reminder > SETUP_REMIND_SECONDS:
+            print(message)
+            last_reminder = time.time()
+        time.sleep(SETUP_POLL_SECONDS)
+
+
+def adopt_configured_world():
+    """Point this process at the single configured world under worlds/.
+
+    A bot started with no --world and no config.json of its own is not tied to
+    anything yet, so when a world is set up while it waits it can simply take it
+    - the same rule start.bat/start.sh use to pick a world, applied at runtime.
+    Returns the world name, or None when there is not exactly one to take.
+    """
+    global ACTIVE_WORLD
+    worlds = configured_worlds()
+    if ACTIVE_WORLD is not None or len(worlds) != 1:
+        return None
+    name = worlds[0]
+    data_dir = os.path.join(os.path.dirname(__file__), "worlds", name)
+    os.makedirs(os.path.join(data_dir, "cache"), exist_ok=True)
+    FileManager.set_data_dir(data_dir)
+    ACTIVE_WORLD = name
+    # Move the log file along with the data dir, or the dashboard's Bot logs
+    # pane (which reads the selected world's twb.log) would stay empty.
+    setup_file_logging()
+    return name
+
+
+def configured_worlds():
+    """Names of worlds under worlds/ that already have a config.json."""
+    wdir = os.path.join(os.path.dirname(__file__), "worlds")
+    if not os.path.isdir(wdir):
+        return []
+    return sorted(
+        name for name in os.listdir(wdir)
+        if os.path.isfile(os.path.join(wdir, name, "config.json"))
+    )
+
+
 def resolve_world_dir():
     """Honour `--world <name>`: point config.json + cache/ at worlds/<name>/.
 
@@ -1062,6 +1191,7 @@ def resolve_world_dir():
     config/cache access. With no --world the data dir stays the project root, so
     single-world setups are completely unchanged. Returns the world name or None.
     """
+    global ACTIVE_WORLD
     world = None
     argv = sys.argv
     for i, arg in enumerate(argv):
@@ -1076,6 +1206,7 @@ def resolve_world_dir():
     data_dir = os.path.join(os.path.dirname(__file__), "worlds", world)
     os.makedirs(os.path.join(data_dir, "cache"), exist_ok=True)
     FileManager.set_data_dir(data_dir)
+    ACTIVE_WORLD = world
     logging.info("Running world '%s' (data dir: %s)", world, data_dir)
     return world
 
