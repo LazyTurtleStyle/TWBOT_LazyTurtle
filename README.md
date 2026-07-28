@@ -116,13 +116,14 @@ The bot needs your browser's session to act as you. This is the one manual step,
 **In Chrome or Edge:**
 
 1. Log into your Tribal Wars world as normal.
-2. Press `F12` to open developer tools, and click the **Network** tab.
-3. Press `F5` to refresh the page.
-4. Click the first request in the list — it's called **`game.php`**.
-5. Scroll down to **Request Headers** and find the line starting with `cookie:`.
-6. Copy the **entire value** after `cookie:` — a long string of `name=value;` pairs.
+2. Go to the **villages overview** — the *Overzicht* screen, on **Gecombineerd** (combined) if your world offers it. This is the page the bot itself works from, so it's the one to copy the session from.
+3. Press `F12` to open developer tools, and click the **Network** tab.
+4. Press `F5` to refresh the page.
+5. Click the first request in the list — it's called **`game.php`**.
+6. Scroll down to **Request Headers** and find the line starting with `cookie:`.
+7. Copy the **entire value** after `cookie:` — a long string of `name=value;` pairs, right to the end. Right-clicking the line and choosing **Copy value** does the same thing.
 
-![Where to find the cookie string](readme/network.JPG)
+![Where to find the cookie string in the Network tab](readme/img/cookie-devtools.png)
 
 **In Firefox:** the same steps — `F12` → **Network** → refresh → click `game.php` → **Headers** → **Request Headers** → copy the `Cookie` value.
 
