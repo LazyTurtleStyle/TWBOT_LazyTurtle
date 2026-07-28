@@ -49,6 +49,7 @@ from manager import VillageManager
 from pages.overview import OverviewPage
 from core.exceptions import UnsupportedPythonVersion
 from core.extractors import Extractor
+from core.server_clock import ServerClock
 
 coloredlogs.install(
     level=logging.DEBUG if "-q" not in sys.argv else logging.INFO,
@@ -123,6 +124,10 @@ class TWB:
     _clock_checked = False
     # Warn when the host clock differs from server time by more than this (seconds).
     CLOCK_SKEW_WARN_SECONDS = 300
+    # A wall-clock gap is a timezone difference, so it is whole minutes wide and
+    # invisible to the epoch check above; warn once past a minute.
+    _wall_clock_warned = False
+    CLOCK_WALL_WARN_SECONDS = 60
     # True after an overview came back logged-in but with zero parseable villages
     # (a parse failure, not an empty account). Used to notify once per transition.
     _village_parse_failed = False
@@ -367,15 +372,36 @@ class TWB:
         return overview_page, config
 
     def check_server_clock(self, overview_page):
-        """Warn once if the host clock diverges from the game server's time.
+        """Track the game server's clock, and warn once if the host disagrees.
 
-        Forced-peace windows (game.village.check_forced_peace) and scheduled
-        attacks are timed against the host's local clock. When the host runs in a
-        different timezone or its clock has drifted, those windows and launches
-        land at the wrong moment. TribalWars exposes its own time in the page
-        game data (time_generated, milliseconds); compare it to the host once per
-        startup so a skew is surfaced instead of silently misfiring.
+        Two separate disagreements matter here, and they need different sources:
+
+        * The host clock has drifted in absolute terms. Epoch timestamps differ,
+          so scheduled attacks (which wait on `time.time()`) launch off-target.
+          `time_generated` in the page game data catches this.
+        * The host runs in another timezone. Epoch timestamps are then *identical*
+          and this check sees nothing wrong, but every wall-clock window a player
+          writes (forced peace, arrival times) means a different instant to us
+          than it did to them. Only the server's own displayed clock catches it,
+          which is what ServerClock samples below.
         """
+        # Sampled every cycle, not once: it is how forced-peace windows are
+        # anchored, and the offset moves when either side enters/leaves DST.
+        wall_offset = ServerClock.sample(overview_page.result_get.text)
+        if wall_offset is not None and not self._wall_clock_warned \
+                and abs(wall_offset) >= self.CLOCK_WALL_WARN_SECONDS:
+            self._wall_clock_warned = True
+            msg = (
+                "Host wall clock is %.1f hours off the game server (server reads "
+                "%s). Forced-peace windows are anchored to the server's clock, so "
+                "they stay correct, but times you type into the dashboard are read "
+                "in your browser's timezone - set the host and browser to the "
+                "world's timezone to keep them the same."
+                % (wall_offset / 3600.0, ServerClock.now().strftime("%H:%M"))
+            )
+            logging.getLogger("twb").warning(msg)
+            Notification.send("TWB: " + msg, category="village")
+
         if self._clock_checked:
             return
         game_data = Extractor.game_state(overview_page.result_get)

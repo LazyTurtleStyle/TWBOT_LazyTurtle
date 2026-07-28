@@ -4,6 +4,7 @@ import time
 from codecs import decode
 from datetime import datetime, timedelta
 
+from core.server_clock import ServerClock
 from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.templates import TemplateManager
@@ -377,8 +378,12 @@ class Village:
         for time_pairs in forced_peace_times:
             start_dt = datetime.strptime(time_pairs["start"], "%d.%m.%y %H:%M:%S")
             end_dt = datetime.strptime(time_pairs["end"], "%d.%m.%y %H:%M:%S")
-            now = datetime.now()
-            if start_dt.date() == datetime.today().date():
+            # The windows are announced by the game in *its* wall clock, so they
+            # have to be compared against it: on a host in another timezone,
+            # datetime.now() is the same instant but a different reading, and the
+            # peace window would start and end hours off.
+            now = ServerClock.now()
+            if start_dt.date() == now.date():
                 self.forced_peace_today = True
                 self.forced_peace_today_start = start_dt
             if start_dt < now < end_dt:

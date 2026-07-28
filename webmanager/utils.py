@@ -186,6 +186,26 @@ class DataReader:
         return os.path.join(base, *parts)
 
     @staticmethod
+    def server_clock_offset():
+        """Seconds to add to host time to read the game server's wall clock.
+
+        Written by the bot each cycle (core.server_clock). Read here through
+        data_path rather than FileManager because the web process serves every
+        world and has no single active data root. 0.0 when unknown, which is the
+        old behaviour of assuming host and server agree.
+        """
+        try:
+            path = DataReader.data_path("cache", "server_clock.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    value = json.load(f).get("offset_seconds")
+                if isinstance(value, (int, float)):
+                    return float(value)
+        except Exception:
+            pass
+        return 0.0
+
+    @staticmethod
     def session_logged_out():
         """True when the incoming poller last recorded a logged-out session for
         the active world (cookie expired). World-aware read for the web process."""
@@ -326,11 +346,13 @@ class DataReader:
     def _forced_peace_conflict(arrival_ts):
         """True if arrival_ts (unix seconds) falls inside a configured forced-peace
         window. Mirrors game.village.check_forced_peace: an attack must not arrive
-        during forced peace. Windows are naive local-time strings, matching the
-        bot's own parsing."""
+        during forced peace. The windows are wall-clock strings in the *server's*
+        timezone, so the arrival moment is read on the server's clock too - on a
+        host in another timezone, reading it locally shifts every window."""
         config = DataReader.config_grab()
         windows = ((config.get("farms") or {}).get("forced_peace_times")) or []
-        arrival = datetime.datetime.fromtimestamp(arrival_ts)
+        arrival = (datetime.datetime.fromtimestamp(arrival_ts)
+                   + datetime.timedelta(seconds=DataReader.server_clock_offset()))
         for pair in windows:
             try:
                 start = datetime.datetime.strptime(pair["start"], "%d.%m.%y %H:%M:%S")

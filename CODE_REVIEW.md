@@ -38,7 +38,13 @@ orchestration, the attack scheduler and the dashboard — which is also where mo
 
 ## 1. Bugs (ranked by severity)
 
+_This audit was written in July 2026 and every entry has a **Status** line rechecked on
+2026-07-28. Ten of the eleven are fixed; B6 is partly fixed and the remainder is a
+labelling matter. The findings are kept for the reasoning, not because they are open._
+
 ### B1 — `WebWrapper` API helpers crash the whole village run on any failed request `core/request.py:266`, `:291`, `:316`
+
+> Status (rechecked 2026-07-28): **FIXED** — all three helpers guard `res is not None` and the `recruit` call site checks the result.
 `get_api_data`, `post_api_data` and `get_api_action` all do `if res.status_code == 200:` but
 `res` can be `None`: `post_url`/`get_url` return `None` on any exception (`core/request.py:131`,
 `:153`) or when the captcha page is returned. Calling `.status_code` on `None` raises
@@ -54,6 +60,8 @@ orchestration, the attack scheduler and the dashboard — which is also where mo
   and return `None` otherwise; make callers treat `None` as "action failed, retry next cycle."
 
 ### B2 — `ResourceManager.can_recruit` mutates a dict while iterating it `game/resources.py:257-259`
+
+> Status (rechecked 2026-07-28): **FIXED** — deletes over a copy of the keys.
 ```python
 for x in self.requested:
     if "recruitment" in x:
@@ -67,6 +75,8 @@ during iteration`.
 - **Fix:** iterate a copy of the keys: `for x in [k for k in self.requested if "recruitment" in k]: del self.requested[x]`.
 
 ### B3 — "Forced peace today" is never detected (writes locals, not attributes) `game/village.py:359-360`
+
+> Status (rechecked 2026-07-28): **FIXED** — assigns to `self.forced_peace_today` / `self.forced_peace_today_start`.
 ```python
 if start_dt.date() == datetime.today().date():
     forced_peace_today = True          # local variable, not self.forced_peace_today
@@ -81,6 +91,8 @@ would land during a forced-peace window.
 - **Fix:** assign to `self.forced_peace_today` / `self.forced_peace_today_start`.
 
 ### B4 — Crash before `self.wrapper` is set loses the notification and aborts all retries `twb.py:732`
+
+> Status (rechecked 2026-07-28): **FIXED** — `if t.wrapper and t.wrapper.reporter:` before reporting.
 In `main()`'s `except`, `t.wrapper.reporter.report(...)` runs unconditionally. If the exception
 happened before `self.wrapper` was assigned (e.g. in `self.config()` at `twb.py:518`, or an
 invalid-config raise), `t.wrapper` is still `None` → `AttributeError` inside the `except` block.
@@ -90,6 +102,8 @@ sends the "crashed" Telegram notification (`twb.py:734`).
 - **Fix:** guard `if t.wrapper and t.wrapper.reporter:` before reporting.
 
 ### B5 — `is_active_hours` can't express an overnight window and drops the last hour `twb.py:409-411`
+
+> Status (rechecked 2026-07-28): **FIXED** — end bound inclusive, wrap-around handled, and `HH:MM` bounds now accepted.
 ```python
 active_h = [int(h) for h in config["bot"]["active_hours"].split("-")]
 return time.localtime().tm_hour in range(active_h[0], active_h[1])
@@ -105,6 +119,8 @@ return time.localtime().tm_hour in range(active_h[0], active_h[1])
   does the wrap-around correctly and can be the model.
 
 ### B6 — Timezone mismatch between scheduling/forced-peace (local) and the game (server) `game/village.py:355-357`, `webmanager/utils.py:313-321`, `game/attack_scheduler.py:259`
+
+> Status (rechecked 2026-07-28): **PARTLY FIXED** — forced-peace windows are anchored to the server's own clock in both the bot and the dashboard (`core/server_clock.py`), and a timezone gap is now detected and warned about rather than being invisible. Timed attacks were never affected by a timezone difference (they wait on epoch time, which both sides agree on); a genuinely wrong host clock still offsets them, and is warned about. What remains is UX: arrival times typed into the dashboard are read in the browser's timezone, now labelled as such.
 Forced-peace windows are parsed with naive `datetime.strptime`/`datetime.now()` (local host time),
 and the dashboard's `_forced_peace_conflict` (`utils.py:313`) does the same. Scheduled-attack
 timing (`attack_scheduler.execute_timed`, `:259`) mixes `time.time()` (host clock) with the
@@ -117,6 +133,8 @@ server's reported travel duration. Incoming detection, by contrast, uses **serve
   server TZ.
 
 ### B7 — Scheduled-attack claim can be held in `sending` far longer than intended `game/attack_scheduler.py:161`, `:264`
+
+> Status (rechecked 2026-07-28): **FIXED** — a stale `sending` claim is reclaimable after `STALE_SENDING_SECONDS`.
 `claim_due` flips a command to `sending` up to `PRESTAGE_SECONDS` (15 s) early, and then
 `execute_timed` **sleeps** until the launch moment while the command is already claimed. If the bot
 process dies during that window (crash, `stop`), the command is left permanently in `sending` and
@@ -126,6 +144,8 @@ is never retried (only `pending` is ever claimed again).
   `claim_due`, or write status `sent/failed` before the final sleep.
 
 ### B8 — Reports parse loot/units without the "no report at all" guard `manager.py:50-53`
+
+> Status (rechecked 2026-07-28): **FIXED** — `units_sent` / `units_losses` read through `.get()` with `{}` defaults.
 `farm_manager` iterates `report["extra"]["units_sent"]` / `["units_losses"]` directly. Attack
 reports normally have these, but `attack_report` only populates them when the attacker table and
 its unit sub-tables are present (`reports.py:237-245`); a malformed or partial report leaves them
@@ -136,6 +156,8 @@ only wraps the **loot** access, not the two unit loops above it.
 - **Fix:** use `.get(..., {})` for `units_sent`/`units_losses`, or widen the `try` to cover them.
 
 ### B9 — `session_logged_out` false-positive wipes cycle when overview parse fails but session is alive `twb.py:255`, `pages/overview.py:298`
+
+> Status (rechecked 2026-07-28): **FIXED** — `found_villages` is preserved when a logged-in page parses to zero villages.
 `get_overview` decides logged-in purely from `Extractor.game_state(overview_page.result_get)`
 against `overview_villages&mode=combined`. `parse_production_table` swallows every per-row
 exception (`overview.py:298` `except Exception: pass`), so a markup change that breaks parsing
@@ -149,6 +171,8 @@ nothing while looking healthy.
   the same way the logged-out path already preserves it (`twb.py:267-282`).
 
 ### B10 — `tw_proxy` reads the user agent from the wrong config section `webmanager/server.py:1047`
+
+> Status (rechecked 2026-07-28): **FIXED** — reads `bot.user_agent`.
 ```python
 ua = (config.get("server") or {}).get("user_agent", "Mozilla/5.0")
 ```
@@ -158,6 +182,8 @@ lower detection" design for proxied requests.
 - **Fix:** `(config.get("bot") or {}).get("user_agent", "Mozilla/5.0")`.
 
 ### B11 — Flask debug mode enabled with an all-interfaces bind `webmanager/server.py:27`, `:1171`, `start.sh:68`
+
+> Status (rechecked 2026-07-28): **FIXED** — `app.config["DEBUG"] = False`; debug is enabled only for local binds, and a non-local bind logs a warning. The dashboard still has no authentication by design — see the README.
 `app.config["DEBUG"] = True` (and the implicit reloader/console) combined with `start.sh` binding
 `HOST=0.0.0.0` exposes the Werkzeug interactive debugger, which allows **remote code execution** on
 any unhandled exception. The dashboard also has no authentication.
