@@ -231,12 +231,16 @@ Click the **TWB Session Restore** toolbar icon, or the **Open game** button on t
 
 The dashboard is a normal web page, so anything with a browser can drive it — **as long as it's on the same WiFi as the machine running the bot.**
 
-1. Find the IP of the machine running the bot (`ip a` on Linux, `ipconfig` on Windows) — something like `192.168.1.42`.
-2. On your phone, connected to your home WiFi, open `http://192.168.1.42:5000/`.
+1. Find the IP of the machine running the bot (`ip a` on Linux, `ipconfig` on Windows) — a private address that looks like `192.168.1.42`. Yours will be a different number.
+2. On your phone, connected to your home WiFi, open `http://192.168.1.42:5000/` — your own address, same port.
 
 That address is a private one: it only exists inside your own network. On mobile data, or anywhere away from home, your phone has no route to it and the page will simply time out. **To reach it from outside, use a VPN like [Tailscale](https://tailscale.com/) or WireGuard** — your phone then joins your home network from anywhere, and the same address works.
 
-Windows, Linux and Docker all bind the dashboard to your whole local network already. To keep it to the bot's own machine only, run `HOST=127.0.0.1 ./start.sh`.
+**Changing the address or port.** By default the dashboard listens on every interface of the machine (`0.0.0.0`) at port `5000` — that's what makes it reachable from your phone in the first place. `http://localhost:5000/` keeps working on the machine itself no matter what you pick.
+
+- **Linux / macOS** — `start.sh` reads two environment variables: `PORT=5001 ./start.sh` moves it to another port, `HOST=127.0.0.1 ./start.sh` locks it to the bot's own machine, and `HOST=192.168.1.42 ./start.sh` binds one specific interface.
+- **Windows** — edit the `set "PORT=5000"` line near the top of `start.bat`.
+- **Docker** — set `PORT` in your `.env`; that's the port on the host side. To pin it to one address as well, change the mapping in `docker-compose.yml` to `"192.168.1.42:5000:5000"`.
 
 > **Never port-forward the dashboard to the internet** to get around this. It has no login of any kind — anyone who finds the open port controls your bot and your account.
 
