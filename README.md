@@ -49,9 +49,9 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - Automatic defensive support, unit evacuation and support-sniping
 - Cancel-sniping *(alpha)* and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
 
-![Attack planner](readme/img/dashboard-attack.png)
+![The attack scheduler](readme/img/dashboard-scheduler.png)
 
-*Tracked targets with live travel times, so you can schedule a hit instead of doing the maths yourself.*
+*Pick an origin, a target and the moment you want troops to land. The bot works out the send time from the slowest unit and fires it for you.*
 
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
