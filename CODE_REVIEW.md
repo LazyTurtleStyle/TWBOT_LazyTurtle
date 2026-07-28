@@ -281,23 +281,3 @@ any unhandled exception. The dashboard also has no authentication.
 | ~~Shell/log dashboard page backend~~ **[NOT NEEDED]** | — | Misread: `shell.html` is the base layout every page `{% extends %}`, not a standalone page; `/logs` route already exists (`server.py:1127`). No action. | — |
 | ~~`webmanager/public/js.v2.js`~~ **[DONE]** | — | `/app/js` was dead (no template references it; JS is inlined in `shell.html`). Removed the broken route + now-unused `send_from_directory` import instead of fabricating a phantom file. | Small |
 | Attack scheduler retry of stuck `sending` | `attack_scheduler.claim_due` | see B7 | Small |
-
-## 5. Top 5 recommendations (in order)
-
-1. **Harden `WebWrapper` API helpers against `None` responses (B1).** This is the single most
-   likely thing to kill a live run: one dropped request currently crashes the village cycle and eats
-   a restart. Guard `res` in `get_api_data`/`post_api_data`/`get_api_action` and make callers treat a
-   failed action as "retry next cycle."
-2. **Fix `can_recruit`'s dict-mutation-during-iteration crash (B2).** Trivial change, triggers on a
-   normal full-population state, and takes down recruiting for the whole cycle.
-3. **Fix the forced-peace bugs (B3 + B6).** Assign to `self.` in `check_forced_peace`, then anchor
-   both the bot and the dashboard's forced-peace/scheduling math to **server** time. Today the
-   feature silently does nothing (B3) and, even once fixed, is off by the host clock skew (B6) — a
-   real risk of attacking during a no-attack event and getting the account flagged.
-4. **Make village availability robust to overview-parse failures (B9) and fix the active-hours
-   window (B5).** Both are "the bot looks healthy but quietly stops doing its job" failures: an
-   overview markup change parks every village as unavailable, and any overnight active window pins
-   the bot to inactive delays 24/7.
-5. **Lock down the dashboard (B11) and de-burst timed sends (perf §3).** Disable Flask debug on
-   non-local binds and add auth before exposing `0.0.0.0`; add jitter to the scheduled-attack
-   open/confirm requests so `priority_mode` doesn't emit an unnatural three-request burst.
