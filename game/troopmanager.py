@@ -438,7 +438,7 @@ class TroopManager:
 
         url = f"game.php?village={self.village_id}&screen=place&mode=scavenge"
         result = self.wrapper.get_url(url=url)
-        village_data = Extractor.village_data(result)
+        village_data = Extractor.village_data(result) if result else None
         options = (village_data or {}).get("options") or {}
         if not options:
             return status
@@ -496,7 +496,14 @@ class TroopManager:
             return False
         url = f"game.php?village={self.village_id}&screen=place&mode=scavenge"
         result = self.wrapper.get_url(url=url)
-        village_data = Extractor.village_data(result)
+        village_data = Extractor.village_data(result) if result else None
+        if not village_data:
+            # No scavenge screen came back (expired session, redirect, network
+            # error). Skip this cycle and let the next request hit the session
+            # check instead of crashing on a missing page. The previous
+            # scavenge_state is kept so the dashboard shows the last known runs.
+            self.logger.warning("No scavenge data on the gather page, skipping this cycle")
+            return False
 
         # Snapshot each scavenge option's state (locked / running / idle, plus the
         # active squad's expected loot + return time) for the dashboard.
