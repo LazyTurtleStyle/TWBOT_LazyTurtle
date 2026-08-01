@@ -812,8 +812,15 @@ class TWB:
                 "Player farm pass failed: %s", exc)
 
     def run_noble_barbs(self, config):
-        """One auto-noble pass (alpha). Runs AFTER the village loop so the
-        troop/report caches it decides from are fresh this cycle."""
+        """One auto-noble pass (alpha).
+
+        Runs twice per cycle: once at the top, so an armed job fires within a
+        minute of the cycle starting instead of waiting out every village (the
+        pass reads the sending village's rally point live, so it no longer
+        needs the end-of-cycle troop snapshot), and once after the village
+        loop, which catches jobs whose escort only came home mid-cycle. Jobs
+        that already sent are held by their in_flight guard, so the second
+        pass is a no-op for them."""
         if not config.get("farms", {}).get("noble_barb", True):
             return
         try:
@@ -1001,8 +1008,12 @@ class TWB:
                         logging.getLogger("DailyBonus").warning(
                             "Daily bonus check failed: %s", exc)
 
-                # Hold back the noble escorts before anything can spend them:
-                # the noble pass itself only runs at the end of the cycle.
+                # Nobles first: nothing has spent a troop yet this cycle, so a
+                # job that is ready goes out now instead of 20 minutes later.
+                self.run_noble_barbs(config)
+                # Then hold back the escorts of the jobs that did NOT send (in
+                # flight, or still short) so the rest of the cycle leaves them
+                # alone and the pass after the village loop can still fire.
                 self.troop_reserve = self.noble_escort_reserve(config)
 
                 if config.get("farms", {}).get("player_farm_priority", True):
@@ -1063,6 +1074,8 @@ class TWB:
                 if not config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
 
+                # Second pass: escorts that only came home while the village
+                # loop was running.
                 self.run_noble_barbs(config)
 
                 sleep = 0
