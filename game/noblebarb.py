@@ -290,6 +290,17 @@ class NobleBarbManager:
                     c.update(updates)
         _update(mut, self.path)
 
+    def _waiting(self, job, reason):
+        """Say why an armed job is idle. The reason goes to the process log
+        every cycle but into the job's own log only when it changes: that log
+        is a 20-entry ring, and repeating the same line every few minutes
+        pushes the real events (sends, loyalty drops) out of it."""
+        if job.get("waiting_reason") == reason:
+            logger.info("Noble job %s: %s", job.get("id"), reason)
+            return
+        self._save(job, {"waiting_reason": reason})
+        self._log(job, reason)
+
     def _stop(self, job, reason, done=False):
         self._save(job, {
             "status": "done" if done else "stopped",
@@ -440,6 +451,7 @@ class NobleBarbManager:
             totals["nobles"] = int(totals.get("nobles") or 0) + sent
             self._save(job, {
                 "reject_count": 0,
+                "waiting_reason": None,
                 "totals": totals,
                 "in_flight": {
                     "nobles": sent,
@@ -489,11 +501,15 @@ class NobleBarbManager:
         home = self._troops_at_home(job.get("source_id"))
         nobles_home = int(home.get("snob", 0) or 0)
         if nobles_home <= 0:
-            return 0  # nothing to send; quietly wait for the academy
+            self._waiting(job, "no nobleman at home in village %s - mint the "
+                               "coins and recruit one (villages.%s.snobs is "
+                               "how many the bot keeps)" % (
+                                   job.get("source_id"), job.get("source_id")))
+            return 0
         nobles = min(allowed, nobles_home)
         packages, lacking = self._escort_available(job, home, nobles)
         if packages is None:
-            self._log(job, "waiting for escort troops (%s)" % lacking)
+            self._waiting(job, "waiting for escort troops (%s)" % lacking)
             return 0
         self._capture_noble_confirm(
             job.get("source_id"), job.get("target_x"), job.get("target_y"),
