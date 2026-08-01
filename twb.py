@@ -783,7 +783,10 @@ class TWB:
                 not farms.get("noble_escort_reserve", True):
             return {}
         try:
-            reserve = escort_reservations()
+            # Live troop counts (one rally point request per sending village):
+            # the managed cache is written after that village's farm pass, so
+            # it under-reports exactly the units an escort competes for.
+            reserve = escort_reservations(wrapper=self.wrapper)
         except Exception as exc:
             logging.getLogger("NobleBarb").warning(
                 "Escort reservation failed: %s", exc)

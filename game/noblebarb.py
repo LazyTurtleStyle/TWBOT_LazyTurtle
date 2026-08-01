@@ -40,6 +40,7 @@ import logging
 import math
 import time
 
+from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.notification import Notification
 from game import attack_scheduler
@@ -158,8 +159,29 @@ def nobles_needed_worst_case(loyalty):
     return math.ceil(loyalty / float(LOYALTY_DROP_MIN))
 
 
-def troops_at_home(village_id):
-    """The village's troop counts as the last village cycle cached them."""
+def troops_at_home(village_id, wrapper=None):
+    """The troops standing in the village right now.
+
+    With a wrapper this reads the rally point, which is what the game will
+    actually let us send. The managed cache is only a snapshot written at the
+    END of that village's run - after its own farm pass has sent the light
+    cavalry out - so an escort decision made from it sees the leftovers rather
+    than what is home when the noble pass runs, and a light cavalry escort can
+    sit "2 short" forever while the village really has plenty. The snapshot is
+    still the fallback when the page cannot be read."""
+    if wrapper is not None:
+        live = None
+        try:
+            res = wrapper.get_url(
+                "game.php?village=%s&screen=place&target_type=coord" % village_id)
+            live = Extractor.units_in_place(res) if res else None
+        except Exception as exc:
+            logger.warning("Could not read the rally point of village %s: %s",
+                           village_id, exc)
+        if live:
+            return live
+        logger.info("No live troop counts for village %s, falling back to the "
+                    "snapshot from its last run", village_id)
     managed = FileManager.load_json_file("cache/managed/%s.json" % village_id)
     return (managed or {}).get("available_troops") or {}
 
@@ -197,14 +219,16 @@ def escort_packages(job, home, nobles):
     return packages, None
 
 
-def planned_send(job, now=None):
-    """What this job would send if the noble pass ran right now, decided from
-    the caches alone (no requests). Returns (nobles, packages) or (0, None).
+def planned_send(job, now=None, wrapper=None, home=None):
+    """What this job would send if the noble pass ran right now.
+    Returns (nobles, packages) or (0, None).
 
     This is the same decision NobleBarbManager.step() makes, minus the parts
     that need this cycle's reports (loyalty may still drop before the real
     send, which can only make the plan smaller) and minus the ownership stops
-    (a target that flipped owner reserves troops for one last cycle)."""
+    (a target that flipped owner reserves troops for one last cycle). `home`
+    is the sending village's troops; without it they are read through
+    troops_at_home(wrapper)."""
     if job.get("status") != "armed":
         return 0, None
     now = now if now is not None else time.time()
@@ -215,7 +239,8 @@ def planned_send(job, now=None):
     allowed = max_safe_nobles(estimate_loyalty(job, now=now))
     if allowed <= 0:
         return 0, None
-    home = troops_at_home(job.get("source_id"))
+    if home is None:
+        home = troops_at_home(job.get("source_id"), wrapper=wrapper)
     nobles_home = int(home.get("snob", 0) or 0)
     if nobles_home <= 0:
         return 0, None
@@ -226,7 +251,7 @@ def planned_send(job, now=None):
     return nobles, packages
 
 
-def escort_reservations(jobs=None, path=None, now=None):
+def escort_reservations(jobs=None, path=None, now=None, wrapper=None):
     """Troops the armed noble jobs will claim at the end of this cycle, as
     {source_id: {unit: count}}.
 
@@ -235,11 +260,22 @@ def escort_reservations(jobs=None, path=None, now=None):
     scavenging and the player farms have already spent the escort by then and
     the job waits another cycle. Only jobs whose escort trigger is ALREADY
     satisfied reserve anything - a job still waiting for troops to be built
-    never holds scavenging hostage."""
+    never holds scavenging hostage.
+
+    With a wrapper the sending villages are read live (one rally point request
+    per village, however many jobs share it). That is what makes the whole
+    thing work for a light cavalry escort: the cached snapshot is written
+    after the farm pass has already sent the cavalry out, so it would show the
+    escort as short in exactly the cycles where it is not."""
     reserve = {}
+    home_by_village = {}
     for job in (jobs if jobs is not None else load_jobs(path)):
+        source = str(job.get("source_id"))
+        if job.get("status") == "armed" and source not in home_by_village:
+            home_by_village[source] = troops_at_home(source, wrapper=wrapper)
         try:
-            _nobles, packages = planned_send(job, now=now)
+            _nobles, packages = planned_send(
+                job, now=now, home=home_by_village.get(source))
         except (TypeError, ValueError) as exc:
             logger.warning("Noble job %s: cannot plan a reservation: %s",
                            job.get("id"), exc)
@@ -312,7 +348,7 @@ class NobleBarbManager:
             job.get("target_x"), job.get("target_y"), reason), category="attack")
 
     def _troops_at_home(self, village_id):
-        return troops_at_home(village_id)
+        return troops_at_home(village_id, wrapper=self.wrapper)
 
     def _target_owner(self, job):
         """The target's owner from the map cache ('0' = barb), or None when
