@@ -216,10 +216,13 @@ class PlayerFarmManager:
     and fires the due farm runs. Called once per main-loop cycle on the main
     (human-paced) wrapper."""
 
-    def __init__(self, wrapper=None, config=None, path=None):
+    def __init__(self, wrapper=None, config=None, path=None, reserve=None):
         self.wrapper = wrapper
         self.config = config or {}
         self.path = path
+        # {village_id: {unit: count}} another module claimed this cycle (an
+        # armed noble job's escort, see twb.py); those troops count as away.
+        self.reserve = reserve or {}
 
     # -- report evaluation ---------------------------------------------------
 
@@ -297,7 +300,10 @@ class PlayerFarmManager:
 
     def _troops_at_home(self, village_id):
         managed = FileManager.load_json_file("cache/managed/%s.json" % village_id)
-        return (managed or {}).get("available_troops") or {}
+        home = dict((managed or {}).get("available_troops") or {})
+        for unit, count in (self.reserve.get(str(village_id)) or {}).items():
+            home[unit] = max(0, int(home.get(unit, 0) or 0) - int(count))
+        return home
 
     def _forced_peace_conflict(self, duration):
         """True when the run would land inside a configured forced-peace window

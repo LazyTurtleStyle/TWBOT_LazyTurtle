@@ -55,6 +55,9 @@ class BarbShaper:
         self.loss_tolerance = 1.0
         self.max_sends = 2
         self.ram_reserve = 0
+        # {unit: count} another module claimed this cycle (an armed noble job's
+        # escort); shaping only spends what is left above it.
+        self.reserved = {}
         self.report_max_age_hours = 24
         self.scavenge_uses_axes = False
         # Opt-in: keep shaping even while scavenging claims the axes. The cap
@@ -135,6 +138,12 @@ class BarbShaper:
             return
 
         troops = {k: int(v) for k, v in (self.troopmanager.troops or {}).items()}
+        if self.reserved:
+            troops = {k: max(0, v - int(self.reserved.get(k, 0) or 0))
+                      for k, v in troops.items()}
+            self.logger.info(
+                "%s: shaping with what is left after the reserved send (%s)",
+                self.village_id, dict(self.reserved))
         axes_home = troops.get("axe", 0)
         if int(self.axe_cap or 0) > 0:
             axes_home = min(axes_home, int(self.axe_cap))

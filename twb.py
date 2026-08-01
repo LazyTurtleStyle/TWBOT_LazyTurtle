@@ -45,7 +45,7 @@ from game import attack_scheduler
 from game import csnipe
 from game import dailybonus
 from game import snipe
-from game.noblebarb import NobleBarbManager
+from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
@@ -164,6 +164,9 @@ class TWB:
         # (villages named 004+ instead of 001+).
         self.villages = []
         self.found_villages = []
+        # {village_id: {unit: count}} held back for the armed noble jobs this
+        # cycle, see noble_escort_reserve().
+        self.troop_reserve = {}
 
     @staticmethod
     def internet_online():
@@ -766,6 +769,30 @@ class TWB:
                 logger.warning("Snipe runner error: %s", exc)
                 time.sleep(2)
 
+    def noble_escort_reserve(self, config):
+        """Troops the armed noble jobs will need at the end of this cycle,
+        as {village_id: {unit: count}}.
+
+        Runs before anything that spends troops (player farms, and per village
+        the barb shaper, scavenging and the farm pass) so the escort is still
+        home when run_noble_barbs() gets there. Cache-only, no requests. Jobs
+        whose escort trigger is not met yet reserve nothing, so a job waiting
+        for troops never keeps scavenging idle."""
+        farms = config.get("farms", {})
+        if not farms.get("noble_barb", True) or \
+                not farms.get("noble_escort_reserve", True):
+            return {}
+        try:
+            reserve = escort_reservations()
+        except Exception as exc:
+            logging.getLogger("NobleBarb").warning(
+                "Escort reservation failed: %s", exc)
+            return {}
+        for village_id, units in reserve.items():
+            print("Reserving %s in village %s for an armed noble job"
+                  % (units, village_id))
+        return reserve
+
     def run_player_farms(self, config):
         """One player-farm pass (curated hit list, report-driven auto-stop).
 
@@ -775,7 +802,8 @@ class TWB:
         if not config.get("farms", {}).get("player_farm", True):
             return
         try:
-            PlayerFarmManager(wrapper=self.wrapper, config=config).run()
+            PlayerFarmManager(wrapper=self.wrapper, config=config,
+                              reserve=self.troop_reserve).run()
         except Exception as exc:
             logging.getLogger("PlayerFarm").warning(
                 "Player farm pass failed: %s", exc)
@@ -970,6 +998,10 @@ class TWB:
                         logging.getLogger("DailyBonus").warning(
                             "Daily bonus check failed: %s", exc)
 
+                # Hold back the noble escorts before anything can spend them:
+                # the noble pass itself only runs at the end of the cycle.
+                self.troop_reserve = self.noble_escort_reserve(config)
+
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
 
@@ -1000,6 +1032,8 @@ class TWB:
                         template = template.replace("{num}", num_pad)
                         village.village_set_name = template
 
+                    village.troop_reserve = self.troop_reserve.get(
+                        str(village.village_id), {})
                     village.run(config=config)
                     # Each village is minutes of work; stamp as we go so the
                     # watchdog sees progress instead of one silent gap.

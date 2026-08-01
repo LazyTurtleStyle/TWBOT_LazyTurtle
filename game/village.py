@@ -53,6 +53,10 @@ class Village:
     def __init__(self, village_id=None, wrapper=None):
         self.village_id = village_id
         self.wrapper = wrapper
+        # {unit: count} this village must keep home this cycle, set by the run
+        # loop before run(). Currently the escort of an armed noble job, which
+        # is only sent after every village has run (see twb.py).
+        self.troop_reserve = {}
 
     def get_config(self, section, parameter, default=None):
         # A missing key just means an older config predates the parameter;
@@ -562,10 +566,32 @@ class Village:
         self.set_farm_options()
         return True
 
+    def farm_conflicts_with_reserve(self):
+        """Units this village must keep home that the farm pass could spend.
+
+        Farm sends are sized by the in-game Farm Assistant, so unlike the
+        shaper and scavenging we cannot hand it a reduced troop count - the
+        only way to protect a reserved unit is to skip the pass. That is A
+        (scouts), the configured B template, and C (light cavalry, what the
+        loot-based forecast sends)."""
+        if not self.troop_reserve:
+            return []
+        spends = {"spy", "light"}
+        spends.update(self.get_config(
+            section="farms", parameter="template_minimal_troops", default={}) or {})
+        return sorted(u for u in self.troop_reserve if u in spends)
+
     def run_farming(self):
         """
         Runs the farming logic. Needs setup_attack_manager() to have returned True.
         """
+        conflict = self.farm_conflicts_with_reserve()
+        if conflict:
+            self.logger.info(
+                "Skipping the farm pass this cycle: the Farm Assistant sizes "
+                "its own sends and would spend %s, reserved here for an armed "
+                "noble job", ", ".join(conflict))
+            return
         if (
                 self.get_config(section="farms", parameter="farm", default=False)
                 and self.get_village_config(
@@ -627,6 +653,7 @@ class Village:
         excluded = list(self.disabled_units) + list(self.get_village_config(
             self.village_id, parameter="gather_exclude_units", default=[]) or [])
         shaper.scavenge_uses_axes = bool(gather_on and "axe" not in excluded)
+        shaper.reserved = dict(self.troop_reserve or {})
         shaper.run()
 
     def _gather_night_consolidate(self):
@@ -814,6 +841,7 @@ class Village:
             # Never night-consolidate under attack: one long run with every
             # troop is the opposite of what you want with an incoming.
             consolidate=0 if under_attack else self._gather_night_consolidate(),
+            reserved=self.troop_reserve,
         )
 
     def go_manage_market(self):

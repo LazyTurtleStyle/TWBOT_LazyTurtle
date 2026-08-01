@@ -275,6 +275,14 @@ into a "Setup / World" area, ideally a first-run wizard.
   player (map-cache owner watch), red report, noble died without loyalty hit, 2 rally rejections.
   Jobs start disarmed. Engine `game/noblebarb.py` (main-loop pass `run_noble_barbs`, kill switch
   `farms.noble_barb`); UI endpoints `/app/noble/*`.
+  - [x] **Escort reservation** (`farms.noble_escort_reserve`, default on): the noble pass runs
+    last (it wants fresh troop/report caches), so `escort_reservations()` runs at the *top* of
+    the cycle and hands every troop spender a per-village hold-back — barb shaper, scavenging
+    (split only, `self.troops` keeps the real counts) and the player farms. Only jobs whose
+    escort trigger is already met reserve anything, so a job waiting on the barracks never
+    starves scavenging. The Farm Assistant sizes its own sends, so the one thing that can't be
+    given a reduced count is the farm pass: a village whose reserve contains scouts or light
+    cavalry skips that pass for the cycle instead.
   - [ ] Drive the in-game train/multi-send feature once a captured confirm page shows its form.
   - [ ] Optional: also read loyalty from other players' reports shared in-tribe (not parsed now).
 - [x] **Troop check**, the planner table shows an "At home" column from the origin's troop

@@ -480,11 +480,18 @@ class TroopManager:
             return status
         return status
 
-    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=0):
+    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=0,
+               reserved=None):
         """
         Used for the gather resources functionality where it uses two options:
         - Basic: all troops gather on the selected gather level
         - Advanced: troops are split
+
+        reserved ({unit: count}): troops another module has first claim on this
+        cycle (currently the escort of an armed noble job, which is only sent
+        after every village has run). Held back from the scavenge squads only -
+        unlike disabled_units these units still scavenge with whatever is left
+        over above the reserved count.
 
         consolidate (night mode): seconds left until the night window ends.
         When > 0, override the split and send troops into a single run on the
@@ -538,6 +545,16 @@ class TroopManager:
             self.troops[k] = v
 
         troops = dict(self.troops)
+        for unit, count in (reserved or {}).items():
+            if unit in troops:
+                # self.troops keeps the real counts (recruiting, dashboard);
+                # only the scavenge split sees the reduced number.
+                troops[unit] = max(0, int(troops[unit]) - int(count))
+        if reserved:
+            self.logger.info(
+                "Keeping %s home for a reserved send, scavenging with the rest",
+                {u: int(n) for u, n in reserved.items() if u in self.troops},
+            )
 
         haul_dict = [
             "spear:25",

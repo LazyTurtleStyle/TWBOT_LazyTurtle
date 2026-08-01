@@ -158,6 +158,103 @@ def nobles_needed_worst_case(loyalty):
     return math.ceil(loyalty / float(LOYALTY_DROP_MIN))
 
 
+def troops_at_home(village_id):
+    """The village's troop counts as the last village cycle cached them."""
+    managed = FileManager.load_json_file("cache/managed/%s.json" % village_id)
+    return (managed or {}).get("available_troops") or {}
+
+
+def escort_packages(job, home, nobles):
+    """Check the escort trigger and build the per-attack escort packages.
+
+    The configured escort is PER NOBLE. A send goes ahead when every escort
+    unit has at least escort_min_pct% of the total (package x nobles) at home;
+    each attack then carries its even share of what is actually available
+    (capped at the configured package).
+
+    Returns (packages, None) or (None, reason)."""
+    escort = {u: int(n) for u, n in (job.get("escort") or {}).items()
+              if int(n or 0) > 0}
+    pct = max(0, min(100, int(job.get("escort_min_pct") or 0)))
+    sendable = {}
+    for unit, per_noble in escort.items():
+        want_total = per_noble * nobles
+        have = int(home.get(unit, 0) or 0)
+        if have < math.ceil(want_total * pct / 100.0):
+            return None, "%s: %d home, need at least %d%% of %d" % (
+                unit, have, pct, want_total)
+        sendable[unit] = min(have, want_total)
+    packages = []
+    for i in range(nobles):
+        pack = {"snob": 1}
+        for unit, total in sendable.items():
+            share = total // nobles
+            if i < total % nobles:
+                share += 1
+            if share > 0:
+                pack[unit] = share
+        packages.append(pack)
+    return packages, None
+
+
+def planned_send(job, now=None):
+    """What this job would send if the noble pass ran right now, decided from
+    the caches alone (no requests). Returns (nobles, packages) or (0, None).
+
+    This is the same decision NobleBarbManager.step() makes, minus the parts
+    that need this cycle's reports (loyalty may still drop before the real
+    send, which can only make the plan smaller) and minus the ownership stops
+    (a target that flipped owner reserves troops for one last cycle)."""
+    if job.get("status") != "armed":
+        return 0, None
+    now = now if now is not None else time.time()
+    in_flight = job.get("in_flight") or {}
+    flying = int(in_flight.get("nobles") or 0)
+    if flying and now < int(in_flight.get("back_at") or 0):
+        return 0, None  # the train is still out; nothing to hold back
+    allowed = max_safe_nobles(estimate_loyalty(job, now=now))
+    if allowed <= 0:
+        return 0, None
+    home = troops_at_home(job.get("source_id"))
+    nobles_home = int(home.get("snob", 0) or 0)
+    if nobles_home <= 0:
+        return 0, None
+    nobles = min(allowed, nobles_home)
+    packages, _lacking = escort_packages(job, home, nobles)
+    if packages is None:
+        return 0, None
+    return nobles, packages
+
+
+def escort_reservations(jobs=None, path=None, now=None):
+    """Troops the armed noble jobs will claim at the end of this cycle, as
+    {source_id: {unit: count}}.
+
+    The noble pass runs last (see TWB.run_noble_barbs) so that it decides on
+    fresh troop and report caches; without a reservation the barb shaper,
+    scavenging and the player farms have already spent the escort by then and
+    the job waits another cycle. Only jobs whose escort trigger is ALREADY
+    satisfied reserve anything - a job still waiting for troops to be built
+    never holds scavenging hostage."""
+    reserve = {}
+    for job in (jobs if jobs is not None else load_jobs(path)):
+        try:
+            _nobles, packages = planned_send(job, now=now)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Noble job %s: cannot plan a reservation: %s",
+                           job.get("id"), exc)
+            continue
+        if not packages:
+            continue
+        bucket = reserve.setdefault(str(job.get("source_id")), {})
+        for pack in packages:
+            for unit, count in pack.items():
+                if unit == "snob":
+                    continue  # nothing else in the bot spends nobles
+                bucket[unit] = bucket.get(unit, 0) + int(count)
+    return reserve
+
+
 class NobleBarbManager:
     """Account-level runner: called once per main-loop cycle on the main
     (human-paced) wrapper, after the village loop has refreshed troop and
@@ -204,8 +301,7 @@ class NobleBarbManager:
             job.get("target_x"), job.get("target_y"), reason), category="attack")
 
     def _troops_at_home(self, village_id):
-        managed = FileManager.load_json_file("cache/managed/%s.json" % village_id)
-        return (managed or {}).get("available_troops") or {}
+        return troops_at_home(village_id)
 
     def _target_owner(self, job):
         """The target's owner from the map cache ('0' = barb), or None when
@@ -282,34 +378,7 @@ class NobleBarbManager:
     # -- sending ---------------------------------------------------------------
 
     def _escort_available(self, job, home, nobles):
-        """Check the escort trigger and build the per-attack escort packages.
-
-        The configured escort is PER NOBLE. A send goes ahead when every
-        escort unit has at least escort_min_pct% of the total (package x
-        nobles) at home; each attack then carries its even share of what is
-        actually available (capped at the configured package)."""
-        escort = {u: int(n) for u, n in (job.get("escort") or {}).items()
-                  if int(n or 0) > 0}
-        pct = max(0, min(100, int(job.get("escort_min_pct") or 0)))
-        sendable = {}
-        for unit, per_noble in escort.items():
-            want_total = per_noble * nobles
-            have = int(home.get(unit, 0) or 0)
-            if have < math.ceil(want_total * pct / 100.0):
-                return None, "%s: %d home, need at least %d%% of %d" % (
-                    unit, have, pct, want_total)
-            sendable[unit] = min(have, want_total)
-        packages = []
-        for i in range(nobles):
-            pack = {"snob": 1}
-            for unit, total in sendable.items():
-                share = total // nobles
-                if i < total % nobles:
-                    share += 1
-                if share > 0:
-                    pack[unit] = share
-            packages.append(pack)
-        return packages, None
+        return escort_packages(job, home, nobles)
 
     def _capture_noble_confirm(self, origin_id, x, y, units):
         """One-time capture of a confirm page containing a noble, so the
