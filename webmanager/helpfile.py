@@ -33,6 +33,8 @@ help_file = {
     'bot.incoming_check': 'Run a background poller that tracks incoming attacks (origin, arrival, walking times, tagging) on its own schedule',
     'bot.incoming_check_min': 'Minimum seconds between incoming-attack checks (e.g. 300 = 5 min). Lower = more accurate tags but more requests',
     'bot.incoming_check_max': 'Maximum seconds between incoming-attack checks (e.g. 570 = 9.5 min)',
+    'bot.clean_reports': 'Keep only this many of the newest reports, deleting older ones from cache/reports (0 = keep everything). The bot holds every cached report in memory, so an unbounded cache grows by roughly 3MB of RAM per 1000 reports. Note that farm loot averages are computed over the reports still cached, so a low cap makes farm profiling react faster but see less history.',
+    'bot.farm_prune_days': 'Forget farm targets that have not been attacked in this many days (0 = never). Targets parked as unsafe are always kept.',
     'bot.claim_daily_bonus': 'Open the daily login-bonus chests automatically: once per day (during active hours) the bot visits the daily-bonus screen and claims every unlocked, uncollected chest. Locked chests and premium unlocks are never touched.',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
@@ -245,6 +247,7 @@ config_groups = {
                           'auto_set_village_names']),
         ('Incoming attacks', ['incoming_check', 'incoming_check_min', 'incoming_check_max']),
         ('Identity & updates', ['user_agent', 'check_update']),
+        ('Housekeeping', ['clean_reports', 'farm_prune_days']),
     ],
     'units': [
         ('Recruitment', ['recruit', 'default', 'batch_size', 'randomize_unit_queue',

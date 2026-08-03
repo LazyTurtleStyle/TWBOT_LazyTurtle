@@ -38,6 +38,8 @@
     "auto_set_village_names": false,
     "user_agent": null,
     "check_update": false,
+    "clean_reports": 0,
+    "farm_prune_days": 0,
     "incoming_check": true,
     "incoming_check_min": 300,
     "incoming_check_max": 570,

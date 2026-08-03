@@ -41,6 +41,7 @@ from core.instance_lock import InstanceLock
 from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
+from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
 from game import dailybonus
@@ -1043,6 +1044,10 @@ class TWB:
                 VillageManager.farm_manager(
                     verbose=True,
                     prune_after_days=config["bot"].get("farm_prune_days", 0),
+                    # Hand over the reports the villages already loaded rather
+                    # than making farm_manager re-read the cache from disk.
+                    reports=ReportManager.last_reports or None,
+                    clean_reports=config["bot"].get("clean_reports", 0),
                 )
                 print(
                     "Dead for %.2f minutes (next run at: %s)"
