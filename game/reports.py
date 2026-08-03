@@ -136,10 +136,17 @@ class ReportManager:
         if not self.logger:
             self.logger = logging.getLogger("Reports")
 
-        if len(self.last_reports) == 0:
+        # Reports are account-wide, so last_reports is deliberately a class
+        # attribute: one cache read shared by every village. Assigning through
+        # self here would bind an *instance* attribute that shadows it, and
+        # since every village holds its own ReportManager for the life of the
+        # process, each one would load - and keep - a private copy of the whole
+        # report cache. That is ~80MB per village at 29k reports (seen live
+        # 2026-08-03: 8 villages, ~800MB RSS and swapping on a 1GB box).
+        if len(ReportManager.last_reports) == 0:
             self.logger.info("First run, re-reading cache entries")
-            self.last_reports = ReportCache.cache_grab()
-            self.logger.info("Got %d reports from cache", len(self.last_reports))
+            ReportManager.last_reports = ReportCache.cache_grab()
+            self.logger.info("Got %d reports from cache", len(ReportManager.last_reports))
 
         # The main folder's page carries the group selector, from which the
         # other folders are discovered.
