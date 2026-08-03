@@ -301,12 +301,58 @@ class DataReader:
             speeds = dict(DEFAULT_UNIT_SPEEDS)
         return world_speed, unit_speed, speeds
 
+    # Memo for cache_grab, invalidated by content rather than by a timer.
+    # sync() is the shared data loader behind nearly every dashboard page, so
+    # each page view re-parsed the whole cache directory - and cache/reports is
+    # tens of thousands of files (measured 2026-08-03: ~44s and 29.5k file reads
+    # for one pass on a loaded box). Fingerprinting the directory instead costs
+    # ~0.1s, so the parse only reruns when a file is actually added or rewritten.
+    # A time-based memo was the obvious alternative but is wrong here: a cold
+    # parse can outlast any sane TTL, so it could expire midway through the very
+    # render it was meant to speed up. Keyed on the resolved path, so switching
+    # worlds never serves another world's cache.
+    _grab_memo = {}
+    _grab_memo_lock = threading.Lock()
+
+    @staticmethod
+    def _dir_signature(path):
+        """Cheap fingerprint of a cache dir: (file_count, newest_mtime).
+
+        Statting is far cheaper than parsing, and this catches both new files
+        (count) and rewritten ones (mtime), which is every way the bot changes
+        a cache directory.
+        """
+        count = 0
+        newest = 0.0
+        try:
+            with os.scandir(path) as it:
+                for e in it:
+                    if not e.name.endswith(".json"):
+                        continue
+                    count += 1
+                    try:
+                        m = e.stat().st_mtime
+                    except OSError:
+                        continue
+                    if m > newest:
+                        newest = m
+        except OSError:
+            return (0, 0.0)
+        return (count, newest)
+
     @staticmethod
     def cache_grab(cache_location):
         output = {}
         c_path = DataReader.data_path("cache", cache_location)
         if not os.path.isdir(c_path):
             return output
+
+        signature = DataReader._dir_signature(c_path)
+        with DataReader._grab_memo_lock:
+            hit = DataReader._grab_memo.get(c_path)
+            if hit and hit[0] == signature:
+                return hit[1]
+
         for existing in os.listdir(c_path):
             existing = str(existing)
             if not existing.endswith(".json"):
@@ -320,6 +366,14 @@ class DataReader:
                     f.close()
                     os.remove(t_path)
 
+        with DataReader._grab_memo_lock:
+            # Deliberately the signature taken *before* parsing. If the bot wrote
+            # a report while we were reading, the post-parse signature would
+            # match a result that never contained it and pin that stale copy
+            # until the next write; the pre-parse one simply misses next time and
+            # re-reads. Same for the broken entries removed above - one extra
+            # pass and the memo settles.
+            DataReader._grab_memo[c_path] = (signature, output)
         return output
 
     @staticmethod
@@ -1517,23 +1571,7 @@ class OverviewBuilder:
         rpath = DataReader.data_path("cache", "reports")
         if not os.path.isdir(rpath):
             return (rpath, 0, 0.0)
-        count = 0
-        newest = 0.0
-        try:
-            with os.scandir(rpath) as it:
-                for e in it:
-                    if not e.name.endswith(".json"):
-                        continue
-                    count += 1
-                    try:
-                        m = e.stat().st_mtime
-                    except OSError:
-                        continue
-                    if m > newest:
-                        newest = m
-        except OSError:
-            return (rpath, 0, 0.0)
-        return (rpath, count, newest)
+        return (rpath,) + DataReader._dir_signature(rpath)
 
     @classmethod
     def _farm_trade_records(cls):
