@@ -187,9 +187,14 @@ class ReportManager:
                     # Capture the report timestamp for every type (scavenging,
                     # trade, ...) so the dashboard can split them into last-24h
                     # vs total. Best-effort: leaves extra empty if not found.
+                    # Only combat reports render the millisecond span after the
+                    # clock; here the date is the whole "Verzonden" cell, so the
+                    # match is anchored on the tag boundaries instead. The page's
+                    # own server clock can't collide: it is split over two spans
+                    # and uses a 4-digit, slash-separated date.
                     extra = {}
                     when_match = re.search(
-                        r'(\d{2}\.\d{2}\.\d{2} \d{2}\:\d{2}\:\d{2})<span class=\"small grey\">',
+                        r'>\s*(\d{2}\.\d{2}\.\d{2} \d{2}\:\d{2}\:\d{2})\s*<',
                         data.text)
                     if when_match:
                         try:
