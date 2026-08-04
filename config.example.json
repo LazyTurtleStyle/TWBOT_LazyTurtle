@@ -131,10 +131,11 @@
   "market": {
     "auto_trade": true,
     "max_trade_duration": 1,
+    "trades_per_hour": 1,
+    "max_trade_amount": 4000,
     "auto_remove": true,
     "trade_multiplier": true,
     "trade_multiplier_value": 1.0,
-    "trade_max_per_hour": 1,
     "trade_round_to_1000": false,
     "trade_for_premium": false
   },

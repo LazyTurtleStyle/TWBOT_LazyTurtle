@@ -852,8 +852,24 @@ class Village:
                 section="market", parameter="auto_trade", default=False
         ) and self.builder.get_level("market"):
             self.logger.info("Managing market")
-            self.resman.trade_max_per_hour = self.get_config(
-                section="market", parameter="trade_max_per_hour", default=1
+            # trades_per_hour means what its name says: higher is more trading.
+            # The older trade_max_per_hour key does the opposite despite its
+            # name (it is multiplied by 3600 into a cooldown, so it really means
+            # "hours between trades"), so it is only honoured when the new key
+            # is absent and no existing config changes meaning under it.
+            try:
+                per_hour = float(self.get_config(
+                    section="market", parameter="trades_per_hour", default=0) or 0)
+            except (TypeError, ValueError):
+                per_hour = 0
+            if per_hour > 0:
+                self.resman.trade_cooldown = int(3600 / per_hour)
+            else:
+                self.resman.trade_cooldown = int(3600 * self.get_config(
+                    section="market", parameter="trade_max_per_hour", default=1
+                ))
+            self.resman.max_trade_amount = self.get_config(
+                section="market", parameter="max_trade_amount", default=4000
             )
             self.resman.trade_max_duration = self.get_config(
                 section="market", parameter="max_trade_duration", default=1
