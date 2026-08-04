@@ -63,6 +63,12 @@ REJECT_STOP_AFTER = 2
 # are considered home again (report ingest + cache refresh lag).
 RETURN_MARGIN = 300
 
+# The command overview is account-wide, so one request answers for every job.
+# It is cached briefly to share that request between the escort reservation
+# pass and the noble pass; the noble pass forces a refresh, because a stale
+# hit there is exactly the mistake this whole check exists to prevent.
+COMMANDS_CACHE_SECONDS = 120
+
 logger = logging.getLogger("NobleBarb")
 
 
@@ -186,6 +192,61 @@ def troops_at_home(village_id, wrapper=None):
     return (managed or {}).get("available_troops") or {}
 
 
+_COMMANDS_CACHE = {"at": 0.0, "flying": None}
+
+
+def nobles_in_flight(wrapper=None, village_id=None, now=None, force=False):
+    """Every noble currently on its way somewhere, as {(x, y): count}, read
+    from the account's own command overview.
+
+    This is what lets the overshoot guard see attacks sent BY HAND. A job's
+    in_flight bookkeeping only knows about the bot's own sends, so a manual
+    noble train that lands between two cycles is invisible to it: the bot then
+    sends the next noble into a village that is already ours and kills it.
+
+    Returns None when the overview cannot be read. Callers must treat that as
+    "do not send" - guessing zero here is precisely how nobles get wasted.
+    """
+    now = now if now is not None else time.time()
+    if (not force and _COMMANDS_CACHE["flying"] is not None
+            and now - _COMMANDS_CACHE["at"] < COMMANDS_CACHE_SECONDS):
+        return _COMMANDS_CACHE["flying"]
+    if wrapper is None or not village_id:
+        return None
+    commands = None
+    try:
+        # page=-1 lifts the 25-row pagination: without it only the soonest
+        # arrivals are listed and a noble further out reads as absent.
+        res = wrapper.get_url(
+            "game.php?village=%s&screen=overview_villages&mode=commands"
+            "&type=attack&page=-1" % village_id)
+        if res:
+            commands = Extractor.outgoing_commands(res)
+    except Exception as exc:
+        logger.warning("Could not read the command overview: %s", exc)
+    if commands is None:
+        return None
+    flying = {}
+    for command in commands:
+        count = int((command.get("units") or {}).get("snob", 0) or 0)
+        if count:
+            key = (command["x"], command["y"])
+            flying[key] = flying.get(key, 0) + count
+    _COMMANDS_CACHE.update({"at": now, "flying": flying})
+    return flying
+
+
+def nobles_heading_to(job, flying):
+    """How many nobles are already on their way to this job's target."""
+    if not flying:
+        return 0
+    try:
+        key = (int(job.get("target_x")), int(job.get("target_y")))
+    except (TypeError, ValueError):
+        return 0
+    return int(flying.get(key, 0))
+
+
 def escort_packages(job, home, nobles):
     """Check the escort trigger and build the per-attack escort packages.
 
@@ -219,7 +280,7 @@ def escort_packages(job, home, nobles):
     return packages, None
 
 
-def planned_send(job, now=None, wrapper=None, home=None):
+def planned_send(job, now=None, wrapper=None, home=None, flying_map=None):
     """What this job would send if the noble pass ran right now.
     Returns (nobles, packages) or (0, None).
 
@@ -228,7 +289,9 @@ def planned_send(job, now=None, wrapper=None, home=None):
     send, which can only make the plan smaller) and minus the ownership stops
     (a target that flipped owner reserves troops for one last cycle). `home`
     is the sending village's troops; without it they are read through
-    troops_at_home(wrapper)."""
+    troops_at_home(wrapper). `flying_map` is nobles_in_flight() output, so a
+    job the guard will refuse does not hold an escort hostage; without it the
+    reservation stays optimistic, which costs a cycle of scavenging at worst."""
     if job.get("status") != "armed":
         return 0, None
     now = now if now is not None else time.time()
@@ -236,7 +299,8 @@ def planned_send(job, now=None, wrapper=None, home=None):
     flying = int(in_flight.get("nobles") or 0)
     if flying and now < int(in_flight.get("back_at") or 0):
         return 0, None  # the train is still out; nothing to hold back
-    allowed = max_safe_nobles(estimate_loyalty(job, now=now))
+    flying = max(flying, nobles_heading_to(job, flying_map))
+    allowed = max_safe_nobles(estimate_loyalty(job, now=now)) - flying
     if allowed <= 0:
         return 0, None
     if home is None:
@@ -269,13 +333,19 @@ def escort_reservations(jobs=None, path=None, now=None, wrapper=None):
     escort as short in exactly the cycles where it is not."""
     reserve = {}
     home_by_village = {}
-    for job in (jobs if jobs is not None else load_jobs(path)):
+    jobs = jobs if jobs is not None else load_jobs(path)
+    armed = [j for j in jobs if j.get("status") == "armed"]
+    flying_map = nobles_in_flight(
+        wrapper=wrapper, village_id=armed[0].get("source_id") if armed else None,
+        now=now)
+    for job in jobs:
         source = str(job.get("source_id"))
         if job.get("status") == "armed" and source not in home_by_village:
             home_by_village[source] = troops_at_home(source, wrapper=wrapper)
         try:
             _nobles, packages = planned_send(
-                job, now=now, home=home_by_village.get(source))
+                job, now=now, home=home_by_village.get(source),
+                flying_map=flying_map)
         except (TypeError, ValueError) as exc:
             logger.warning("Noble job %s: cannot plan a reservation: %s",
                            job.get("id"), exc)
@@ -505,7 +575,7 @@ class NobleBarbManager:
         else:
             self._save(job, {"reject_count": count})
 
-    def step(self, job, reports, now=None):
+    def step(self, job, reports, now=None, flying_map=None):
         """One cycle for one armed job: evaluate reports, check ownership,
         then send whatever the overshoot guard and the barracks allow."""
         now = now if now is not None else time.time()
@@ -530,9 +600,30 @@ class NobleBarbManager:
             self._save(job, {"in_flight": None})
             flying = 0
 
+        # Nobles already on their way, whoever sent them. in_flight above only
+        # covers the bot's own sends, so an attack launched by hand between two
+        # cycles would otherwise be invisible: the bot sends its next noble,
+        # the manual train takes the village first, and that noble dies on a
+        # village that is already ours. Refusing to send while the overview is
+        # unreadable costs a cycle; guessing costs a noble.
+        if flying_map is None:
+            self._waiting(job, "cannot read the command overview - holding off "
+                               "until it is clear whether nobles are already "
+                               "on their way to the target")
+            return 0
+        on_route = nobles_heading_to(job, flying_map)
+        if on_route > flying:
+            flying = on_route
+
         loyalty = estimate_loyalty(job, now=now)
         allowed = max_safe_nobles(loyalty) - flying
         if allowed <= 0:
+            if on_route:
+                self._waiting(job, "%d noble(s) already on the way to the "
+                                   "target (loyalty est. %d allows %d) - "
+                                   "waiting for them to land" % (
+                                       on_route, loyalty,
+                                       max_safe_nobles(loyalty)))
             return 0
         home = self._troops_at_home(job.get("source_id"))
         nobles_home = int(home.get("snob", 0) or 0)
@@ -553,13 +644,25 @@ class NobleBarbManager:
         self._log(job, "loyalty est. %d -> sending %d noble(s) "
                        "(guard allows %d, %d home)" % (
                            loyalty, nobles, allowed, nobles_home))
-        return self.send(job, nobles, packages)
+        sent = self.send(job, nobles, packages)
+        if sent:
+            # Keep the shared map honest for any later job aimed at the same
+            # village; refetching it per job would be a request each.
+            key = (int(job.get("target_x")), int(job.get("target_y")))
+            flying_map[key] = flying_map.get(key, 0) + sent
+        return sent
 
     def run(self):
         """One pass over all armed jobs."""
         jobs = load_jobs(self.path)
-        if not any(j.get("status") == "armed" for j in jobs):
+        armed = [j for j in jobs if j.get("status") == "armed"]
+        if not armed:
             return 0
+        # One account-wide request for the whole pass, forced fresh: the
+        # reservation pass earlier in this cycle may have cached an older copy.
+        flying_map = nobles_in_flight(
+            wrapper=self.wrapper, village_id=armed[0].get("source_id"),
+            force=True)
         reports = {}
         try:
             for name in FileManager.list_directory("cache/reports",
@@ -569,11 +672,9 @@ class NobleBarbManager:
         except FileNotFoundError:
             pass
         sent = 0
-        for job in jobs:
-            if job.get("status") != "armed":
-                continue
+        for job in armed:
             try:
-                sent += self.step(job, reports)
+                sent += self.step(job, reports, flying_map=flying_map)
             except Exception as exc:  # one broken job must not kill the loop
                 logger.warning("Noble job %s failed this cycle: %s",
                                job.get("id"), exc)

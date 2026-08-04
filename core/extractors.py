@@ -25,7 +25,17 @@ _RE_UNIT_ITEMS_HOME = re.compile(r'class=\'unit-item unit-item-(.*?)\'[^>]*>(\d+
 _RE_TOOLTIP = re.compile(r'\s*tooltip\s*')
 _RE_BUILD_QUEUE = re.compile('(?s)<table id="build_queue"(.+?)</table>')
 _RE_UNITS_TABLE = re.compile(r'(?s)<table id="units_table".*?</table>')
+_RE_COMMANDS_TABLE = re.compile(r'(?s)<table id="commands_table".*?</table>')
 _RE_UNIT_HEADER = re.compile(r'unit-item-(\w+)|unit_(\w+)\b')
+# A returning command carries return_*.webp icons instead of the attack ones.
+# Its first cell names the village the troops are coming BACK from, so a return
+# would otherwise read as an outgoing command aimed at that village.
+_RE_RETURN_ICON = re.compile(r'return_\w+\.webp')
+_RE_COORD_PAIR = re.compile(r'\((\d+)\|(\d+)\)')
+# Present on the command overview whatever it lists (the type filter links and
+# the group links all carry it), so it tells "no commands" apart from "this is
+# not the page I asked for" - the caller must not read the second as the first.
+_RE_COMMANDS_PAGE = re.compile(r'screen=overview_villages&(?:amp;)?mode=commands')
 _RE_TR = re.compile(r'(?s)<tr.*?</tr>')
 _RE_TD = re.compile(r'(?s)<td[^>]*>(.*?)</td>')
 _RE_TAG = re.compile(r'<[^>]+>')
@@ -253,6 +263,66 @@ class Extractor:
                 if digits:
                     out[unit] += int(digits)
         return {u: c for u, c in out.items() if c}
+
+    @staticmethod
+    def outgoing_commands(res):
+        """
+        Our own commands in flight, from an overview_villages?mode=commands
+        table. Returns [{"x", "y", "units": {unit: count}}], one entry per
+        command, where x/y are the TARGET coordinates.
+
+        Returns None - NOT an empty list - when the page could not be read at
+        all (a session redirect, a captcha wall, markup that changed). Callers
+        use this to decide whether troops are safe to send, and there "I could
+        not look" must never be mistaken for "nothing is out there".
+
+        Unit column order is read from the table header, so worlds without
+        archers or paladins parse correctly. Returning troops are skipped: the
+        first cell of a return names the village they are coming back from, so
+        counting them would read a noble on its way home as one on its way out.
+
+        NOTE the page paginates (25 rows by default) - request it with page=-1
+        or this only ever sees the soonest arrivals.
+        """
+        if type(res) != str:
+            res = res.text
+        on_page = bool(_RE_COMMANDS_PAGE.search(res))
+        m = _RE_COMMANDS_TABLE.search(res)
+        if not m:
+            # The overview drops the table entirely when nothing is out.
+            return [] if on_page else None
+        table = m.group(0)
+        units = []
+        for a, b in _RE_UNIT_HEADER.findall(table):
+            unit = a or b
+            if unit and unit not in units:
+                units.append(unit)
+        if not units:
+            return None
+        commands = []
+        # Each data row: <td>label + target (x|y)</td><td>source village</td>
+        # <td>arrival</td> + one <td> per unit.
+        for row in _RE_TR.findall(table):
+            if _RE_RETURN_ICON.search(row):
+                continue
+            cells = _RE_TD.findall(row)
+            if len(cells) < 3 + len(units):
+                continue
+            texts = [_RE_TAG.sub('', c).strip() for c in cells]
+            target = _RE_COORD_PAIR.search(texts[0] or '')
+            if not target:
+                continue
+            counts = {}
+            for i, unit in enumerate(units):
+                digits = _RE_NONDIGIT.sub('', texts[3 + i] or '')
+                if digits and int(digits):
+                    counts[unit] = int(digits)
+            commands.append({
+                "x": int(target.group(1)),
+                "y": int(target.group(2)),
+                "units": counts,
+            })
+        return commands
 
     @staticmethod
     def active_recruit_queue(res):
