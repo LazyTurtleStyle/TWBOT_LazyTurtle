@@ -1066,6 +1066,11 @@ class DataReader:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
             if "." in parameter:
                 section, param = parameter.split('.')
+                # A section added to the bot after this world's config.json was
+                # written (e.g. balancer) has no key yet; create it on first save
+                # rather than 500-ing on a KeyError.
+                if section not in template:
+                    template[section] = collections.OrderedDict()
                 template[section][param] = value
             else:
                 template[parameter] = value

@@ -214,9 +214,20 @@ FLAG_TYPE_OPTIONS = [
     (7, "Reduce coin cost"),
     (8, "Haul capacity"),
 ]
+TARGET_ORDER_OPTIONS = [
+    ("nearest", "Nearest village first (shortest merchant trip)"),
+    ("emptiest", "Emptiest village first (most starved)"),
+]
+SENDER_ORDER_OPTIONS = [
+    ("nearest", "Nearest to the receiver (shortest merchant trip)"),
+    ("highest_points", "Highest points first (biggest village gives)"),
+    ("most_resources", "Most spare resources first (spreads the load)"),
+]
 FIXED_SELECTS = {
     'village_template.flag_type': FLAG_TYPE_OPTIONS,
+    'balancer.sender_order': SENDER_ORDER_OPTIONS,
     'village.flag_type': FLAG_TYPE_OPTIONS,
+    'balancer.target_order': TARGET_ORDER_OPTIONS,
 }
 
 
@@ -361,10 +372,21 @@ def pre_process_config():
     example = _example_defaults()
     to_hide = ["build", "villages"]
     sections = {}
-    for section in config:
-        if section in to_hide or not isinstance(config[section], dict):
+    # Whole sections added to the bot after this world's config.json was written
+    # (not just new keys inside an existing section) still get a tab, rendered
+    # from the example defaults. Saving any field creates the section for real.
+    names = list(config) + [s for s in example if s not in config]
+    for section in names:
+        if section in to_hide:
             continue
-        fields = _with_defaults(config[section], example.get(section))
+        current = config.get(section)
+        if current is None:
+            current = {}
+        elif not isinstance(current, dict):
+            continue
+        fields = _with_defaults(current, example.get(section))
+        if not fields:
+            continue
         sections[section] = render_grouped(section, section, fields)
     return sections
 

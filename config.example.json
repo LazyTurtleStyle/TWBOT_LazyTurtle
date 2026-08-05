@@ -139,6 +139,19 @@
     "trade_round_to_1000": false,
     "trade_for_premium": false
   },
+  "balancer": {
+    "enabled": false,
+    "sender_min_points": 4000,
+    "receiver_max_points": 1000,
+    "target_fill_pct": 90,
+    "target_order": "nearest",
+    "sender_order": "nearest",
+    "send_cooldown_minutes": 60,
+    "max_sends_per_receiver": 1,
+    "reserve_merchants": 0,
+    "sender_keep": 0,
+    "min_send_amount": 250
+  },
   "world": {
     "knight_enabled": null,
     "flags_enabled": null,
@@ -152,7 +165,5 @@
     "manage": false,
     "auto_upgrade": false
   },
-  "villages": {
-
-  }
+  "villages": {}
 }

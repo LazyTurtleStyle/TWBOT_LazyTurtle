@@ -11,6 +11,7 @@ from core.templates import TemplateManager
 from core.twstats import TwStats
 from game.attack import AttackManager
 from game.barbshaper import BarbShaper
+from game.balancer import ResourceBalancer
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.incomings import load_groups
@@ -25,6 +26,7 @@ from core.exceptions import *
 class Village:
     village_id = None
     builder = None
+    balancer = None
     units = None
     wrapper = None
     resources = {}
@@ -471,6 +473,48 @@ class Village:
                         )
                         continue
                     self.units.start_update(building, self.disabled_units)
+
+    def run_balancer(self):
+        """Push spare resources to poorer villages (see game/balancer.py).
+
+        Runs after manage_local_resources so resman.requested is already pruned
+        of empty entries: anything left there means this village still wants
+        resources itself, and a village that needs resources never gives any
+        away.
+        """
+        if not self.get_config(section="balancer", parameter="enabled", default=False):
+            return
+        if not self.balancer:
+            self.balancer = ResourceBalancer(
+                wrapper=self.wrapper, village_id=self.village_id
+            )
+        cfg = self.config.get("balancer", {}) or {}
+        self.balancer.enabled = True
+        self.balancer.sender_min_points = int(cfg.get("sender_min_points", 4000))
+        self.balancer.receiver_max_points = int(cfg.get("receiver_max_points", 1000))
+        self.balancer.target_fill_pct = int(cfg.get("target_fill_pct", 90))
+        self.balancer.target_order = cfg.get("target_order", "nearest")
+        self.balancer.send_cooldown = int(cfg.get("send_cooldown_minutes", 60)) * 60
+        # Renamed from max_sends_per_run: the cap is per receiver now, so a
+        # sender may top up several villages but none gets served twice.
+        self.balancer.max_sends_per_receiver = int(
+            cfg.get("max_sends_per_receiver", cfg.get("max_sends_per_run", 1)))
+        self.balancer.reserve_merchants = int(cfg.get("reserve_merchants", 0))
+        self.balancer.sender_keep = int(cfg.get("sender_keep", 0))
+        self.balancer.min_send_amount = int(cfg.get("min_send_amount", 250))
+
+        public = self.area.in_cache(self.village_id) if self.area else None
+        my_points = int((public or {}).get("points") or 0)
+        try:
+            self.balancer.run(
+                my_points=my_points,
+                my_stock=self.resman.actual,
+                has_own_needs=bool(self.resman.requested),
+            )
+        except Exception as exc:
+            # Balancing is a convenience: a bad page parse must not take the
+            # village run (and with it building/recruiting) down.
+            self.logger.warning("Resource balancing failed: %s", exc)
 
     def manage_local_resources(self):
         to_dell = []
@@ -951,6 +995,7 @@ class Village:
         self.run_snob_recruit()
         self.do_recruit()
         self.manage_local_resources()
+        self.run_balancer()
 
         # Refresh forced-peace state before farming so run_farming() can skip
         # sending attacks during (or arriving into) a configured peace window.
