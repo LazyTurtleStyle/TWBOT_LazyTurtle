@@ -740,6 +740,17 @@ def get_map():
     return render_template('map.html', data=sync_data, map=map_data)
 
 
+def _template_select_value(value):
+    """Village building/units as a <select> value: a name, 'false' for the
+    per-village off-switch, or '' when the key is absent (inherits the global
+    building.default / units.default)."""
+    if value is False:
+        return 'false'
+    if isinstance(value, str) and value:
+        return value
+    return ''
+
+
 def pre_process_overrides(data):
     """Per-village override rows for the villages page.
 
@@ -772,6 +783,8 @@ def pre_process_overrides(data):
                 'diff': [],
                 'building': None,
                 'units': None,
+                'building_value': '',
+                'units_value': '',
                 'managed': False,
                 'gather_enabled': bool(template.get('gather_enabled', False)),
                 'farm_enabled': bool(template.get('farm_enabled', True)),
@@ -794,6 +807,8 @@ def pre_process_overrides(data):
             'diff': diff,
             'building': vcfg.get('building'),
             'units': vcfg.get('units'),
+            'building_value': _template_select_value(vcfg.get('building')),
+            'units_value': _template_select_value(vcfg.get('units')),
             'managed': bool(vcfg.get('managed')),
             'gather_enabled': bool(vcfg.get('gather_enabled', template.get('gather_enabled', False))),
             'farm_enabled': bool(vcfg.get('farm_enabled', template.get('farm_enabled', True))),
@@ -803,7 +818,17 @@ def pre_process_overrides(data):
     total = len(rows)
     summary = '{} of {} village{} override the global template.'.format(
         overriding, total, '' if total == 1 else 's')
-    return {'rows': rows, 'summary': summary, 'overriding': overriding, 'total': total}
+    return {
+        'rows': rows,
+        'summary': summary,
+        'overriding': overriding,
+        'total': total,
+        # Options for the inline editors on the villages page.
+        'builder_templates': template_names('builder'),
+        'troop_templates': template_names('troops'),
+        'building_default': config.get('building', {}).get('default') or 'purple_predator',
+        'units_default': config.get('units', {}).get('default') or 'basic',
+    }
 
 
 @app.route('/villages', methods=['GET'])
