@@ -137,6 +137,10 @@ class TWB:
     wrapper = None
     should_run = True
     runs = 0
+    # When this process started. Stamped into the heartbeat so the dashboard can
+    # tell "reports stopped coming in" apart from "the bot only just came back
+    # up and nothing has had time to return yet" (see OverviewBuilder._farm_stall_state).
+    started = int(time.time())
     # Set by get_overview when the overview comes back as a login page; the run
     # loop skips the cycle instead of treating every village as unavailable.
     session_logged_out = False
@@ -840,7 +844,8 @@ class TWB:
         back half of every cycle.
         """
         FileManager.save_json_file_atomic(
-            {"ts": int(time.time()), "runs": self.runs}, "cache/heartbeat.json")
+            {"ts": int(time.time()), "runs": self.runs, "started": self.started},
+            "cache/heartbeat.json")
 
     def run(self):
         """
