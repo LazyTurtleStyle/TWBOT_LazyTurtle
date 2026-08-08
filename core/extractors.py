@@ -98,16 +98,22 @@ class Extractor:
         return None
 
     @staticmethod
-    def get_quests(res):
+    def get_quests(res, skip=()):
         """
-        Gets quest data on almost any page
+        Gets quest data on almost any page. ``skip`` holds quest ids the caller
+        already tried to complete, so a quest the game keeps reporting as
+        finished cannot be handed back over and over.
         """
+        if res is None:
+            return None
         if type(res) != str:
             res = res.text
         get_quests = _RE_QUESTS.search(res)
         if get_quests:
             result = json.loads(get_quests.group(1), strict=False)
             for quest in result:
+                if quest in skip:
+                    continue
                 data = result[quest]
                 if data['goals_completed'] == data['goals_total']:
                     return quest
