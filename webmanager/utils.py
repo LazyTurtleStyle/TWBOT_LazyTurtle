@@ -244,7 +244,8 @@ class DataReader:
         """Is the bot's main loop actually turning, or stuck?
 
         Returns {"stalled": bool, "reason": "captcha"|"heartbeat"|None,
-        "since": unix ts or None, "heartbeat_age": seconds or None}.
+        "since": unix ts or None, "heartbeat_age": seconds or None,
+        "started": unix ts of the running process or None}.
         A captcha_block.json marker (written by WebWrapper._await_captcha_clear
         while it polls for the solve) is the precise signal, and is removed the
         moment the captcha clears; heartbeat staleness is a generic fallback for
@@ -258,16 +259,21 @@ class DataReader:
             except Exception:
                 since = None
             return {"stalled": True, "reason": "captcha", "since": since,
-                    "heartbeat_age": None}
+                    "heartbeat_age": None, "started": None}
 
         heartbeat = DataReader.data_path("cache", "heartbeat.json")
+        blank = {"stalled": False, "reason": None, "since": None,
+                 "heartbeat_age": None, "started": None}
         if not os.path.exists(heartbeat):
-            return {"stalled": False, "reason": None, "since": None, "heartbeat_age": None}
+            return blank
         try:
             with open(heartbeat) as f:
-                ts = int((json.load(f) or {}).get("ts") or 0)
+                beat = json.load(f) or {}
+            ts = int(beat.get("ts") or 0)
+            # Absent on a bot predating the field; callers fall back to wall time.
+            started = int(beat.get("started") or 0) or None
         except Exception:
-            return {"stalled": False, "reason": None, "since": None, "heartbeat_age": None}
+            return blank
 
         try:
             cfg = DataReader.config_grab().get("bot", {}) or {}
@@ -280,7 +286,7 @@ class DataReader:
         age = int(time.time()) - ts
         threshold = cycle_delay + DataReader.HEARTBEAT_GRACE_SECONDS
         return {"stalled": age > threshold, "reason": "heartbeat" if age > threshold else None,
-                "since": ts, "heartbeat_age": age}
+                "since": ts, "heartbeat_age": age, "started": started}
 
     @staticmethod
     def world_speeds():
@@ -1562,20 +1568,70 @@ class OverviewBuilder:
         return records
 
     @staticmethod
-    def _in_active_hours(spec):
-        """True if the current local hour falls in the bot's active_hours window.
-        Mirrors twb.py is_active_hours (end-inclusive, handles overnight wrap).
-        Unset/malformed -> treated as always active."""
+    def _active_bounds(spec):
+        """(start_minute, end_minute) of the bot's active_hours window, or None
+        when it is unset/malformed (= always active).
+
+        Mirrors twb.py is_active_hours, HH:MM bounds included: the old
+        int()-only parser could not read "5-23:30" and quietly answered "always
+        active" for every world configured that way.
+        """
         if not spec:
-            return True
+            return None
+
+        def to_minutes(bound, is_end):
+            bound = bound.strip()
+            if ":" in bound:
+                hour, minute = bound.split(":")
+                return int(hour) * 60 + int(minute)
+            # A whole-hour end bound is inclusive ("6-23" runs to 23:59).
+            return int(bound) * 60 + (59 if is_end else 0)
+
         try:
-            start, end = [int(h) for h in str(spec).split("-")]
+            raw_start, raw_end = str(spec).split("-")
+            return to_minutes(raw_start, is_end=False), to_minutes(raw_end, is_end=True)
         except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _in_active_hours(cls, spec):
+        """True if the current local time falls in the bot's active_hours window."""
+        bounds = cls._active_bounds(spec)
+        if not bounds:
             return True
-        h = time.localtime().tm_hour
+        start, end = bounds
+        now = time.localtime()
+        now_m = now.tm_hour * 60 + now.tm_min
         if start <= end:
-            return start <= h <= end
-        return h >= start or h <= end
+            return start <= now_m <= end
+        # Overnight window that wraps past midnight (e.g. "22-6").
+        return now_m >= start or now_m <= end
+
+    @classmethod
+    def _active_seconds_between(cls, since, until, spec):
+        """How many of the seconds in [since, until] fell inside active_hours.
+
+        The farm-stall clock has to run on this rather than wall time: with a
+        nightly pause the newest combat report is hours old every morning
+        through no fault of the bot's.
+        """
+        bounds = cls._active_bounds(spec)
+        if not bounds:
+            return max(0, int(until - since))
+        start, end = bounds
+        # Walk the window in 5-minute steps: coarse enough to stay cheap over a
+        # multi-day gap, fine enough for a threshold measured in hours.
+        step = 300
+        active = 0
+        t = int(since)
+        while t < until:
+            lt = time.localtime(t)
+            minute = lt.tm_hour * 60 + lt.tm_min
+            inside = start <= minute <= end if start <= end else (minute >= start or minute <= end)
+            if inside:
+                active += min(step, int(until) - t)
+            t += step
+        return active
 
     @classmethod
     def _farm_stall_state(cls, newest_combat_ts, watchdog):
@@ -1583,6 +1639,22 @@ class OverviewBuilder:
         and farming is on, but no attack/scout report has been ingested for
         FARM_STALL_SECONDS. This is the classic silent-stall signature - a degraded session that
         keeps the loop turning (fresh heartbeat) while report reading is dead.
+
+        The age is only evidence against the bot for the stretch it was actually
+        up and farming, so two stretches are excluded:
+
+        - time before this process started. After any multi-hour outage the
+          newest combat report is old for reasons that have nothing to do with
+          report reading, and the banner used to accuse a freshly restarted bot
+          of the very thing the restart just fixed (seen 2026-08-08, right after
+          a 4h quest-recursion outage: attacks were already flying again while
+          the dashboard still cried stall).
+        - time outside active_hours, where farming is paused by design and no
+          report can arrive - otherwise every morning after a nightly pause
+          looks like a stall.
+
+        Note this only delays a genuine stall's detection: nothing can be
+        concluded until the bot has been up and farming for the full window.
         Returns {"stalled": bool, "since": ts, "age": secs}."""
         idle = {"stalled": False, "since": None, "age": None}
         # A captcha/heartbeat stall is already surfaced as critical; don't stack.
@@ -1595,14 +1667,20 @@ class OverviewBuilder:
         # Only meaningful when farming is on (that's what produces these reports)...
         if not (cfg.get("farms", {}) or {}).get("farm"):
             return idle
+        active_hours = (cfg.get("bot", {}) or {}).get("active_hours")
         # ...and during active hours, when the bot should be actively farming.
-        if not cls._in_active_hours((cfg.get("bot", {}) or {}).get("active_hours")):
+        if not cls._in_active_hours(active_hours):
             return idle
         # No baseline yet (fresh world, no attack/scout reports) -> don't cry wolf.
         if not newest_combat_ts:
             return idle
-        age = int(time.time()) - int(newest_combat_ts)
-        if age > cls.FARM_STALL_SECONDS:
+        now = int(time.time())
+        age = now - int(newest_combat_ts)
+        # Only hold the bot responsible from the moment it came up.
+        started = cls._to_int(watchdog.get("started"))
+        blame_from = max(int(newest_combat_ts), started)
+        blamed = cls._active_seconds_between(blame_from, now, active_hours)
+        if blamed > cls.FARM_STALL_SECONDS:
             return {"stalled": True, "since": int(newest_combat_ts), "age": age}
         return idle
 
