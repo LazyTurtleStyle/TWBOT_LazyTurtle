@@ -47,6 +47,10 @@ class Village:
     forced_peace = False
     forced_peace_today_start = None
     disabled_units = []
+    # How many complete-quest/claim-reward rounds one cycle may do. Quest work
+    # used to re-enter run() per completed quest with no bound at all; see
+    # run_quest_actions().
+    MAX_QUEST_ROUNDS = 5
 
     twp = TwStats()
 
@@ -227,18 +231,46 @@ class Village:
         self.last_attack = self.def_man.under_attack
 
     def run_quest_actions(self, config):
-        if self.get_config(section="world", parameter="quests_enabled", default=False):
-            if self.get_quests():
-                self.logger.info("There where completed quests, re-running function")
+        """
+        Complete finished quests and collect their rewards.
+
+        This used to ``return self.run(config=config)`` on every completed quest
+        so the rest of the cycle would see the reward resources, and nothing
+        bounded that recursion. A quest the game refuses to close still reports
+        itself as finished, and the reward claim below - the thing that actually
+        makes such a quest go away - sat *after* the re-run, so it was never
+        reached. Seen live 2026-08-07: 485 nested runs of village 001 over 4h08,
+        no other village got a turn, and the process finally died on a failed
+        request inside that flood of traffic.
+
+        So: a bounded number of complete-then-claim rounds, never the same quest
+        twice in one cycle, and the caller's cycle simply continues afterwards -
+        get_quest_rewards() credits the reward to resman, so the builder and
+        recruiter still see the resources without re-running anything.
+        """
+        if not self.get_config(
+                section="world", parameter="quests_enabled", default=False
+        ):
+            return
+        attempted = set()
+        for _ in range(self.MAX_QUEST_ROUNDS):
+            quest = self.get_quests(skip=attempted)
+            if quest:
+                attempted.add(quest)
                 self.wrapper.reporter.report(
                     self.village_id, "TWB_QUEST", "Completed quest"
                 )
-                return self.run(config=config)
-
-            if self.get_quest_rewards():
+            got_rewards = self.get_quest_rewards()
+            if got_rewards:
                 self.wrapper.reporter.report(
                     self.village_id, "TWB_QUEST", "Collected quest reward(s)"
                 )
+            if not quest and not got_rewards:
+                return
+        self.logger.warning(
+            "Still finding quest work after %d rounds, continuing the cycle anyway",
+            self.MAX_QUEST_ROUNDS,
+        )
 
     def units_get_template(self):
         """
@@ -949,19 +981,42 @@ class Village:
             self.village_id, data_type="village.config", data=json.dumps(vdata)
         )
 
-    def get_quests(self):
-        result = Extractor.get_quests(self.wrapper.last_response)
-        if result:
-            qres = self.wrapper.get_api_action(
-                action="quest_complete",
-                village_id=self.village_id,
-                params={"quest": result, "skip": "false"},
+    @staticmethod
+    def _quest_completed(res):
+        """True when a quest_complete response says the quest was actually closed.
+        A refused completion still answers with a JSON body, but carries an
+        error - and get_api_action() hands back any parsed body, so simply
+        testing the response for truth counted those refusals as successes."""
+        if not res or not isinstance(res, dict):
+            return False
+        if res.get("error") or res.get("errors") or res.get("error_code"):
+            return False
+        return True
+
+    def get_quests(self, skip=()):
+        """
+        Complete one finished quest and return its id, or None when there was
+        nothing to complete. ``skip`` holds the quest ids already attempted this
+        cycle so a quest the game will not close is only tried once.
+        """
+        result = Extractor.get_quests(self.wrapper.last_response, skip=skip)
+        if not result:
+            self.logger.debug("There where no completed quests")
+            return None
+        qres = self.wrapper.get_api_action(
+            action="quest_complete",
+            village_id=self.village_id,
+            params={"quest": result, "skip": "false"},
+        )
+        if not self._quest_completed(qres):
+            self.logger.info(
+                "Quest %s reports finished but the game did not close it: %s",
+                str(result),
+                qres,
             )
-            if qres:
-                self.logger.info("Completed quest: %s", str(result))
-                return True
-        self.logger.debug("There where no completed quests")
-        return False
+            return None
+        self.logger.info("Completed quest: %s", str(result))
+        return result
 
     def get_quest_rewards(self):
         result = self.wrapper.get_api_data(

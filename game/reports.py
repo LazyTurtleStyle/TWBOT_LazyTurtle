@@ -157,6 +157,15 @@ class ReportManager:
         if page > 0:
             url += f"&from={offset}"
         result = self.wrapper.get_url(url)
+        # get_url() answers a failed request with None. Handing that to the
+        # extractors raised AttributeError straight out of the run loop and killed
+        # the process (seen live 2026-08-08); a dropped request just means no
+        # reports this cycle, so bail and let the next cycle pick them up.
+        if result is None:
+            self.logger.warning(
+                "Could not fetch report group %s page %d, skipping", group_id, page
+            )
+            return []
         self.game_state = Extractor.game_state(result)
         groups = [g for g in Extractor.report_groups(result) if g != group_id]
         new = 0
@@ -168,6 +177,11 @@ class ReportManager:
             new += 1
             url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id={group_id}&view={report_id}"
             data = self.wrapper.get_url(url)
+            # Same as above: leave the report out of last_reports so a dropped
+            # request is retried next cycle instead of being lost or fatal.
+            if data is None:
+                self.logger.warning("Could not fetch report %s, skipping", report_id)
+                continue
 
             get_type = re.search(r'class="report_(\w+)', data.text)
             if get_type:
