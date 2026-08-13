@@ -12,6 +12,12 @@ launch request sequence runs, which itself takes a few hundred ms. A small lead
 offset (sched_lead_seconds) starts the sequence slightly early to compensate.
 This is good for coordinated landings within ~a second, not frame-perfect snipes.
 
+A command may carry `waves`: several unit splits that must leave together, which
+is how a noble train is sent (one noble per wave, so the loyalty drops in one
+uninterruptible sequence). Every wave is prepared during the pre-stage window and
+only the launch requests are left for the send moment, so the waves leave a
+single round-trip apart rather than a whole rally-point sequence apart.
+
 The queue file is shared by two processes (the bot writes statuses, the web
 dashboard appends/cancels), so every read-modify-write goes through update():
 a cross-process file lock around an atomic replace. Due commands are *claimed*
@@ -43,6 +49,49 @@ UNIT_KEYS = [
 ]
 
 logger = logging.getLogger("AttackScheduler")
+
+
+# How early (seconds) to claim a command and run the open+confirm steps before
+# its send moment, so only the final fast launch request remains to time. Must
+# comfortably exceed the open+confirm round-trips.
+PRESTAGE_SECONDS = 15
+# A command legitimately sits in 'sending' only for the brief pre-stage + launch
+# window (a few seconds beyond PRESTAGE_SECONDS). Past this many seconds it must
+# be a leftover from a crashed launch, so claim_due may reclaim and retry it.
+STALE_SENDING_SECONDS = 120
+# Compensation (seconds) for the launch request's own one-way latency: fire this
+# much before the computed launch moment so troops actually leave on time. Tune
+# to roughly your ping to the game server (observed near-zero on a fast host, so
+# 0.0 lands on target; raise it if attacks land late, lower if they land early).
+NETWORK_LEAD = 0.0
+# Human-pacing gap (seconds) inserted BETWEEN the open and confirm prep steps of a
+# timed send. Timed sends run on a priority_mode wrapper, which strips the normal
+# 3-7s pacing so the final launch can fire instantly; without this, open+confirm
+# would hit the server back-to-back with only network latency between them - an
+# unnatural signature bot detection watches for on the (heavily-scrutinised)
+# attack path. This gap runs entirely inside the pre-stage window, well before the
+# launch, so it NEVER affects arrival accuracy - only the launch request is
+# time-critical. Keep the max comfortably under PRESTAGE_SECONDS.
+PREP_JITTER_MIN = 0.4
+PREP_JITTER_MAX = 1.8
+
+# Extra pre-stage seconds per follow-up wave: every wave needs its own
+# open+confirm round trip (plus the human-pacing gap between them) before any of
+# them can be fired, and all of that has to be done before the launch moment.
+PRESTAGE_PER_WAVE = 12
+
+
+def command_prestage(command, lead=PRESTAGE_SECONDS):
+    """Seconds before its send moment that this command must be claimed.
+
+    A train resolved at send time may come out a wave or two bigger than it
+    looked when it was queued (a noble finished in the meantime), so it budgets
+    for `train.max_waves` - and never grows past what was budgeted here, or the
+    extra open+confirm round trips would push the launch past its moment.
+    """
+    spec = command.get("train") or {}
+    planned = max(len(command.get("waves") or []), int(spec.get("max_waves") or 0))
+    return lead + max(0, planned - 1) * PRESTAGE_PER_WAVE
 
 
 def _resolve(path):
@@ -144,12 +193,19 @@ def prune(max_age_done=86400, path=None):
     update(mut, path)
 
 
-def next_send_ts(path=None):
-    """Earliest send_ts among pending commands, or None when the queue is idle."""
+def next_send_ts(path=None, lead=PRESTAGE_SECONDS):
+    """Earliest send moment among pending commands, or None when idle.
+
+    A train needs a longer pre-stage than a single command (one open+confirm per
+    wave), so its send moment is reported early by exactly that difference -
+    that way a caller that wakes `lead` seconds before this still has time to
+    prepare every wave.
+    """
     pending = [c for c in load_schedule(path) if c.get("status") == "pending"]
     if not pending:
         return None
-    return min(float(c.get("send_ts", 0)) for c in pending)
+    return min(float(c.get("send_ts", 0)) - (command_prestage(c, lead) - lead)
+               for c in pending)
 
 
 def claim_due(path=None, lead=0.0, now=None):
@@ -166,7 +222,7 @@ def claim_due(path=None, lead=0.0, now=None):
     def mut(commands):
         for c in commands:
             status = c.get("status")
-            due = float(c.get("send_ts", 0)) - lead <= now
+            due = float(c.get("send_ts", 0)) - command_prestage(c, lead) <= now
             stale = (
                 status == "sending"
                 and now - int(c.get("claimed_at", 0)) > STALE_SENDING_SECONDS
@@ -189,29 +245,141 @@ def _set_status(command_id, status, path=None, **extra):
     update(mut, path)
 
 
-# How early (seconds) to claim a command and run the open+confirm steps before
-# its send moment, so only the final fast launch request remains to time. Must
-# comfortably exceed the open+confirm round-trips.
-PRESTAGE_SECONDS = 15
-# A command legitimately sits in 'sending' only for the brief pre-stage + launch
-# window (a few seconds beyond PRESTAGE_SECONDS). Past this many seconds it must
-# be a leftover from a crashed launch, so claim_due may reclaim and retry it.
-STALE_SENDING_SECONDS = 120
-# Compensation (seconds) for the launch request's own one-way latency: fire this
-# much before the computed launch moment so troops actually leave on time. Tune
-# to roughly your ping to the game server (observed near-zero on a fast host, so
-# 0.0 lands on target; raise it if attacks land late, lower if they land early).
-NETWORK_LEAD = 0.0
-# Human-pacing gap (seconds) inserted BETWEEN the open and confirm prep steps of a
-# timed send. Timed sends run on a priority_mode wrapper, which strips the normal
-# 3-7s pacing so the final launch can fire instantly; without this, open+confirm
-# would hit the server back-to-back with only network latency between them - an
-# unnatural signature bot detection watches for on the (heavily-scrutinised)
-# attack path. This gap runs entirely inside the pre-stage window, well before the
-# launch, so it NEVER affects arrival accuracy - only the launch request is
-# time-critical. Keep the max comfortably under PRESTAGE_SECONDS.
-PREP_JITTER_MIN = 0.4
-PREP_JITTER_MAX = 1.8
+
+
+def has_all(units):
+    """True when any unit count is the literal "all"."""
+    return any(str(n).strip().lower() == "all" for n in (units or {}).values())
+
+
+def resolve_all_units(units, home):
+    """Replace every "all" with what `home` says is actually standing there.
+
+    `home` is a {unit: count} reading of the village - the rally point's own
+    numbers at send time, or the bot's last snapshot when this is only building
+    a preview. Unit counts typed as numbers are left exactly as they are: the
+    user asked for that many, and being short is the rally point's call to make.
+    """
+    home = home or {}
+    out = {}
+    for unit, count in (units or {}).items():
+        if str(count).strip().lower() == "all":
+            try:
+                count = int(home.get(unit, 0) or 0)
+            except (TypeError, ValueError):
+                count = 0
+        else:
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                continue
+        if count > 0:
+            out[unit] = count
+    return out
+
+
+def fit_escort(escort, counts, followers):
+    """Shrink the per-wave escort to what the village can actually spare.
+
+    Only matters for a resolved-at-send-time train: the army that came home may
+    be smaller than it was when the command was queued, and a train that lands
+    with slightly thinner escorts still conquers - one that refuses to leave
+    does not. Returns (escort, notes).
+    """
+    escort, notes = dict(escort or {}), []
+    if followers <= 0:
+        return {}, notes
+    for unit, per_wave in sorted(escort.items()):
+        have = counts.get(unit, 0)
+        if per_wave * followers <= have:
+            continue
+        fits = have // followers
+        notes.append("escort trimmed to %d %s per wave (only %d home)"
+                     % (fits, unit, have))
+        if fits > 0:
+            escort[unit] = fits
+        else:
+            del escort[unit]
+    return escort, notes
+
+
+def split_train(units, mode="front", escort=None):
+    """Split one stack into a noble train: N waves, exactly one noble each.
+
+    A train exists because a village is only conquered when its loyalty is
+    driven below zero, which takes several nobles, and because each noble must
+    arrive in its own command. The waves land within a few hundred ms of each
+    other, so the defender cannot snipe the gap between them.
+
+    mode "front": the whole army rides with the first noble and every following
+    noble takes only `escort` (the classic 25-50 light cavalry). Hits hardest,
+    but a defender who snipes the first wave kills the stack.
+    mode "even": every wave gets an equal share (1/N) of the army, remainders
+    going to the first. Costs some punch, survives a snipe on any single wave.
+
+    Returns (waves, error). `units` must be plain numbers by this point - an
+    "all" entry is resolved against the rally point first (resolve_all_units),
+    at schedule time for the preview and again just before sending.
+    """
+    units = dict(units or {})
+    for unit, count in units.items():
+        if str(count).strip().lower() == "all":
+            return None, "'all' has to be resolved to a count before splitting"
+    counts = {}
+    for unit, count in units.items():
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            counts[unit] = count
+
+    nobles = counts.get("snob", 0)
+    if nobles < 2:
+        return None, "a noble train needs at least 2 nobles"
+
+    escort = {u: int(n) for u, n in (escort or {}).items()
+              if str(n).strip().isdigit() and int(n) > 0 and u != "snob"}
+
+    if mode == "even":
+        waves = []
+        for index in range(nobles):
+            wave = {"snob": 1}
+            for unit, count in counts.items():
+                if unit == "snob":
+                    continue
+                share = count // nobles
+                if index == 0:
+                    share += count % nobles  # remainder rides with the first
+                if share > 0:
+                    wave[unit] = share
+            waves.append(wave)
+        return waves, None
+
+    # Front-loaded: the followers take their escort out of the same stack, so
+    # the escort has to actually be in it.
+    followers = nobles - 1
+    for unit, per_wave in escort.items():
+        needed = per_wave * followers
+        if counts.get(unit, 0) < needed:
+            return None, ("not enough %s for the escort: %d in the stack, %d needed "
+                          "(%d per wave x %d following nobles)"
+                          % (unit, counts.get(unit, 0), needed, per_wave, followers))
+
+    first = {}
+    for unit, count in counts.items():
+        if unit == "snob":
+            first["snob"] = 1
+            continue
+        left = count - escort.get(unit, 0) * followers
+        if left > 0:
+            first[unit] = left
+    waves = [first]
+    for _ in range(followers):
+        wave = {"snob": 1}
+        wave.update(escort)
+        waves.append(wave)
+    return waves, None
 
 
 def prepare_command(wrapper, origin_id, x, y, units, support=False):
@@ -331,7 +499,8 @@ def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
     not by travel-time rounding. Returns (ok, message)."""
     confirm_data, duration, err = prepare_command(
         wrapper, command.get("origin_id"), command.get("target_x"),
-        command.get("target_y"), command.get("units") or {})
+        command.get("target_y"), command.get("units") or {},
+        support=bool(command.get("support")))
     if err:
         return False, err
 
@@ -348,8 +517,132 @@ def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
                            command.get("id"), -wait)
     ok, msg = fire_command(wrapper, command.get("origin_id"), confirm_data)
     if ok:
-        msg = "sent (server travel %ds)" % duration
+        msg = "%s sent (server travel %ds)" % (
+            "support" if command.get("support") else "attack", duration)
     return ok, msg
+
+
+def resolve_train_waves(wrapper, origin_id, units, spec, notes):
+    """Split a train against the village's troops as they stand right now.
+
+    Reads the rally point once (the same page prepare_command opens, so this is
+    one extra request per train) and divides that. The number of waves is what
+    was planned when the command was queued, capped by the nobles really there:
+    the pre-stage window was sized for that many waves, and a wave whose noble
+    is missing would only fail at the rally point anyway.
+
+    Returns (waves, error) and appends any adjustment to `notes`.
+    """
+    page = wrapper.get_url(
+        f"game.php?village={origin_id}&screen=place&target_type=coord")
+    if not page:
+        return None, "could not open the rally point to count troops"
+    home = Extractor.units_in_place(page)
+    if not home:
+        return None, "could not read the troops at home"
+
+    counts = resolve_all_units(units, home)
+    planned = int(spec.get("nobles") or 0)
+    budget = max(planned, int(spec.get("max_waves") or 0))
+    available = counts.get("snob", 0)
+    # A noble count typed as a number is a wish, not a fact - if that many are
+    # not standing here, sending the wave anyway just earns a rejection from the
+    # rally point. Cap on what the village actually holds.
+    at_home = int(home.get("snob", 0) or 0)
+    if at_home and available > at_home:
+        available = at_home
+    if available < 1:
+        return None, "no nobles at home when the train was due"
+    if budget and available > budget:
+        notes.append("%d nobles home, sending %d waves (the window was "
+                     "pre-staged for that many)" % (available, budget))
+        available = budget
+    elif planned and available < planned:
+        notes.append("%d wave%s instead of %d (only %d noble%s home)"
+                     % (available, "" if available == 1 else "s", planned,
+                        available, "" if available == 1 else "s"))
+    counts["snob"] = available
+    if available < 2:
+        notes.append("single noble left, sending it as one command")
+
+    escort, escort_notes = fit_escort(
+        spec.get("escort"), counts, available - 1)
+    notes.extend(escort_notes)
+
+    if available < 2:
+        # split_train needs two nobles to be a train; one noble is just a
+        # command, and the whole army rides with it either way.
+        return [counts], None
+    return split_train(counts, mode=spec.get("mode") or "front", escort=escort)
+
+
+def execute_timed_train(wrapper, command, network_lead=NETWORK_LEAD):
+    """Fire a noble train so the first wave LANDS at command['arrival_ts'].
+
+    Every wave is prepared up front (open + confirm, during the pre-stage
+    window), so when the launch moment comes only the bare launch requests are
+    left and the waves leave back-to-back - the gap between them is one request
+    round-trip, not a whole rally-point sequence.
+
+    Preparing a wave does not spend troops, and each wave is a disjoint slice of
+    what is home, so the confirms all pass and the launches still validate as
+    the earlier waves consume their share. Returns (ok, message).
+    """
+    waves = command.get("waves") or []
+    origin = command.get("origin_id")
+    x, y = command.get("target_x"), command.get("target_y")
+    notes = []
+
+    spec = command.get("train") or {}
+    if spec.get("dynamic"):
+        # The command was queued with "all": read the village now and split what
+        # is actually standing there, so troops that were out farming when this
+        # was scheduled still ride along - and troops that never came back do
+        # not make the whole train fail on a count that no longer exists.
+        waves, err = resolve_train_waves(
+            wrapper, origin, command.get("units") or {}, spec, notes)
+        if err:
+            return False, err
+
+    prepared, failed = [], []
+    for index, units in enumerate(waves):
+        confirm_data, duration, err = prepare_command(wrapper, origin, x, y, units)
+        if err:
+            if index == 0:
+                # The first wave carries the army (front-loaded) or an equal
+                # share of it; without it there is no train worth sending.
+                return False, "wave 1 could not be prepared: %s" % err
+            failed.append("wave %d: %s" % (index + 1, err))
+            continue
+        prepared.append((index, confirm_data, duration))
+
+    arrival = float(command.get("arrival_ts", 0))
+    duration = prepared[0][2]
+    if duration > 0 and arrival > 0:
+        wait = (arrival - duration - network_lead) - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        elif wait < -2:
+            logger.warning("Noble train %s launching %.1fs late",
+                           command.get("id"), -wait)
+
+    started = time.time()
+    sent, errors = [], list(failed)
+    for index, confirm_data, _duration in prepared:
+        ok, msg = fire_command(wrapper, origin, confirm_data)
+        if ok:
+            sent.append(index + 1)
+        else:
+            errors.append("wave %d: %s" % (index + 1, msg))
+    spread = int((time.time() - started) * 1000)
+
+    if not sent:
+        return False, "no wave left the village (%s)" % ("; ".join(errors) or "unknown")
+    message = "train sent: %d/%d waves over %dms (server travel %ds)" % (
+        len(sent), len(waves), spread, duration)
+    for detail in notes + errors:
+        message += " - %s" % detail
+    return True, message
 
 
 def run_due(wrapper, lead=PRESTAGE_SECONDS, network_lead=NETWORK_LEAD, path=None):
@@ -358,15 +651,20 @@ def run_due(wrapper, lead=PRESTAGE_SECONDS, network_lead=NETWORK_LEAD, path=None
     the precise moment, then marked sent/failed. Returns the number sent.
 
     Claimed commands are handled soonest-first; note they fire sequentially, so
-    several commands due within the same prestage window are not frame-accurate
-    relative to each other (fine for spaced-out commands, not noble trains)."""
+    two separately queued commands due within the same prestage window are not
+    frame-accurate relative to each other. Waves that must leave together belong
+    in one command's `waves` list, which is prepared up front and fired
+    back-to-back (see execute_timed_train) - that is how a noble train is sent."""
     sent = 0
     claimed = sorted(claim_due(path=path, lead=lead),
                      key=lambda c: float(c.get("send_ts", 0)))
     for c in claimed:
         cid = c.get("id")
         try:
-            ok, msg = execute_timed(wrapper, c, network_lead=network_lead)
+            if c.get("waves"):
+                ok, msg = execute_timed_train(wrapper, c, network_lead=network_lead)
+            else:
+                ok, msg = execute_timed(wrapper, c, network_lead=network_lead)
         except Exception as exc:  # never let one bad command kill the loop
             ok, msg = False, "exception: %s" % exc
         _set_status(cid, "sent" if ok else "failed", path=path,

@@ -161,6 +161,11 @@ class TWB:
     # Refresh it at most this often to avoid two extra full-page GETs every cycle
     # (cuts request volume and the bot-like request count).
     TROOP_MOVE_REFRESH_SECONDS = 900
+    # Rally-point troop templates belong to the player, not the village, and
+    # only change when the player edits one - but when they do, they want it in
+    # the dashboard's picker now, not next cycle. Cheap enough to re-read hourly
+    # (and the dashboard can expire this to pull an edit in straight away).
+    TEMPLATE_REFRESH_SECONDS = 3600
 
     def __init__(self):
         # Mutable state must live on the instance: main() retries a crash with
@@ -406,6 +411,7 @@ class TWB:
         # Cache account-wide "op pad" (moving) troops so the dashboard can split
         # away troops into support (in other villages) vs in transit.
         self.update_troop_movements()
+        self.update_troop_templates()
 
         return overview_page, config
 
@@ -468,13 +474,17 @@ class TWB:
             )
 
     def update_troop_movements(self):
-        """Cache account-wide troop locations the snapshot can't tell apart:
+        """Cache troop locations the per-village snapshot cannot tell apart:
         'op pad' (moving / in transit) and 'elders' (support stationed in other
         villages). Read straight from the game so the dashboard never has to
-        derive support from mismatched snapshots."""
+        derive support from mismatched snapshots.
+
+        The type=complete overview carries all of it in one page, per village,
+        so that is what we ask for; the older per-type pages are only a fallback
+        for when that table cannot be parsed."""
         if not self.found_villages:
             return
-        # Skip the two extra GETs while the cached split is still fresh; the
+        # Skip the extra GET while the cached split is still fresh; the
         # dashboard tolerates slightly stale movement data.
         existing = FileManager.load_json_file("cache/troops_moving.json")
         if existing and int(time.time()) - int(existing.get("when", 0) or 0) < self.TROOP_MOVE_REFRESH_SECONDS:
@@ -482,6 +492,26 @@ class TWB:
         vid = self.found_villages[0]
         base = f"game.php?village={vid}&screen=overview_villages&mode=units&type="
         try:
+            # page=-1 keeps every village on one page once the account outgrows
+            # the overview's default page size.
+            page = self.wrapper.get_url(base + "complete&page=-1")
+            by_village = Extractor.units_overview_complete(page) if page else {}
+            if by_village:
+                def total(key):
+                    out = {}
+                    for village in by_village.values():
+                        for unit, count in (village.get(key) or {}).items():
+                            out[unit] = out.get(unit, 0) + count
+                    return out
+
+                FileManager.save_json_file({
+                    "moving": total("moving"),
+                    "support": total("elsewhere"),
+                    "home": total("own"),
+                    "by_village": by_village,
+                    "when": int(time.time()),
+                }, "cache/troops_moving.json")
+                return
             mv = self.wrapper.get_url(base + "moving")
             sup = self.wrapper.get_url(base + "away")
             FileManager.save_json_file({
@@ -493,6 +523,31 @@ class TWB:
             # Non-critical: the dashboard falls back to lumped "away". Still log
             # at debug so a persistent parse/markup regression is visible.
             logging.getLogger("twb").debug("update_troop_movements failed: %s", exc)
+
+    def update_troop_templates(self):
+        """Cache the player's rally-point troop templates for the dashboard.
+
+        They are what the player already set up in-game ("OFF", "Fake", ...),
+        so the Attack tab can offer them instead of asking for the same unit
+        list to be typed again. Templates are account-wide and rarely edited,
+        hence the long refresh."""
+        if not self.found_villages:
+            return
+        existing = FileManager.load_json_file("cache/troop_templates.json")
+        if existing and int(time.time()) - int(existing.get("when", 0) or 0) < self.TEMPLATE_REFRESH_SECONDS:
+            return
+        vid = self.found_villages[0]
+        try:
+            page = self.wrapper.get_url(
+                f"game.php?village={vid}&screen=place&target_type=coord")
+            templates = Extractor.troop_templates(page) if page else {}
+            if templates:
+                FileManager.save_json_file(
+                    {"templates": templates, "when": int(time.time())},
+                    "cache/troop_templates.json")
+        except Exception as exc:
+            # Cosmetic feature: the dashboard just offers no templates.
+            logging.getLogger("twb").debug("update_troop_templates failed: %s", exc)
 
     def add_village(self, village_id, template=None):
         """
@@ -679,7 +734,7 @@ class TWB:
                 if now - last_prune > 3600:
                     attack_scheduler.prune()
                     last_prune = now
-                next_send = attack_scheduler.next_send_ts()
+                next_send = attack_scheduler.next_send_ts(lead=prestage)
                 if next_send is None:
                     time.sleep(2)
                     continue
@@ -1054,6 +1109,14 @@ class TWB:
 
                     village.troop_reserve = self.troop_reserve.get(
                         str(village.village_id), {})
+                    # The recruiter counts troops standing in other villages
+                    # from this cache, and a full cycle takes far longer than
+                    # its refresh window - so top it up here rather than once
+                    # per cycle. Costs nothing while the reading is still fresh.
+                    self.update_troop_movements()
+                    # Same reason: a template edited in-game should reach the
+                    # dashboard within minutes, not at the next cycle start.
+                    self.update_troop_templates()
                     village.run(config=config)
                     # Each village is minutes of work; stamp as we go so the
                     # watchdog sees progress instead of one silent gap.

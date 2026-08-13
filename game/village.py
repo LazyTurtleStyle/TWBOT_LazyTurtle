@@ -1163,6 +1163,7 @@ class Village:
             "buidling_levels": self.builder.levels,
             "building_queue": self.builder.queue,
             "active_building_queue": getattr(self.builder, "queue_count_ingame", 0),
+            "building_queue_ingame": getattr(self.builder, "queue_ingame", []) or [],
             "troops": self.units.total_troops,
             "under_attack": self.def_man.under_attack,
             # Exact capacity/pop/production straight from the game (per-hour for

@@ -156,7 +156,7 @@
 		<div class="panel">
 			<div class="panel-body" style="padding:0">
 				<table class="tw">
-					<thead><tr><th>Village</th><th class="num">Points</th><th>Resources <span class="faint">w/c/i</span></th><th>Build queue</th><th>Status</th></tr></thead>
+					<thead><tr><th>Village</th><th class="num">Points</th><th>Resources <span class="faint">/ storage</span></th><th>HQ queue <span class="faint">in game</span></th><th>Status</th></tr></thead>
 					<tbody>
 					{% for v in overview.villages %}
 						{% set is_inc = v.id|string in (overview.active_incoming|map(attribute='id')|map('string')|list) %}
@@ -164,10 +164,35 @@
 							<td><a class="vlink" href="village?id={{ v.id }}">{{ v.name }}</a>
 								{% if v.location %}<span class="coord">{{ v.location[0] }}|{{ v.location[1] }}</span>{% endif %}</td>
 							<td class="num">{{ v.points|comma if v.points else '—' }}</td>
-							<td class="mono" style="font-size:12px">{{ v.resources.wood|comma }}&middot;{{ v.resources.stone|comma }}&middot;{{ v.resources.iron|comma }}</td>
-							<td>{% if v.queue_preview %}<span class="faint">{{ v.queue_preview[0] }}</span>
-								{% if v.queue_len > 1 %}<span class="badge dim">+{{ v.queue_len - 1 }}</span>{% endif %}
-								{% else %}<span class="badge dim">empty</span>{% endif %}</td>
+							<td style="white-space:nowrap">
+								{% for key, label in [('wood','Wood'), ('stone','Clay'), ('iron','Iron')] %}
+								<span class="res" title="{{ label }}: {{ v.resources[key]|comma }}">
+									<img src="/static/images/{{ key }}.png" alt="{{ label }}">
+									<span class="rv">{{ v.resources[key]|kshort }}</span>
+								</span>
+								{% endfor %}
+								{% if v.storage_pct is not none %}
+								<div class="flex" style="gap:6px;align-items:center;margin-top:5px"
+									title="Fullest resource is at {{ v.storage_pct }}% of a {{ v.storage_max|comma }} warehouse">
+									<div class="bar-track"><div class="bar-fill {{ 'moss' if v.storage_pct < 85 }}" style="width:{{ v.storage_pct }}%"></div></div>
+									<span class="rv faint">{{ v.storage_pct }}%</span>
+								</div>
+								{% endif %}
+							</td>
+							<td>{% if v.queue_ingame %}
+								{% set job = v.queue_ingame[0] %}
+								<span class="hqq">
+									{% for j in v.queue_ingame %}
+									<span class="bq" title="{{ j.label }}{% if j.ready_at %} &middot; ready {{ j.ready_at|ts }}{% endif %}">
+										<img src="/static/images/buildings/{{ j.building }}.webp" alt="{{ j.name }}" onerror="this.style.display='none'">
+										{% if j.level %}<i class="lv">{{ j.level }}</i>{% endif %}
+									</span>
+									{% endfor %}
+									{% if job.ready_at %}<span class="eta build-eta" data-ready="{{ job.ready_at }}"
+										title="until the first job finishes">{{ job.eta|dur }}</span>{% endif %}
+								</span>
+								{% else %}<span class="badge dim"
+									title="nothing queued in the HQ{% if v.queue_len %} &middot; the bot still plans {{ v.queue_len }} building(s) here{% endif %}">idle</span>{% endif %}</td>
 							<td>{% if is_inc %}<span class="badge blood">incoming</span>
 								{% else %}<span class="badge moss">clear</span>{% endif %}</td>
 						</tr>
@@ -179,9 +204,12 @@
 			</div>
 			<div class="panel-head" style="border-top:1px solid var(--line-soft);border-bottom:0">
 				<span class="faint" style="font-size:12px">Stored, all villages:
-					<span class="mono">{{ overview.summary.resources.wood|comma }}</span> wood ·
-					<span class="mono">{{ overview.summary.resources.stone|comma }}</span> clay ·
-					<span class="mono">{{ overview.summary.resources.iron|comma }}</span> iron</span>
+					{% for key, label in [('wood','Wood'), ('stone','Clay'), ('iron','Iron')] %}
+					<span class="res" title="{{ label }}: {{ overview.summary.resources[key]|comma }}">
+						<img src="/static/images/{{ key }}.png" alt="{{ label }}">
+						<span class="rv">{{ overview.summary.resources[key]|kshort }}</span>
+					</span>
+					{% endfor %}</span>
 				<a class="btn btn-sm" href="/villages">View all villages</a>
 			</div>
 		</div>
@@ -248,6 +276,9 @@
 					placeholder="Paste your full browser cookie string here">{{ session.raw }}</textarea>
 				<div class="flex" style="margin-top:8px">
 					<button class="btn btn-ember btn-sm" onclick="set_session_data()">Update session</button>
+					<button class="btn btn-sm" id="send_session_btn" style="display:none;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-dim)"
+						onclick="send_session_ext()"
+						title="Read this browser's own TribalWars cookies and hand them to the bot (needs the TWB Session Restore extension)">Use this browser's session</button>
 					<span id="session_status" class="faint"></span>
 				</div>
 				<small class="faint" style="display:block; margin-top:6px">Saving to world <strong>{{ active_world or 'default' }}</strong> &mdash; check the world switcher matches the bot you're refreshing. Applies on that bot's next start or re-auth.</small>
@@ -295,6 +326,13 @@ setInterval(function() {
 		var left = arrival - now;
 		el.textContent = left <= 0 ? 'landed' : fmtDur(left);
 	});
+	// Same ticker for the HQ build queue, which finishes rather than lands.
+	document.querySelectorAll('.build-eta').forEach(function(el) {
+		var ready = parseInt(el.getAttribute('data-ready'), 10);
+		if (!ready) return;
+		var left = ready - now;
+		el.textContent = left <= 0 ? 'done' : fmtDur(left);
+	});
 }, 1000);
 
 function presetTag(commandId, value) {
@@ -330,6 +368,30 @@ function open_game_ext() {
 		window.open('/app/tw-open', '_blank');
 	}
 }
+// Only useful with the extension installed - the sid is HttpOnly, so a page
+// script can never read it itself.
+function show_send_session_btn() {
+	if (!document.documentElement.hasAttribute('data-twb-ext')) return;
+	var btn = document.getElementById('send_session_btn');
+	if (btn) btn.style.display = '';
+}
+show_send_session_btn();
+function send_session_ext() {
+	var status = $('#session_status');
+	status.removeClass('text-success text-danger').text('Reading this browser\'s cookies...');
+	window.postMessage({type: 'twb-send-session', world: {{ (active_world or "")|tojson }}}, '*');
+}
+window.addEventListener('message', function(ev) {
+	if (ev.source !== window || !ev.data) return;
+	if (ev.data.type === 'twb-ext-ready') { show_send_session_btn(); return; }
+	if (ev.data.type !== 'twb-send-session-result') return;
+	var status = $('#session_status');
+	if (ev.data.ok) {
+		status.text('Saved ✓ from ' + ev.data.host + (ev.data.portal ? ' (portal cookies too)' : '') + ' - a waiting bot picks it up on its next check');
+	} else {
+		status.text(ev.data.error || 'Could not read a session from this browser');
+	}
+});
 function set_session_data() {
 	var raw = $('#session_data').val();
 	var status = $('#session_status');

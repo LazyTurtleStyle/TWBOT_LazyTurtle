@@ -20,6 +20,8 @@
 	<li class="nav-item"><a class="nav-link" href="#scheduler" data-pane="scheduler">Scheduler
 		{% if pending_count %}<span class="badge badge-danger">{{ pending_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#planner" data-pane="planner">Planner</a></li>
+	<li class="nav-item"><a class="nav-link" href="#import" data-pane="import">Import plan
+		<span class="badge badge-warning">alpha</span></a></li>
 	{% set noble_armed = noble.jobs|selectattr('status', 'equalto', 'armed')|list|length %}
 	<li class="nav-item"><a class="nav-link" href="#noble" data-pane="noble">Noble barb
 		<span class="badge badge-warning">alpha</span>
@@ -122,10 +124,51 @@
 						<span class="text-muted">read in this browser's timezone</span></label>
 					<input id="s_arrival" type="datetime-local" step="1" class="form-control form-control-sm" />
 				</div>
-				<label class="small mb-1">Units to send<span class="text-muted">, type a number, or <code>all</code> to send every one home at send time</span></label>
+				<label class="small mb-1">Units to send<span class="text-muted">, type a number, or <code>all</code> to send every one home at send time</span>
+					<a href="#" id="s_fill_home" class="ml-1"
+						title="Copy this village's current at-home counts into the fields. A train needs exact numbers, so this is how you send everything.">fill from home</a></label>
+				<div class="form-row align-items-end" id="s_template_row" style="display:none">
+					<div class="form-group col mb-2">
+						<label class="small mb-1">Fill from one of your in-game troop templates</label>
+						<select id="s_template" class="form-control form-control-sm"></select>
+					</div>
+					<div class="form-group col-auto mb-2">
+						<button id="s_template_fill" class="btn btn-outline-secondary btn-sm">Fill</button>
+					</div>
+				</div>
 				<div id="s_units" class="form-row"></div>
 				<div id="s_avail" class="small text-muted mb-2"></div>
+
+				<div class="form-group mb-2">
+					<label class="small mb-1">
+						<input id="s_train" type="checkbox"> Send as a <strong>noble train</strong>
+						<span class="text-muted">, one noble per wave, all fired back-to-back</span>
+					</label>
+					<div id="s_train_opts" style="display:none">
+						<select id="s_train_mode" class="form-control form-control-sm mb-2">
+							<option value="front">Front-loaded — whole army with the first noble</option>
+							<option value="even">Even split — every wave gets 1/N of the army</option>
+						</select>
+						<div id="s_escort_row" class="form-row align-items-end">
+							<div class="form-group col mb-2">
+								<label class="small mb-1">Escort per following noble</label>
+								<select id="s_escort_unit" class="form-control form-control-sm"></select>
+							</div>
+							<div class="form-group col-4 mb-2">
+								<label class="small mb-1">Amount</label>
+								<input id="s_escort_n" type="number" min="0" value="50"
+									class="form-control form-control-sm">
+							</div>
+						</div>
+						<p class="small text-muted mb-1">
+							The escort comes out of the same stack. Front-loading hits hardest;
+							an even split survives a snipe on any single wave.
+						</p>
+					</div>
+				</div>
+
 				<div id="s_preview" class="small mb-2"></div>
+				<div id="s_waves" class="small mb-2"></div>
 				<button id="s_submit" class="btn btn-primary btn-sm">Schedule attack</button>
 				<div id="s_msg" class="small mt-2"></div>
 			</div>
@@ -148,7 +191,21 @@
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
 								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
 							<td><small>{{ c.origin_name }}</small></td>
-							<td><small>{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</small></td>
+							<td><small>
+								{% if c.waves %}
+								<span class="badge badge-dark">{{ c.waves|length }}-noble train</span>
+								<span class="text-muted">{{ 'front-loaded' if c.train and c.train.mode == 'front' else 'even split' }}</span>
+								{% if c.train and c.train.dynamic and c.status == 'pending' %}
+								<span class="badge badge-info"
+									title="Queued with 'all', so this is counted from the newest troop snapshot and counted again off the rally point just before sending. It can grow to {{ c.train.max_waves }} waves.">recounted at send</span>
+								{% endif %}
+								{% for w in c.waves %}
+								<div><span class="text-muted">W{{ loop.index }}</span>
+									{% for u, n in w.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+								{% endfor %}
+								{% else %}
+								{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
+								{% endif %}</small></td>
 							<td class="text-right">{{ c.arrival_ts|ts }}</td>
 							<td class="text-right">
 								{% if c.status == 'pending' %}<span class="sched-eta" data-send="{{ c.send_ts }}">…</span>
@@ -227,6 +284,72 @@
 	</div>
 </div>
 </div><!-- /pane-planner -->
+
+<!-- ---------- Import: a plan built elsewhere (devilicious.dev etc) ---------- -->
+<div id="pane-import" style="display:none">
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Import an attack plan,</strong>
+		<small class="text-muted">paste the export from devilicious.dev (or the same BB-code rows)</small></div>
+	<div class="card-body">
+		<p class="small text-muted mb-2">
+			One command per line:
+			<code>origin-&gt;target, distance, unit, type, arrival, travel, send, count</code>.
+			Times are read on this machine's clock. A plan never says which troops to send,
+			so pick those below — nothing is queued until you press the button.
+		</p>
+		<textarea id="p_text" class="form-control form-control-sm" rows="5"
+			placeholder="569|444->564|454,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1"></textarea>
+		<div class="form-row align-items-end mt-2">
+			<div class="form-group col-auto mb-2">
+				<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
+			</div>
+			<div class="form-group col-auto mb-2">
+				<label class="small mb-1">Noble rows</label>
+				<select id="p_mode" class="form-control form-control-sm">
+					<option value="front">Front-loaded train</option>
+					<option value="even">Even-split train</option>
+				</select>
+			</div>
+			<div class="form-group col-auto mb-2">
+				<label class="small mb-1">Escort each</label>
+				<select id="p_escort_unit" class="form-control form-control-sm"></select>
+			</div>
+			<div class="form-group col-2 mb-2">
+				<label class="small mb-1">Amount</label>
+				<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
+			</div>
+			<div class="form-group col-auto mb-2" id="p_template_wrap" style="display:none">
+				<label class="small mb-1">Troop template</label>
+				<div class="input-group input-group-sm">
+					<select id="p_template" class="form-control form-control-sm"></select>
+					<div class="input-group-append">
+						<button id="p_template_fill" class="btn btn-outline-secondary btn-sm"
+							title="Put this template's units into every ticked row. Noble rows keep their noble count.">Apply to ticked</button>
+						<button id="p_template_reload" class="btn btn-outline-secondary btn-sm"
+							title="Re-read your templates from the game (after editing one in-game). The bot picks it up within a few minutes.">↻</button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div id="p_summary" class="small mb-2"></div>
+	</div>
+	<div class="table-responsive">
+		<table class="table table-sm planner-table mb-0" id="p_table" style="display:none">
+			<thead><tr>
+				<th><input type="checkbox" id="p_all" title="select all queueable rows"></th>
+				<th>Origin</th><th>Target</th><th>Command</th>
+				<th class="text-right">Lands</th><th class="text-right">Leaves</th>
+				<th>Troops to send</th>
+			</tr></thead>
+			<tbody id="p_rows"></tbody>
+		</table>
+	</div>
+	<div class="card-body py-2">
+		<button id="p_queue" class="btn btn-primary btn-sm" disabled>Queue selected commands</button>
+		<span id="p_result" class="small ml-2"></span>
+	</div>
+</div>
+</div><!-- /pane-import -->
 
 <!-- ---------- Noble barb: auto-conquer a barbarian village (alpha) ---------- -->
 <div id="pane-noble" style="display:none">
@@ -336,6 +459,13 @@ const SPEEDS = {{ plan.speeds|tojson }};
 const WORLD_SPEED = {{ plan.world_speed }} || 1;
 const UNIT_SPEED = {{ plan.unit_speed }} || 1;
 const UNITS = {{ plan.units|tojson }};
+/* The app endpoints resolve the world from the navbar cookie, which a client
+   that arrived by ?world=... does not have - so name it on the call too. */
+const WORLD = {{ (active_world or '')|tojson }};
+function appUrl(path, query) {
+	const parts = (query ? [query] : []).concat(WORLD ? ['world=' + encodeURIComponent(WORLD)] : []);
+	return parts.length ? path + '?' + parts.join('&') : path;
+}
 /* The game's internal unit codes are cryptic in places - show friendly
    names in forms (ids/payloads keep the internal code). */
 const UNIT_NAMES = {
@@ -345,7 +475,7 @@ const UNIT_NAMES = {
 function unitLabel(u) { return UNIT_NAMES[u] || u; }
 
 /* ---------- tabs (hash-addressable so a reload stays on the same pane) ---------- */
-const PANES = ['overview', 'scheduler', 'planner', 'noble'];
+const PANES = ['overview', 'scheduler', 'planner', 'import', 'noble'];
 function showPane(name) {
 	document.querySelectorAll('#atk-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -362,6 +492,13 @@ document.querySelectorAll('#atk-tabs .nav-link').forEach(function(a) {
 	});
 });
 if (PANES.indexOf(location.hash.slice(1)) > 0) showPane(location.hash.slice(1));
+/* A hash typed in the address bar (or arrived at from another page) does not
+   reload this document, so follow it too - otherwise the tab bar and the
+   visible pane disagree. */
+window.addEventListener('hashchange', function() {
+	const name = location.hash.slice(1);
+	if (PANES.indexOf(name) >= 0) showPane(name);
+});
 
 function pad(n, w) { return String(n).padStart(w, '0'); }
 function fmtDur(sec) {
@@ -502,13 +639,27 @@ function buildUnitInputs() {
 		' <a href="#" class="unit-all-link" data-u="'+u+'" title="Send every '+u+' that is home at send time, even if fewer than now">all</a></label>'+
 		'<input id="su_'+u+'" type="text" inputmode="numeric" class="form-control form-control-sm" placeholder="0"></div>'
 	).join('');
-	UNITS.forEach(u => document.getElementById('su_'+u).addEventListener('input', schedPreview));
+	UNITS.forEach(u => document.getElementById('su_'+u).addEventListener('input', function() {
+		schedPreview(); wavePreview();
+	}));
 	wrap.querySelectorAll('.unit-all-link').forEach(a => a.addEventListener('click', function(e) {
 		e.preventDefault();
 		const el = document.getElementById('su_'+this.getAttribute('data-u'));
 		el.value = el.value.trim().toLowerCase() === 'all' ? '' : 'all';
-		schedPreview();
+		schedPreview(); wavePreview();
 	}));
+}
+/* A train cannot use "all" - the split has to know the numbers - so this fills
+   the fields from the village's last troop snapshot instead. */
+function fillFromHome() {
+	const opt = originOpt();
+	let troops = {};
+	try { troops = JSON.parse((opt && opt.getAttribute('data-troops')) || '{}'); } catch(e) {}
+	UNITS.forEach(u => {
+		const el = document.getElementById('su_'+u);
+		if (el) el.value = troops[u] > 0 ? troops[u] : '';
+	});
+	schedPreview(); wavePreview();
 }
 function updateAvail() {
 	const opt = originOpt();
@@ -541,9 +692,75 @@ function copyPlanTarget() {
 	document.getElementById('s_ty').value = document.getElementById('ty').value;
 	schedPreview();
 }
+
+/* ---------- Noble train ---------- */
+function trainSettings() {
+	if (!document.getElementById('s_train').checked) return null;
+	const mode = document.getElementById('s_train_mode').value;
+	const escort = {};
+	if (mode === 'front') {
+		const u = document.getElementById('s_escort_unit').value;
+		const n = parseInt(document.getElementById('s_escort_n').value, 10);
+		if (u && n > 0) escort[u] = n;
+	}
+	return {mode: mode, escort: escort};
+}
+function schedBody(dry) {
+	const opt = originOpt();
+	const av = document.getElementById('s_arrival').value;
+	return {
+		origin_id: opt && opt.value,
+		target_x: parseInt(document.getElementById('s_tx').value, 10),
+		target_y: parseInt(document.getElementById('s_ty').value, 10),
+		arrival: av ? Math.floor(new Date(av).getTime() / 1000) : null,
+		units: selectedUnits(),
+		train: trainSettings(),
+		dry_run: !!dry,
+	};
+}
+function wavesHtml(entry) {
+	if (!entry || !entry.waves) return '';
+	const rows = entry.waves.map((w, i) =>
+		'<div><span class="text-muted">Wave '+(i+1)+'</span> '+
+		Object.keys(w).map(u => unitLabel(u)+'&nbsp;'+w[u]).join(', ')+'</div>').join('');
+	const live = entry.train && entry.train.dynamic
+		? '<div class="text-muted">Counts shown are from the last snapshot. Because you used '+
+		  '<code>all</code>, the bot re-reads the village just before sending and splits '+
+		  'whatever is home then — one wave per noble, up to '+
+		  (entry.train.max_waves || entry.waves.length)+'.</div>'
+		: '';
+	return '<div class="mt-1"><strong>'+entry.waves.length+' waves</strong>, all leaving together:'+
+		rows+live+'</div>';
+}
+/* The split lives on the server, so the preview asks for it rather than
+   re-implementing it here and drifting out of sync. */
+let waveTimer = null;
+function wavePreview() {
+	const box = document.getElementById('s_waves');
+	if (!document.getElementById('s_train').checked) { box.innerHTML = ''; return; }
+	const body = schedBody(true);
+	if (!body.origin_id || !body.arrival || isNaN(body.target_x) || isNaN(body.target_y)
+		|| Object.keys(body.units).length === 0) { box.innerHTML = ''; return; }
+	clearTimeout(waveTimer);
+	waveTimer = setTimeout(function() {
+		fetch(appUrl('/app/attack/schedule'), {
+			method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+		}).then(r => r.json()).then(d => {
+			box.innerHTML = d.ok ? wavesHtml(d.entry)
+				: '<span class="text-danger">'+(d.error || 'cannot build the train')+'</span>';
+		}).catch(() => { box.innerHTML = ''; });
+	}, 300);
+}
+function toggleTrain() {
+	const on = document.getElementById('s_train').checked;
+	document.getElementById('s_train_opts').style.display = on ? '' : 'none';
+	document.getElementById('s_escort_row').style.display =
+		document.getElementById('s_train_mode').value === 'front' ? '' : 'none';
+	wavePreview();
+}
 function cancelSched(id) {
 	if (!confirm('Cancel this scheduled attack?')) return;
-	fetch('/app/attack/schedule/cancel?id='+encodeURIComponent(id))
+	fetch(appUrl('/app/attack/schedule/cancel', 'id='+encodeURIComponent(id)))
 		.then(r => r.json()).then(() => location.reload());
 }
 document.getElementById('s_submit').addEventListener('click', function() {
@@ -554,27 +771,275 @@ document.getElementById('s_submit').addEventListener('click', function() {
 	if (!opt || !opt.value) { msg.innerHTML = '<span class="text-danger">Pick an origin.</span>'; return; }
 	if (!av) { msg.innerHTML = '<span class="text-danger">Pick an arrival time.</span>'; return; }
 	if (Object.keys(units).length === 0) { msg.innerHTML = '<span class="text-danger">Enter at least one unit.</span>'; return; }
-	const body = {
-		origin_id: opt.value,
-		target_x: parseInt(document.getElementById('s_tx').value, 10),
-		target_y: parseInt(document.getElementById('s_ty').value, 10),
-		arrival: Math.floor(new Date(av).getTime() / 1000),
-		units: units,
-	};
+	const body = schedBody(false);
 	msg.textContent = 'Scheduling…';
-	fetch('/app/attack/schedule', {
+	fetch(appUrl('/app/attack/schedule'), {
 		method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
 	}).then(r => r.json()).then(d => {
 		if (!d.ok) { msg.innerHTML = '<span class="text-danger">'+(d.error||'failed')+'</span>'; return; }
-		msg.innerHTML = '<span class="text-success">Scheduled.</span>';
-		setTimeout(() => { location.hash = '#scheduler'; location.reload(); }, 900);
+		const notes = (d.entry && d.entry.notes) || [];
+		msg.innerHTML = '<span class="text-success">Scheduled.</span>' +
+			notes.map(n => '<div class="text-warning">'+n+'</div>').join('');
+		setTimeout(() => { location.hash = '#scheduler'; location.reload(); }, notes.length ? 4000 : 900);
 	}).catch(e => { msg.innerHTML = '<span class="text-danger">Error: '+e+'</span>'; });
 });
 
-document.getElementById('s_origin').addEventListener('change', function() { updateAvail(); schedPreview(); });
-['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', schedPreview));
+document.getElementById('s_origin').addEventListener('change', function() { updateAvail(); schedPreview(); wavePreview(); });
+['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', function() { schedPreview(); wavePreview(); }));
+document.getElementById('s_fill_home').addEventListener('click', function(e) { e.preventDefault(); fillFromHome(); });
+document.getElementById('s_train').addEventListener('change', toggleTrain);
+document.getElementById('s_train_mode').addEventListener('change', toggleTrain);
+['s_escort_unit','s_escort_n'].forEach(id => document.getElementById(id).addEventListener('input', wavePreview));
+document.getElementById('s_escort_unit').innerHTML = UNITS.filter(u => u !== 'snob')
+	.map(u => '<option value="'+u+'"'+(u === 'light' ? ' selected' : '')+'>'+unitLabel(u)+'</option>').join('');
 buildUnitInputs();
 updateAvail();
+
+/* ---------- Troop templates the player made in-game ---------- */
+const TEMPLATES = {{ plan.templates|tojson }};
+function templateOptions(selectedId) {
+	return Object.keys(TEMPLATES).map(id =>
+		'<option value="'+id+'"'+(id === selectedId ? ' selected' : '')+'>'+
+		TEMPLATES[id].name+'</option>').join('');
+}
+function initTemplates() {
+	const ids = Object.keys(TEMPLATES);
+	if (!ids.length) return;  // the bot has not read them yet
+	['s_template', 'p_template'].forEach(id => {
+		const el = document.getElementById(id);
+		if (el) el.innerHTML = templateOptions();
+	});
+	const row = document.getElementById('s_template_row');
+	if (row) row.style.display = '';
+	const wrap = document.getElementById('p_template_wrap');
+	if (wrap) wrap.style.display = '';
+}
+document.getElementById('s_template_fill').addEventListener('click', function(e) {
+	e.preventDefault();
+	const tpl = TEMPLATES[document.getElementById('s_template').value];
+	if (!tpl) return;
+	UNITS.forEach(u => {
+		const el = document.getElementById('su_'+u);
+		if (!el) return;
+		// A train's noble count is the wave count, so a template that says
+		// nothing about nobles must not wipe it.
+		if (u === 'snob' && tpl.units.snob === undefined) return;
+		el.value = tpl.units[u] === undefined ? '' : tpl.units[u];
+	});
+	schedPreview(); wavePreview();
+});
+initTemplates();
+
+/* ---------- Import a plan built elsewhere ---------- */
+document.getElementById('p_escort_unit').innerHTML = UNITS.filter(u => u !== 'snob')
+	.map(u => '<option value="'+u+'"'+(u === 'light' ? ' selected' : '')+'>'+unitLabel(u)+'</option>').join('');
+
+function unitsToText(units) {
+	return Object.keys(units || {}).map(u => u + ':' + units[u]).join(', ');
+}
+function textToUnits(text) {
+	const out = {};
+	(text || '').split(',').forEach(part => {
+		const bits = part.split(':');
+		if (bits.length !== 2) return;
+		const unit = bits[0].trim().toLowerCase(), value = bits[1].trim().toLowerCase();
+		if (!unit) return;
+		if (value === 'all') { out[unit] = 'all'; return; }
+		const n = parseInt(value, 10);
+		if (n > 0) out[unit] = n;
+	});
+	return out;
+}
+function planTrainSettings() {
+	const escort = {};
+	const u = document.getElementById('p_escort_unit').value;
+	const n = parseInt(document.getElementById('p_escort_n').value, 10);
+	if (u && n > 0) escort[u] = n;
+	return {mode: document.getElementById('p_mode').value, escort: escort};
+}
+let PLAN_ROWS = [];
+function renderPlan(plan) {
+	PLAN_ROWS = plan.rows || [];
+	const body = document.getElementById('p_rows');
+	const summary = document.getElementById('p_summary');
+	document.getElementById('p_table').style.display = PLAN_ROWS.length ? '' : 'none';
+	document.getElementById('p_queue').disabled = !plan.queueable;
+	const ticked = PLAN_ROWS.filter(r => r.selected).length;
+	let note = '<strong>'+PLAN_ROWS.length+'</strong> command(s) read, <strong>'+
+		ticked+'</strong> ticked'+
+		(plan.queueable > ticked ? ' ('+(plan.queueable - ticked)+' more sendable but flagged)' : '')+'.';
+	if (PLAN_ROWS.length && !ticked) {
+		const why = {};
+		PLAN_ROWS.forEach(r => (r.problems||[]).concat(r.warnings||[]).forEach(t => { why[t] = (why[t]||0)+1; }));
+		const reasons = Object.keys(why);
+		note += reasons.length
+			? ' <span class="text-danger">Nothing is ticked: '+reasons.join('; ')+'</span>'
+			: ' <span class="text-warning">Nothing is ticked — tick the rows you want to queue.</span>';
+	}
+	if (plan.skipped && plan.skipped.length) {
+		note += ' <span class="text-warning">'+plan.skipped.length+' line(s) skipped: '+
+			plan.skipped.map(s => 'line '+s.line+' ('+s.reason+')').join('; ')+'</span>';
+	}
+	if (Math.abs(plan.clock_offset) > 5) {
+		note += ' <span class="text-danger">This machine\'s clock is '+plan.clock_offset+
+			's off the game server, so every time in the plan lands off by that much.</span>';
+	}
+	summary.innerHTML = note;
+	body.innerHTML = PLAN_ROWS.map((r, i) => {
+		const lands = new Date(r.arrival_ts * 1000), leaves = r.send_ts ? new Date(r.send_ts * 1000) : null;
+		const delta = r.travel_delta;
+		return '<tr class="'+(r.ok ? '' : 'text-muted')+'">'+
+			'<td><input type="checkbox" class="p-pick" data-i="'+i+'"'+
+				(r.selected ? ' checked' : '')+(r.ok ? '' : ' disabled')+'></td>'+
+			'<td><small>'+(r.origin_name || '<span class="text-danger">'+r.origin.join('|')+'</span>')+
+				'<span class="coord d-block">'+r.origin.join('|')+'</span></small></td>'+
+			'<td><small>'+(r.target_name || '')+'<span class="coord d-block">'+r.target.join('|')+'</span></small></td>'+
+			'<td><small>'+(r.kind === 'support'
+				? '<span class="badge badge-info">support</span>' : 'attack')+' · '+unitLabel(r.unit)+
+				(r.train ? ' <span class="badge badge-dark">'+r.count+'-noble train</span>' : '')+
+				(r.ok ? '' : ' <span class="badge badge-danger">blocked</span>')+
+				(r.ok && (r.warnings||[]).length ? ' <span class="badge badge-warning">check this</span>' : '')+
+				((r.problems||[]).concat(r.warnings||[]).map(t =>
+					'<div class="'+(r.ok ? 'text-warning' : 'text-danger')+'">'+t+'</div>').join(''))+
+				'</small></td>'+
+			'<td class="text-right"><small>'+fmtClock(lands)+'</small></td>'+
+			'<td class="text-right p-leaves" data-i="'+i+'"><small>'+(leaves ? fmtClock(leaves) : '—')+
+				(delta ? '<span class="d-block text-warning">'+(delta > 0 ? '+' : '')+delta+'s vs plan</span>' : '')+'</small></td>'+
+			'<td><input type="text" class="form-control form-control-sm p-units" data-i="'+i+'" '+
+				'value="'+unitsToText(r.units)+'" oninput="refreshLeaves('+i+')">'+
+				(Object.keys(TEMPLATES).length
+					? '<select class="form-control form-control-sm mt-1 p-tpl" data-i="'+i+'" '+
+					  'onchange="applyTemplateToRow('+i+', this.value)">'+
+					  '<option value="">use a troop template…</option>'+
+					  templateOptions(matchTemplate(r))+'</select>'
+					: '')+'</td>'+
+		'</tr>';
+	}).join('');
+	// A template the row pre-selected has to fill that row's troops too, or the
+	// dropdown would claim something the box does not say.
+	PLAN_ROWS.forEach((r, i) => {
+		const picked = matchTemplate(r);
+		if (picked) applyTemplateToRow(i, picked);
+	});
+}
+/* The plan's send column assumes the unit it paced on. Once you change a row's
+   troops - adding rams to an axe-paced nuke, say - the command has to leave
+   earlier, so the column follows the units rather than the plan. */
+function refreshLeaves(i) {
+	const row = PLAN_ROWS[i], cell = document.querySelector('.p-leaves[data-i="'+i+'"]');
+	const box = document.querySelector('.p-units[data-i="'+i+'"]');
+	if (!row || !cell || !box) return;
+	const units = textToUnits(box.value);
+	if (!Object.keys(units).length) { cell.innerHTML = '<small>—</small>'; return; }
+	const dist = Math.hypot(row.origin[0]-row.target[0], row.origin[1]-row.target[1]);
+	const sec = slowestTravelSec(dist, units);
+	const leaves = new Date((row.arrival_ts - sec) * 1000);
+	const past = leaves < new Date();
+	cell.innerHTML = '<small'+(past ? ' class="text-danger"' : '')+'>'+fmtClock(leaves)+
+		(past ? '<span class="d-block">already past</span>' : '')+'</small>';
+}
+
+document.getElementById('p_parse').addEventListener('click', function() {
+	const text = document.getElementById('p_text').value;
+	document.getElementById('p_result').textContent = '';
+	document.getElementById('p_summary').textContent = 'Reading…';
+	fetch(appUrl('/app/attack/plan/parse'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({text: text})
+	}).then(r => r.json()).then(d => renderPlan(d.plan || {}))
+	  .catch(e => { document.getElementById('p_summary').innerHTML =
+		'<span class="text-danger">Error: '+e+'</span>'; });
+});
+/* A row the plan marked as a fake picks up a template named like one, if you
+   made one - that is the case where the plan itself knows what to send. */
+function matchTemplate(row) {
+	if ((row.kind_raw || '').toLowerCase() !== 'fake') return '';
+	return Object.keys(TEMPLATES).find(
+		id => (TEMPLATES[id].name || '').toLowerCase().indexOf('fake') >= 0) || '';
+}
+
+/* Filling one row from one of the in-game templates. A noble row keeps its
+   noble count: that is the number of waves, which no template knows about. */
+function applyTemplateToRow(i, templateId) {
+	const tpl = TEMPLATES[templateId];
+	const box = document.querySelector('.p-units[data-i="'+i+'"]');
+	if (!tpl || !box) return;
+	const units = Object.assign({}, tpl.units);
+	const had = textToUnits(box.value);
+	if (PLAN_ROWS[i] && PLAN_ROWS[i].train && had.snob) units.snob = had.snob;
+	box.value = unitsToText(units);
+	refreshLeaves(i);
+}
+
+document.getElementById('p_template_fill').addEventListener('click', function(e) {
+	e.preventDefault();
+	const tpl = TEMPLATES[document.getElementById('p_template').value];
+	if (!tpl) return;
+	let filled = 0;
+	document.querySelectorAll('.p-pick').forEach(cb => {
+		if (!cb.checked || cb.disabled) return;
+		const i = parseInt(cb.getAttribute('data-i'), 10);
+		applyTemplateToRow(i, document.getElementById('p_template').value);
+		const sel = document.querySelector('.p-tpl[data-i="'+i+'"]');
+		if (sel) sel.value = document.getElementById('p_template').value;
+		filled++;
+	});
+	document.getElementById('p_result').innerHTML = filled
+		? '<span class="text-muted">Filled '+filled+' row(s) from '+tpl.name+'.</span>'
+		: '<span class="text-warning">No rows are ticked, so nothing was filled — tick a row '+
+		  'first, or use the dropdown inside the row.</span>';
+});
+document.getElementById('p_template_reload').addEventListener('click', function(e) {
+	e.preventDefault();
+	fetch(appUrl('/app/attack/templates/refresh'), {method: 'POST'})
+		.then(r => r.json()).then(d => {
+			document.getElementById('p_result').innerHTML = d.ok
+				? '<span class="text-muted">The bot will re-read your templates on its next pass '+
+				  '(a few minutes) — reload this page after that.</span>'
+				: '<span class="text-danger">No cached templates to refresh yet.</span>';
+		});
+});
+document.getElementById('p_all').addEventListener('change', function() {
+	document.querySelectorAll('.p-pick').forEach(cb => { if (!cb.disabled) cb.checked = this.checked; });
+});
+document.getElementById('p_queue').addEventListener('click', function() {
+	const train = planTrainSettings();
+	const rows = [];
+	document.querySelectorAll('.p-pick').forEach(cb => {
+		if (!cb.checked || cb.disabled) return;
+		const i = parseInt(cb.getAttribute('data-i'), 10);
+		const r = PLAN_ROWS[i];
+		const box = document.querySelector('.p-units[data-i="'+i+'"]');
+		rows.push({
+			line: r.line, origin_id: r.origin_id,
+			target_x: r.target[0], target_y: r.target[1],
+			arrival: Math.floor(r.arrival_ts),
+			units: textToUnits(box ? box.value : ''),
+			train: r.train ? train : null,
+			support: r.kind === 'support',
+		});
+	});
+	const out = document.getElementById('p_result');
+	if (!rows.length) { out.innerHTML = '<span class="text-danger">Nothing selected.</span>'; return; }
+	if (!confirm('Queue ' + rows.length + ' command(s)? The bot sends them automatically.')) return;
+	out.textContent = 'Queueing…';
+	fetch(appUrl('/app/attack/plan/queue'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({rows: rows})
+	}).then(r => r.json()).then(d => {
+		const bad = (d.results || []).filter(r => !r.ok);
+		const notes = (d.results || []).filter(r => r.ok && (r.notes || []).length);
+		out.innerHTML = '<span class="text-success">Queued '+d.queued+' of '+rows.length+'.</span>' +
+			notes.map(n => '<div class="text-warning">line '+n.line+': '+n.notes.join('; ')+'</div>').join('') +
+			bad.map(b => '<div class="text-danger">line '+b.line+' not queued: '+b.error+'</div>').join('') +
+			(d.queued ? '<div><a href="#scheduler" onclick="location.reload()">see the queue</a></div>' : '');
+		// Only leave the page when there is nothing here to read: a part-queued
+		// plan used to reload the errors away before they could be seen.
+		if (d.queued && !bad.length && !notes.length) {
+			setTimeout(() => { location.hash = '#scheduler'; location.reload(); }, 1200);
+		}
+	}).catch(e => { out.innerHTML = '<span class="text-danger">Error: '+e+'</span>'; });
+});
 
 /* Deep link from /map (and anywhere else): /attacks?x=..&y=..#planner
    pre-fills the target in both the planner and the scheduler; the hash

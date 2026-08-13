@@ -12,12 +12,12 @@ try:
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
-                                  PlayerFarmOverview)
+                                  PlayerFarmOverview, PlanImport)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
-                       UnitTemplateManager, OverviewBuilder)
+                       UnitTemplateManager, OverviewBuilder, PlanImport)
 
 import datetime
 from html import escape as html_escape
@@ -523,7 +523,7 @@ def noble_overview(data):
 def attacks_page():
     data = sync()
     scheduled = sorted(
-        DataReader.schedule_grab(),
+        DataReader.schedule_display(),
         key=lambda c: (c.get("status") != "pending", c.get("send_ts") or 0),
     )
     return render_template('attacks.html', data=data,
@@ -564,7 +564,9 @@ def noble_remove():
 @app.route('/app/attack/schedule', methods=['POST'])
 def attack_schedule():
     """Queue a timed attack. Expects JSON: origin_id, target_x, target_y,
-    arrival (unix seconds), units {unit: count}."""
+    arrival (unix seconds), units {unit: count}. Optional: train
+    {mode, escort} to split the stack into a noble train, and dry_run to get
+    the resulting waves back without queueing anything."""
     body = request.get_json(silent=True) or {}
     entry, error = DataReader.schedule_create(
         origin_id=body.get("origin_id"),
@@ -572,10 +574,60 @@ def attack_schedule():
         target_y=body.get("target_y"),
         units=body.get("units") or {},
         arrival_ts=body.get("arrival"),
+        train=body.get("train"),
+        dry_run=bool(body.get("dry_run")),
     )
     if error:
         return jsonify({"ok": False, "error": error})
     return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/attack/templates/refresh', methods=['GET', 'POST'])
+def attack_templates_refresh():
+    """Ask the bot to re-read the in-game troop templates on its next pass."""
+    return jsonify({"ok": DataReader.troop_templates_expire()})
+
+
+@app.route('/app/attack/plan/parse', methods=['POST'])
+def attack_plan_parse():
+    """Read a pasted attack plan and report what it would queue. No side effects:
+    the Attack tab shows this for review before anything is scheduled."""
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, "plan": PlanImport.build(body.get("text") or "")})
+
+
+@app.route('/app/attack/plan/queue', methods=['POST'])
+def attack_plan_queue():
+    """Queue the rows the user ticked in the import table. Expects JSON:
+    rows [{origin_id, target_x, target_y, arrival, units, train}], where train
+    is {mode, escort} for the noble rows. Every row goes through the same
+    validation as a hand-made scheduled attack, and each reports its own
+    result - one bad line does not stop the rest of the plan."""
+    body = request.get_json(silent=True) or {}
+    results = []
+    for index, row in enumerate(body.get("rows") or []):
+        entry, error = DataReader.schedule_create(
+            origin_id=row.get("origin_id"),
+            target_x=row.get("target_x"),
+            target_y=row.get("target_y"),
+            units=row.get("units") or {},
+            arrival_ts=row.get("arrival"),
+            train=row.get("train"),
+            support=bool(row.get("support")),
+        )
+        results.append({
+            "line": row.get("line", index + 1),
+            "ok": error is None,
+            "error": error,
+            "id": (entry or {}).get("id"),
+            "waves": len((entry or {}).get("waves") or []),
+            "notes": (entry or {}).get("notes") or [],
+        })
+    return jsonify({
+        "ok": True,
+        "queued": sum(1 for r in results if r["ok"]),
+        "results": results,
+    })
 
 
 @app.route('/app/attack/schedule/cancel', methods=['GET', 'POST'])
@@ -720,9 +772,23 @@ def pre_process_village_detail(data, vid):
         pop = _i(vd.get('pop_used'))
     else:
         pop = max(0, pop_cap - _i(res.get('pop')))
-    total = {k: _i(v) for k, v in (vd.get('troops', {}) or {}).items()}
     home = {k: _i(v) for k, v in (vd.get('available_troops', {}) or {}).items()}
-    away = {k: max(0, total.get(k, 0) - home.get(k, 0)) for k in total}
+    # The village's own snapshot cannot see the units it has standing in another
+    # village, so its "troops" figure is not a real total. Use the account-wide
+    # reading the bot caches (own + elsewhere + in transit) whenever it has one.
+    located = (DataReader.troop_locations().get('by_village') or {}).get(str(vid)) or {}
+    if located:
+        home = {k: _i(v) for k, v in (located.get('own') or {}).items()}
+        away = {}
+        for part in ('elsewhere', 'moving'):
+            for unit, count in (located.get(part) or {}).items():
+                away[unit] = away.get(unit, 0) + _i(count)
+        total = dict(home)
+        for unit, count in away.items():
+            total[unit] = total.get(unit, 0) + count
+    else:
+        total = {k: _i(v) for k, v in (vd.get('troops', {}) or {}).items()}
+        away = {k: max(0, total.get(k, 0) - home.get(k, 0)) for k in total}
     return {
         'id': str(vid),
         'name': vd.get('name') or public.get('name') or vid,
