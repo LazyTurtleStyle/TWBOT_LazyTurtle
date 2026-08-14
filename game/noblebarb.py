@@ -46,6 +46,10 @@ from core.notification import Notification
 from game import attack_scheduler
 
 NOBLE_JOBS_FILE = "cache/noble_jobs.json"
+# What the last command-overview read saw, for the dashboard. The webmanager
+# has no game session of its own, so without this it can only show the bot's
+# own sends and a train launched by hand reads as missing.
+FLYING_FILE = "cache/noble_flying.json"
 
 # A noble's loyalty hit is 20-35. The overshoot guard uses the max so a train
 # can never contain a noble that a string of lucky rolls would waste on a
@@ -292,6 +296,13 @@ def nobles_in_flight(wrapper=None, village_id=None, now=None, force=False):
             key = (command["x"], command["y"])
             flying[key] = flying.get(key, 0) + count
     _COMMANDS_CACHE.update({"at": now, "flying": flying})
+    try:
+        FileManager.save_json_file(
+            {"at": int(now),
+             "targets": {"%s|%s" % key: count for key, count in flying.items()}},
+            FLYING_FILE)
+    except Exception as exc:  # a display aid must never break the send path
+        logger.debug("Could not cache the in-flight nobles: %s", exc)
     return flying
 
 

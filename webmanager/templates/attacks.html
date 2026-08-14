@@ -434,8 +434,10 @@
 								{% elif j.status == 'paused' %}<span class="badge badge-secondary">disarmed</span>
 								{% elif j.status == 'done' %}<span class="badge badge-primary">conquered &#127881;</span>
 								{% else %}<span class="badge badge-danger" title="{{ j.stop_reason }}">stopped</span>{% endif %}
-								{% if j.in_flight and j.in_flight.nobles %}
-								<span class="badge badge-info" title="nobles under way, waiting for the round trip">{{ j.in_flight.nobles }} flying</span>{% endif %}
+								{% set own = (j.in_flight.nobles if j.in_flight else 0) or 0 %}
+								{% set seen = j.nobles_flying or 0 %}
+								{% if seen or own %}
+								<span class="badge badge-info" title="Nobles on their way to this target, whoever sent them - read from the command overview{% if j.flying_age is not none %}, {{ j.flying_age }}s ago{% endif %}.{% if own %} {{ own }} of them sent by the bot.{% endif %}">{{ [seen, own]|max }} flying{% if seen > own %} ({{ seen - own }} by hand){% endif %}</span>{% endif %}
 								{% if j.stop_reason %}<small class="text-muted d-block">{{ j.stop_reason }}</small>{% endif %}</td>
 							<td class="text-right">{% if j.status == 'done' %}—{% else %}{{ j.loyalty_est }}{% endif %}</td>
 							<td class="text-right">{{ j.nobles_home }} home{% if j.status != 'done' %}

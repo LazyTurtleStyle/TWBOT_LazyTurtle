@@ -1071,11 +1071,26 @@ class DataReader:
         except (TypeError, ValueError):
             speed = 1.0
         managed = DataReader.cache_grab("managed") or {}
+        # Nobles on their way to each target as the bot last saw them, whoever
+        # sent them. The job's own in_flight only covers the bot's own sends,
+        # so on its own it under-reports a train launched by hand.
+        flying = {}
+        flying_age = None
+        try:
+            with open(DataReader.data_path("cache", "noble_flying.json")) as fh:
+                seen = json.load(fh) or {}
+            flying = seen.get("targets") or {}
+            flying_age = int(time.time()) - int(seen.get("at") or 0)
+        except (OSError, ValueError, TypeError):
+            pass
         for job in jobs:
             est = noblebarb.estimate_loyalty(job, speed=speed)
             job["loyalty_est"] = est
             job["nobles_needed"] = noblebarb.nobles_needed_worst_case(est)
             job["train_allowed"] = noblebarb.max_safe_nobles(est)
+            job["nobles_flying"] = int(flying.get(
+                "%s|%s" % (job.get("target_x"), job.get("target_y")), 0) or 0)
+            job["flying_age"] = flying_age
             source = managed.get(str(job.get("source_id"))) or {}
             job["nobles_home"] = int(
                 (source.get("available_troops") or {}).get("snob", 0) or 0)
