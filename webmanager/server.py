@@ -219,8 +219,8 @@ TARGET_ORDER_OPTIONS = [
     ("emptiest", "Emptiest village first (most starved)"),
 ]
 FILL_MODE_OPTIONS = [
-    ("even", "Level all three resources together"),
-    ("biggest_gap", "Fill the emptiest resource to the top first"),
+    ("even", "Lowest first, stopping once it catches up with the next"),
+    ("biggest_gap", "Lowest first, but all the way to the top before the next"),
 ]
 SENDER_ORDER_OPTIONS = [
     ("nearest", "Nearest to the receiver (shortest merchant trip)"),
