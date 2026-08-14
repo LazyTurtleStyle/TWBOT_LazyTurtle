@@ -525,6 +525,7 @@ class Village:
         self.balancer.sender_min_points = int(cfg.get("sender_min_points", 4000))
         self.balancer.receiver_max_points = int(cfg.get("receiver_max_points", 1000))
         self.balancer.target_fill_pct = int(cfg.get("target_fill_pct", 90))
+        self.balancer.fill_mode = cfg.get("fill_mode", "even")
         self.balancer.target_order = cfg.get("target_order", "nearest")
         self.balancer.send_cooldown = int(cfg.get("send_cooldown_minutes", 60)) * 60
         # Renamed from max_sends_per_run: the cap is per receiver now, so a

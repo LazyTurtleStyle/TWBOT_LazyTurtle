@@ -218,6 +218,10 @@ TARGET_ORDER_OPTIONS = [
     ("nearest", "Nearest village first (shortest merchant trip)"),
     ("emptiest", "Emptiest village first (most starved)"),
 ]
+FILL_MODE_OPTIONS = [
+    ("even", "Level all three resources together"),
+    ("biggest_gap", "Fill the emptiest resource to the top first"),
+]
 SENDER_ORDER_OPTIONS = [
     ("nearest", "Nearest to the receiver (shortest merchant trip)"),
     ("highest_points", "Highest points first (biggest village gives)"),
@@ -228,6 +232,7 @@ FIXED_SELECTS = {
     'balancer.sender_order': SENDER_ORDER_OPTIONS,
     'village.flag_type': FLAG_TYPE_OPTIONS,
     'balancer.target_order': TARGET_ORDER_OPTIONS,
+    'balancer.fill_mode': FILL_MODE_OPTIONS,
 }
 
 

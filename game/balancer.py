@@ -46,6 +46,7 @@ class ResourceBalancer:
         self.sender_min_points = 4000
         self.receiver_max_points = 1000
         self.target_fill_pct = 90
+        self.fill_mode = "even"
         self.target_order = "nearest"
         self.sender_order = "nearest"
         self.send_cooldown = 3600
@@ -268,9 +269,19 @@ class ResourceBalancer:
         Merchants are the scarce thing and they are *discrete*: one carries 1000
         of a single resource, and a 3056 send occupies four of them, not 3.056.
         Budgeting in raw resources instead of whole merchants overcommits, so
-        every allocation here is counted in merchants and only converted back to
-        an amount at the end. Capped by merchants, then the sender's own stock,
-        then the receiver's headroom.
+        both modes below settle up in whole merchants before returning. Every
+        plan is capped by merchants, by the sender's own stock, and by the
+        receiver's headroom.
+        """
+        if self.fill_mode == "even":
+            return self._plan_even(room, stock, merchants)
+        return self._plan_biggest_gap(room, stock, merchants)
+
+    def _plan_biggest_gap(self, room, stock, merchants):
+        """Fill the emptiest resource to the ceiling, then the next one.
+
+        Cheap and fine while the budget is small next to the gaps, but a big
+        budget lets the first resource leapfrog the others in a single send.
         """
         plan = {}
         left = int(merchants)
@@ -284,6 +295,66 @@ class ResourceBalancer:
                 continue
             plan[res] = amount
             left -= -(-amount // MERCHANT_CAPACITY)  # ceil
+        return plan
+
+    def _plan_even(self, room, stock, merchants):
+        """Level the receiver's three resources instead of topping one up.
+
+        Every resource shares one ceiling, so the one with the most room is the
+        one the receiver has least of. Pouring the whole budget into it - what
+        biggest-gap-first does - can push it past the others in a single send:
+        1334 wood next to 16274 iron becomes 18334 wood next to 3949 stone.
+
+        So the budget floods in from the bottom instead, like water finding its
+        level: the emptiest resource rises to meet the second emptiest, then
+        both rise together, until the merchants run out. The receiver ends up
+        as flat as the budget allows; the sender gives up uneven amounts, which
+        is the cheaper problem to have in a developed village.
+        """
+        # How far each resource *could* be raised. The sender's stock only caps
+        # that distance - it must never decide the ordering. Folding stock in
+        # any earlier ranks the resources by what the sender happens to hold
+        # and levels the wrong ones: a receiver on 9809 iron and 97061 stone,
+        # fed by a sender sitting on stone, gets its fullest resource topped up.
+        cap = {}
+        for res, want in room.items():
+            spare = max(0, int(stock.get(res, 0) or 0) - self.sender_keep)
+            limit = min(int(want), spare)
+            if limit > 0:
+                cap[res] = limit
+        budget = int(merchants) * MERCHANT_CAPACITY
+        if not cap or budget <= 0:
+            return {}
+
+        def fill_to(line):
+            """Raise everything that sits deeper than `line` up to it."""
+            return {r: min(max(0, int(room[r]) - line), cap[r]) for r in cap}
+
+        # The water line is a distance below the ceiling, shared by all three.
+        # A high line costs nothing, a line of 0 fills every resource to the
+        # ceiling; the lowest line the budget can pay for is the flattest
+        # outcome available. Resources the sender cannot supply drop out at
+        # their cap on their own, and their share of the budget goes to the
+        # rest, which is exactly what should happen.
+        low, high = 0, max(int(room[r]) for r in cap)
+        while low < high:
+            mid = (low + high) // 2
+            if sum(fill_to(mid).values()) > budget:
+                low = mid + 1
+            else:
+                high = mid
+
+        # A zero allocation is not a send; min_send_amount may itself be 0.
+        plan = {r: a for r, a in fill_to(low).items()
+                if a > 0 and a >= self.min_send_amount}
+        # Budgeting in resources rather than merchants can round up to one
+        # merchant per resource over once the per-resource ceil is applied.
+        # Shave the biggest allocation down to a whole merchant until it fits.
+        while plan and self.merchants_for(plan) > merchants:
+            res = max(plan, key=lambda r: plan[r])
+            plan[res] -= plan[res] % MERCHANT_CAPACITY or MERCHANT_CAPACITY
+            if plan[res] <= 0 or plan[res] < self.min_send_amount:
+                del plan[res]
         return plan
 
     @staticmethod

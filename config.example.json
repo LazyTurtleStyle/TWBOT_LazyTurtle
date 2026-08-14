@@ -144,6 +144,7 @@
     "sender_min_points": 4000,
     "receiver_max_points": 1000,
     "target_fill_pct": 90,
+    "fill_mode": "even",
     "target_order": "nearest",
     "sender_order": "nearest",
     "send_cooldown_minutes": 60,

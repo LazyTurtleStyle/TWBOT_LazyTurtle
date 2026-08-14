@@ -86,6 +86,7 @@ help_file = {
     'balancer.sender_min_points': 'A village only gives resources away once it is at least this many points. Set it above your developed villages (e.g. 4000).',
     'balancer.receiver_max_points': 'A village only receives while it is under this many points. Once it grows past this it stops being fed automatically.',
     'balancer.target_fill_pct': 'Fill the receiver up to this percent of ITS OWN warehouse. 90 on a village with a 2788 cap means top it up to ~2509 of each resource. Scales automatically as the receiver builds storage.',
+    'balancer.fill_mode': 'How one send is split over wood/stone/iron. "Level all three" raises the receiver\'s lowest resources together so it ends up flat - the sender gives uneven amounts, which matters less in a big village. "Fill the emptiest first" tops one resource up to the ceiling before starting the next, which is faster per resource but can leave the receiver lopsided until later sends even it out.',
     'balancer.target_order': 'Which needy village gets served first when merchants are limited. "nearest" = shortest merchant round-trip. "emptiest" = whoever is most starved, wherever they are.',
     'balancer.sender_order': 'When several big villages could feed the same receiver, which one does it. "nearest" = shortest merchant round-trip. "highest points" = your biggest village carries it. "most spare resources" = spreads the load so one village is not drained. A lower-ranked sender only steps in if the preferred one has not delivered for a full cooldown (so a sender with no free merchants cannot starve a receiver).',
     'balancer.send_cooldown_minutes': 'Minimum minutes between sends from the same village. This is the "how often" knob.',
@@ -296,7 +297,7 @@ config_groups = {
     'balancer': [
         ('On/off', ['enabled']),
         ('Who sends, who receives', ['sender_min_points', 'receiver_max_points', 'sender_order', 'target_order']),
-        ('How much', ['target_fill_pct', 'sender_keep', 'min_send_amount']),
+        ('How much', ['target_fill_pct', 'fill_mode', 'sender_keep', 'min_send_amount']),
         ('How often', ['send_cooldown_minutes', 'max_sends_per_receiver', 'reserve_merchants']),
     ],
     'village_template': [
