@@ -641,6 +641,53 @@
 		$('[data-toggle="tooltip"]').tooltip();
 		showConfigTab();
 	});
+
+	// Coordinates are copied out of the game as "564|454", but every screen
+	// here takes them as a separate X and a separate Y. Paste the whole thing
+	// into either box and it fills both, so nobody has to hand-strip the pipe.
+	//
+	// Pairs are found by id: the X box ends in "tx" and its partner is the
+	// same id ending in "ty" (tx/ty, cs-tx/cs-ty, nb_tx/nb_ty, ...). Bound on
+	// document rather than per input so boxes rendered later still work.
+	document.addEventListener('paste', function(e){
+		var el = e.target;
+		if (!el || el.tagName !== 'INPUT') return;
+		var id = el.id || '';
+		var partnerId = /tx$/.test(id) ? id.slice(0, -1) + 'y'
+		              : /ty$/.test(id) ? id.slice(0, -1) + 'x' : null;
+		if (!partnerId) return;
+		var partner = document.getElementById(partnerId);
+		if (!partner) return;
+		var clip = e.clipboardData || window.clipboardData;
+		if (!clip) return;
+		var text = clip.getData('text') || '';
+		// Only claim the paste when it really is a coordinate pair; a plain
+		// "564" must still paste normally into whichever box was focused.
+		var m = String(text).match(/^\s*(\d{1,4})\s*[|,;: ]\s*(\d{1,4})\s*$/);
+		if (!m) return;
+		e.preventDefault();
+		var xBox = /tx$/.test(id) ? el : partner;
+		var yBox = xBox === el ? partner : el;
+		xBox.value = m[1];
+		yBox.value = m[2];
+		[xBox, yBox].forEach(function(box){
+			// Whatever the page wires up (live totals, travel times, enabling a
+			// Send button) listens for these, so a scripted fill must announce
+			// itself the same way typing would.
+			box.dispatchEvent(new Event('input', { bubbles: true }));
+			box.dispatchEvent(new Event('change', { bubbles: true }));
+		});
+		// Focus stays put; flash the box that filled itself so the split is
+		// visible rather than silent.
+		var flashed = xBox === el ? yBox : xBox;
+		var before = flashed.style.transition;
+		flashed.style.transition = 'background-color .15s';
+		flashed.style.backgroundColor = '#d4edda';
+		setTimeout(function(){
+			flashed.style.backgroundColor = '';
+			setTimeout(function(){ flashed.style.transition = before; }, 200);
+		}, 450);
+	}, true);
 </script>
 {% block scripts %}{% endblock %}
 </body>
