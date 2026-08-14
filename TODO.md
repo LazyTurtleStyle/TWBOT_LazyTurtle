@@ -71,3 +71,39 @@ Two depths of implementation, increasing complexity/risk:
 3. When a window starts and troops are already out (mid-run), is that a hard
    gate (attack waits / is delayed) or advisory only (stop new runs, accept
    the attack may launch a bit short)?
+
+## Verify balancer fill_mode=even against a live world
+
+**Status:** shipped in `3cbbfb8` and on by default; correctness confirmed by
+fuzzing, but never yet observed on a running world.
+
+**What was changed:** `_plan_even()` in `game/balancer.py` replaces
+"fill the emptiest resource to the ceiling" with a water-line split, so one
+send levels wood/stone/iron together instead of letting one run away from the
+others. `balancer.fill_mode = "biggest_gap"` restores the old behaviour.
+
+**Why this needs a live check:** the fuzzing covers the arithmetic, not the
+setting it runs in. Three things it cannot speak to:
+- Senders do not coordinate. Levelling spreads one sender's merchants over
+  more resources per receiver, so each send serves a smaller slice of the
+  gap. Whether that interacts badly with `max_sends_per_receiver` and the
+  `may_serve()` starvation escape is an emergent question, not an arithmetic
+  one - a receiver could end up flatter but slower to fill.
+- Splitting three ways wastes up to three part-full merchants where a
+  single-resource send wastes one. Fuzzing put this at ~386 resources per
+  send on random data; the real cost depends on the merchant counts and
+  warehouse sizes actually in play.
+- On nl116 the old code already filled all three resources on 66% of sends
+  (196-send baseline), because most receivers are small enough that the
+  budget covers every gap. The change only ever had room to affect the other
+  third, so the real-world win may be smaller than the fuzzing suggests.
+
+**How to check:** the baseline and the tooling are already set up outside the
+repo, see `/root/twb-balancer-tracker/README.md` - `track.py report` prints
+resources-per-send and spread-change split by old vs new code. Delete that
+directory once this item is closed.
+
+**Open question:** if levelling does prove slower to fill a village, the fix
+is probably to let a receiver be served more than once per window rather than
+to go back to `biggest_gap` - worth deciding deliberately rather than by
+flipping the setting back.
