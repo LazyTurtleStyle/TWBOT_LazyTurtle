@@ -85,12 +85,51 @@ def _update(mutator, path=None):
     return attack_scheduler.update(mutator, path=_resolve(path))
 
 
+def latest_loyalty_report(target_id):
+    """Newest (when, loyalty) already on record for this village, or None.
+
+    Reports are the only place loyalty is ever observed, and a barb is very
+    often softened by hand before a job is made for it."""
+    best = None
+    try:
+        names = FileManager.list_directory("cache/reports", ends_with=".json")
+    except FileNotFoundError:
+        return None
+    for name in names:
+        entry = FileManager.load_json_file("cache/reports/%s" % name)
+        if not entry or str(entry.get("dest")) != str(target_id):
+            continue
+        extra = entry.get("extra") or {}
+        loyalty = extra.get("loyalty")
+        when = extra.get("when")
+        if not when or not loyalty or len(loyalty) != 2:
+            continue
+        try:
+            when, value = int(when), int(loyalty[1])
+        except (TypeError, ValueError):
+            continue
+        if best is None or when > best[0]:
+            best = (when, value)
+    return best
+
+
 def add_job(entry, path=None):
     """Append a new noble job and return it (with an assigned id).
 
     Jobs start paused - the user arms them explicitly from the dashboard."""
     entry.setdefault("status", "paused")
     entry.setdefault("eval_after", int(time.time()))
+    # evaluate() only ever looks at reports newer than eval_after, so without
+    # this a barb already nobled by hand starts the job assuming loyalty 100.
+    # That is the dangerous direction to be wrong in: an over-estimate lets
+    # the overshoot guard put more nobles in the air than is actually safe.
+    if entry.get("loyalty") is None and entry.get("target_id"):
+        seen = latest_loyalty_report(entry["target_id"])
+        if seen:
+            entry["loyalty"] = {"value": seen[1], "at": seen[0]}
+            entry["eval_after"] = seen[0]
+            logger.info("New job on %s starts at loyalty %d, seen in a report "
+                        "from before it was created", entry["target_id"], seen[1])
     entry.setdefault("escort_min_pct", 80)
     entry.setdefault("totals", {"sends": 0, "nobles": 0})
     entry.setdefault("log", [])
