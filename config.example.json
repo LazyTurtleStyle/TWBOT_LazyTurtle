@@ -119,6 +119,7 @@
     "gather_group_policies": {},
     "noble_barb": true,
     "noble_escort_reserve": true,
+    "noble_focus_fire": true,
     "barb_shaper": false,
     "shaper_min_wall": 2,
     "shaper_loss_tolerance": 1.0,

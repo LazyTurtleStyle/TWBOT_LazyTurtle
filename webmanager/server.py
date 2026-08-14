@@ -560,6 +560,17 @@ def noble_toggle():
     return jsonify({"ok": state is not None, "status": state})
 
 
+@app.route('/app/noble/move', methods=['GET', 'POST'])
+def noble_move():
+    """Reorder a noble job: the list order is the priority order."""
+    payload = request.get_json(silent=True) or {}
+    jid = request.args.get("id") or payload.get("id")
+    direction = request.args.get("dir") or payload.get("dir") or "up"
+    if direction not in ("up", "down"):
+        return jsonify({"ok": False, "error": "direction must be up or down"})
+    return jsonify({"ok": bool(DataReader.noble_move(jid, direction))})
+
+
 @app.route('/app/noble/remove', methods=['GET', 'POST'])
 def noble_remove():
     jid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")

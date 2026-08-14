@@ -1156,6 +1156,14 @@ class DataReader:
         return noblebarb.toggle_job(str(job_id), path=DataReader.noble_path())
 
     @staticmethod
+    def noble_move(job_id, direction):
+        """Shift a job up or down the priority list (see focus_budgets)."""
+        if noblebarb is None:
+            return False
+        return noblebarb.move_job(str(job_id), direction,
+                                  path=DataReader.noble_path())
+
+    @staticmethod
     def noble_remove(job_id):
         if noblebarb is None:
             return False

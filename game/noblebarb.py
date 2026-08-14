@@ -118,6 +118,26 @@ def toggle_job(job_id, path=None):
     return _update(mut, path)
 
 
+def move_job(job_id, direction, path=None):
+    """Move a job one place up or down the list.
+
+    The list order IS the priority order - see focus_budgets(). Returns True
+    when the job actually moved (False at either end)."""
+    step = -1 if str(direction) == "up" else 1
+
+    def mut(commands):
+        for index, c in enumerate(commands):
+            if c.get("id") != job_id:
+                continue
+            swap = index + step
+            if swap < 0 or swap >= len(commands):
+                return False
+            commands[index], commands[swap] = commands[swap], commands[index]
+            return True
+        return False
+    return _update(mut, path)
+
+
 def remove_job(job_id, path=None):
     """Drop a job. Returns True if one was removed."""
     def mut(commands):
@@ -280,7 +300,8 @@ def escort_packages(job, home, nobles):
     return packages, None
 
 
-def planned_send(job, now=None, wrapper=None, home=None, flying_map=None):
+def planned_send(job, now=None, wrapper=None, home=None, flying_map=None,
+                 budget=None):
     """What this job would send if the noble pass ran right now.
     Returns (nobles, packages) or (0, None).
 
@@ -309,13 +330,70 @@ def planned_send(job, now=None, wrapper=None, home=None, flying_map=None):
     if nobles_home <= 0:
         return 0, None
     nobles = min(allowed, nobles_home)
+    if budget is not None:
+        nobles = min(nobles, budget)
+    if nobles <= 0:
+        return 0, None
     packages, _lacking = escort_packages(job, home, nobles)
     if packages is None:
         return 0, None
     return nobles, packages
 
 
-def escort_reservations(jobs=None, path=None, now=None, wrapper=None):
+def focus_budgets(jobs, flying_map=None, home_by_source=None, now=None,
+                  speed=None):
+    """How many nobles each armed job may send this cycle, as {job_id: count}.
+
+    Without this every armed job simply took whatever the overshoot guard
+    allowed, so a second barb started being walked down the moment the first
+    one hit its 3-noble ceiling. Nobles ended up spread over several targets,
+    all of them half-done.
+
+    The list order is the priority order. Walking it from the top, each job
+    claims every noble it could still need in the WORST case - every hit
+    rolling the 20 minimum, so ceil(loyalty / 20) - less whatever is already
+    flying at it. Only what survives that claim reaches the next job.
+
+    Worst case is deliberate. The guard (ceil(loyalty / 35), assuming maximum
+    luck) decides how many may be in the air at once; this decides how many
+    are *spoken for*. Reserving on the optimistic number would hand a noble to
+    the next target and then find the leader still needs it.
+
+    So a leader at 100 loyalty with 3 already flying claims 5 - 3 = 2 more. It
+    cannot send them (the guard is saturated), but they stay home for its next
+    wave instead of going to another barb. A 4th and 5th noble at home would
+    be genuinely spare and pass on down the list.
+    """
+    now = now if now is not None else time.time()
+    speed = speed if speed is not None else world_speed()
+    home_by_source = home_by_source or {}
+    available = {}
+    for source, home in home_by_source.items():
+        available[str(source)] = int((home or {}).get("snob", 0) or 0)
+
+    budgets = {}
+    for job in jobs:
+        if job.get("status") != "armed":
+            continue
+        source = str(job.get("source_id"))
+        pool = available.get(source, 0)
+        if pool <= 0:
+            budgets[job.get("id")] = 0
+            continue
+        loyalty = estimate_loyalty(job, now=now, speed=speed)
+        # Same "whoever sent them" reading step() uses: the job's own
+        # bookkeeping misses trains launched by hand.
+        in_flight = max(int((job.get("in_flight") or {}).get("nobles") or 0),
+                        nobles_heading_to(job, flying_map))
+        claim = min(pool, max(0, nobles_needed_worst_case(loyalty) - in_flight))
+        allowed = max(0, max_safe_nobles(loyalty) - in_flight)
+        budgets[job.get("id")] = min(allowed, claim)
+        available[source] = pool - claim
+    return budgets
+
+
+def escort_reservations(jobs=None, path=None, now=None, wrapper=None,
+                        focus=True):
     """Troops the armed noble jobs will claim at the end of this cycle, as
     {source_id: {unit: count}}.
 
@@ -342,10 +420,17 @@ def escort_reservations(jobs=None, path=None, now=None, wrapper=None):
         source = str(job.get("source_id"))
         if job.get("status") == "armed" and source not in home_by_village:
             home_by_village[source] = troops_at_home(source, wrapper=wrapper)
+    # A job the focus rule will not let send must not hold an escort hostage
+    # either, so the same priority pass runs here.
+    budgets = focus_budgets(jobs, flying_map=flying_map,
+                            home_by_source=home_by_village,
+                            now=now) if focus else {}
+    for job in jobs:
+        source = str(job.get("source_id"))
         try:
             _nobles, packages = planned_send(
                 job, now=now, home=home_by_village.get(source),
-                flying_map=flying_map)
+                flying_map=flying_map, budget=budgets.get(job.get("id")))
         except (TypeError, ValueError) as exc:
             logger.warning("Noble job %s: cannot plan a reservation: %s",
                            job.get("id"), exc)
@@ -575,9 +660,13 @@ class NobleBarbManager:
         else:
             self._save(job, {"reject_count": count})
 
-    def step(self, job, reports, now=None, flying_map=None):
+    def step(self, job, reports, now=None, flying_map=None, budget=None):
         """One cycle for one armed job: evaluate reports, check ownership,
-        then send whatever the overshoot guard and the barracks allow."""
+        then send whatever the overshoot guard and the barracks allow.
+
+        `budget` is focus_budgets()' cap for this job - the nobles left after
+        every job above it in the list reserved what it could still need. None
+        means no focus rule (send whatever the guard allows)."""
         now = now if now is not None else time.time()
         self.evaluate(job, reports)
         if job.get("status") != "armed":
@@ -634,6 +723,12 @@ class NobleBarbManager:
                                    job.get("source_id"), job.get("source_id")))
             return 0
         nobles = min(allowed, nobles_home)
+        if budget is not None and budget < nobles:
+            if budget <= 0:
+                self._waiting(job, "holding: every noble at home is reserved "
+                                   "for a target higher up the list")
+                return 0
+            nobles = budget
         packages, lacking = self._escort_available(job, home, nobles)
         if packages is None:
             self._waiting(job, "waiting for escort troops (%s)" % lacking)
@@ -671,10 +766,29 @@ class NobleBarbManager:
                     "cache/reports/%s" % name)
         except FileNotFoundError:
             pass
+
+        # Priority pass before any send: work out what each job may take, so
+        # the targets at the top of the list get first call on the nobles.
+        # One rally-point read per source village, shared by its jobs.
+        # With one armed job the budget can never bind - the worst-case claim
+        # is always at least the guard's train size - so skip the extra
+        # rally-point read that computing it would cost.
+        budgets = {}
+        if len(armed) > 1 and (self.config.get("farms") or {}).get(
+                "noble_focus_fire", True):
+            home_by_source = {}
+            for job in armed:
+                source = str(job.get("source_id"))
+                if source not in home_by_source:
+                    home_by_source[source] = self._troops_at_home(source)
+            budgets = focus_budgets(armed, flying_map=flying_map,
+                                    home_by_source=home_by_source)
+
         sent = 0
         for job in armed:
             try:
-                sent += self.step(job, reports, flying_map=flying_map)
+                sent += self.step(job, reports, flying_map=flying_map,
+                                  budget=budgets.get(job.get("id")))
             except Exception as exc:  # one broken job must not kill the loop
                 logger.warning("Noble job %s failed this cycle: %s",
                                job.get("id"), exc)

@@ -410,6 +410,7 @@
 			<div class="table-responsive">
 				<table class="table table-sm planner-table mb-0">
 					<thead><tr>
+						<th title="Priority: the job at the top reserves every noble it could still need before the one below it gets any">#</th>
 						<th>Target</th><th>From</th><th>Status</th>
 						<th class="text-right" title="Last reported loyalty + regeneration; 100 when no report yet">Loyalty &le;</th>
 						<th class="text-right" title="nobles home in the source / worst-case still needed">Nobles</th>
@@ -418,6 +419,12 @@
 					<tbody>
 						{% for j in noble.jobs %}
 						<tr>
+							<td style="white-space:nowrap">
+								<span class="text-muted">{{ loop.index }}</span>
+								<button class="btn btn-outline-secondary btn-sm py-0 px-1" title="Higher priority"
+									onclick="nbMove('{{ j.id }}','up')" {% if loop.first %}disabled{% endif %}>&uarr;</button><button
+									class="btn btn-outline-secondary btn-sm py-0 px-1" title="Lower priority"
+									onclick="nbMove('{{ j.id }}','down')" {% if loop.last %}disabled{% endif %}>&darr;</button></td>
 							<td class="coord">{{ j.target_x }}|{{ j.target_y }}
 								{% if j.target_name %}<small class="text-muted d-block">{{ j.target_name }}</small>{% endif %}</td>
 							<td><small>{{ j.source_name }}</small>
@@ -442,7 +449,7 @@
 								<button class="btn btn-outline-danger btn-sm py-0" onclick="nbRemove('{{ j.id }}')">&times;</button></td>
 						</tr>
 						{% else %}
-						<tr><td colspan="7" class="text-muted">No noble jobs yet.</td></tr>
+						<tr><td colspan="8" class="text-muted">No noble jobs yet.</td></tr>
 						{% endfor %}
 					</tbody>
 				</table>
@@ -1104,6 +1111,10 @@ function nbAdd() {
 }
 function nbToggle(id) {
 	fetch('/app/noble/toggle?id='+encodeURIComponent(id))
+		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
+}
+function nbMove(id, dir) {
+	fetch('/app/noble/move?id='+encodeURIComponent(id)+'&dir='+encodeURIComponent(dir))
 		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
 }
 function nbRemove(id) {
