@@ -76,7 +76,15 @@
 
 <div id="pane-overview">
 <p class="text-muted small mt-1">Who is under attack right now (from the live incoming-attack poller),
-	and the defensive troops sitting in each village.</p>
+	and the defensive troops sitting in each village.
+	{% if defense.reading_live %}
+		Garrisons read from the game
+		{% if defense.reading_age is not none %}{{ (defense.reading_age // 60) }} min ago{% endif %}{% if defense.stale_villages %},
+		except {{ defense.stale_villages }} village(s) still on an older snapshot{% endif %}.
+	{% else %}
+		<span class="text-warning">No live troop-location reading yet &mdash; these are each village&#39;s last
+		snapshot, so anything out scavenging or supporting still counts as home.</span>
+	{% endif %}</p>
 
 <!-- Summary -->
 <div class="row">
@@ -84,7 +92,7 @@
 		('Villages', defense.village_count, 'managed'),
 		('Under attack', defense.under_attack_count, 'right now'),
 		('Incoming', defense.total_incoming, 'attacks'),
-		('Defensive troops', defense.total_def_sum, 'at home'),
+		('Defensive troops', defense.total_def_sum, 'at home · ' ~ defense.total_def_away_sum ~ ' out'),
 	] %}
 	{% for label, value, sub in cards %}
 	<div class="col-6 col-md-3 mb-3">
@@ -139,6 +147,10 @@
 							{% endif %}
 						{% endfor %}
 						{% if not v.def_total %}<small class="text-muted">none at home</small>{% endif %}
+						{% if v.def_away_total %}
+						<small class="d-block text-muted">+{{ v.def_away_total|comma }} out (supporting or in transit)</small>
+						{% endif %}
+						{% if not v.def_fresh %}<small class="d-block text-warning">snapshot only</small>{% endif %}
 					</td>
 				</tr>
 				{% else %}

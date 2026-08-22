@@ -160,7 +160,7 @@ class TWB:
     # Troop-movement data is dashboard-only and doesn't need per-cycle freshness.
     # Refresh it at most this often to avoid two extra full-page GETs every cycle
     # (cuts request volume and the bot-like request count).
-    TROOP_MOVE_REFRESH_SECONDS = 900
+    TROOP_MOVE_REFRESH_SECONDS = 300
     # Rally-point troop templates belong to the player, not the village, and
     # only change when the player edits one - but when they do, they want it in
     # the dashboard's picker now, not next cycle. Cheap enough to re-read hourly
@@ -504,21 +504,40 @@ class TWB:
                             out[unit] = out.get(unit, 0) + count
                     return out
 
+                stamp = int(time.time())
                 FileManager.save_json_file({
                     "moving": total("moving"),
                     "support": total("elsewhere"),
                     "home": total("own"),
                     "by_village": by_village,
-                    "when": int(time.time()),
+                    "when": stamp,
+                    # When the by_village breakdown was last read for real, so a
+                    # later partial write cannot pass stale detail off as fresh.
+                    "complete_when": stamp,
+                    "partial": False,
                 }, "cache/troops_moving.json")
                 return
             mv = self.wrapper.get_url(base + "moving")
             sup = self.wrapper.get_url(base + "away")
-            FileManager.save_json_file({
+            # Never clobber a good reading with a partial one. The per-type
+            # pages carry no per-village breakdown and no "home" figure, so
+            # writing them alone would strip both - and every consumer that
+            # asks "where do this village's troops stand" would silently fall
+            # back to the per-village snapshot, which only knows what is
+            # standing at home. Carry the last complete reading forward and
+            # mark the write partial instead.
+            payload = {
                 "moving": Extractor.units_overview(mv) if mv else {},
                 "support": Extractor.units_overview(sup) if sup else {},
                 "when": int(time.time()),
-            }, "cache/troops_moving.json")
+                "partial": True,
+            }
+            if existing:
+                for key in ("by_village", "home"):
+                    if existing.get(key):
+                        payload[key] = existing[key]
+                payload["complete_when"] = existing.get("complete_when", existing.get("when"))
+            FileManager.save_json_file(payload, "cache/troops_moving.json")
         except Exception as exc:
             # Non-critical: the dashboard falls back to lumped "away". Still log
             # at debug so a persistent parse/markup regression is visible.

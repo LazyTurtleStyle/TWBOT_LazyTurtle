@@ -217,7 +217,9 @@ class TroopManager:
         located = (cache.get("by_village") or {}).get(str(self.village_id))
         if not located:
             return None, None
-        age = int(time.time()) - int(cache.get("when", 0) or 0)
+        # by_village can be carried forward by a partial write, so age it by
+        # when that breakdown was actually read, not by the file's timestamp.
+        age = int(time.time()) - int(cache.get("complete_when") or cache.get("when", 0) or 0)
         if age > self.TROOP_LOCATION_MAX_AGE:
             self.logger.debug(
                 "Ignoring troop locations cached %d minutes ago", age // 60)

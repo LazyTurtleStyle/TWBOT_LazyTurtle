@@ -94,12 +94,19 @@
 	<!-- LEFT: troops, per-village state, under-attack detail -->
 	<div class="stack">
 		<div class="panel">
-			<div class="panel-head"><h3>Troops</h3><span class="eyebrow">all villages</span></div>
+			<div class="panel-head"><h3>Troops</h3>
+				{% if overview.summary.troops_partial %}
+				<span class="badge blood" title="The account-wide units overview could not be read in full, so the home/support/moving split is incomplete and Total is a lower bound.">partial reading</span>
+				{% elif overview.summary.troops_age is not none %}
+				<span class="eyebrow" title="Age of the troop-location reading these four columns come from">all villages &middot; read {{ (overview.summary.troops_age // 60) }}m ago</span>
+				{% else %}
+				<span class="eyebrow">all villages</span>
+				{% endif %}</div>
 			<div class="panel-body">
 				{% set unit_order = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','knight','snob'] %}
 				{% set cols = [
 					('Total', overview.summary.troops, 'every unit you own'),
-					('Home', overview.summary.troops_home, 'sitting in your villages'),
+					('Home', overview.summary.troops_home, 'standing in your villages right now - a stack out on a gather run is not counted here, it is under Moving'),
 					('Support', overview.summary.troops_support, 'stationed in other villages'),
 					('Moving', overview.summary.troops_moving, 'in transit (op pad)'),
 				] %}

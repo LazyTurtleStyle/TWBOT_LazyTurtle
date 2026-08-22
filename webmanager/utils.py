@@ -2169,38 +2169,56 @@ class OverviewBuilder:
             cfg_villages = {}
         scavenging_enabled = sum(1 for v in cfg_villages.values() if v.get("gather_enabled"))
 
-        # Troops away from home (supporting other villages, attacking, or in transit)
-        # = total owned minus what is currently sitting at home, per unit.
-        troops_away = {u: max(0, total_troops.get(u, 0) - home_troops.get(u, 0))
-                       for u in total_troops}
-        # Split "away" into in-transit ("op pad") and support (stationed in other
-        # villages). Both are read straight from the game and cached by the bot
-        # (cache/troops_moving.json); we do NOT derive support by subtraction
-        # because the snapshots are taken at different moments and that leaves
-        # phantom troops. If the cache is missing, fall back to lumped "away".
+        # Where the account's units actually stand. The account-wide
+        # type=complete overview (cache/troops_moving.json, refreshed every few
+        # minutes by the bot) is the only reading that knows: a village's own
+        # units page shows what is standing in the village and nothing about
+        # what it has out scavenging or parked in another village. Summing the
+        # per-village snapshots is therefore "at home right now", never a total
+        # - with the defensive stacks out on a gather run that reads a fraction
+        # of the real army, which is exactly how a 34k spear account renders as
+        # 16k. `home_troops` below is that snapshot sum; keep it separate.
+        snapshot_home = dict(home_troops)
         cache = DataReader.troop_locations()
-        has_cache = isinstance(cache, dict) and ("moving" in cache or "support" in cache)
-        troops_moving = {u: cls._to_int(c) for u, c in (cache.get("moving", {}) or {}).items() if cls._to_int(c)}
-        if has_cache:
-            troops_support = {u: cls._to_int(c) for u, c in (cache.get("support", {}) or {}).items() if cls._to_int(c)}
-        else:
-            troops_support = troops_away  # no live split yet: show the lumped total
+        if not isinstance(cache, dict):
+            cache = {}
+        troops_when = cls._to_int(cache.get("complete_when")) or cls._to_int(cache.get("when"))
+        troops_age = (int(time.time()) - troops_when) if troops_when else None
+        troops_moving = {u: cls._to_int(c) for u, c in (cache.get("moving", {}) or {}).items()
+                         if cls._to_int(c)}
+        troops_support = {u: cls._to_int(c) for u, c in (cache.get("support", {}) or {}).items()
+                          if cls._to_int(c)}
 
-        # "Total" has to mean every unit we own, wherever it stands. The
-        # per-village snapshot cannot supply that: a village's units page never
-        # lists the troops it has parked in another village, so summing those
-        # snapshots leaves out the whole support pool. When the bot has cached
-        # the account-wide type=complete overview, take all three locations from
-        # that one consistent reading and add them up.
         if cache.get("by_village"):
+            # Complete reading: home, support and moving all come off the same
+            # page, so every column is consistent and Total is exactly the sum.
             home_troops = {u: cls._to_int(c) for u, c in (cache.get("home", {}) or {}).items()
                            if cls._to_int(c)}
             total_troops = {}
             for part in (home_troops, troops_support, troops_moving):
                 for unit, count in part.items():
                     total_troops[unit] = total_troops.get(unit, 0) + count
-            troops_away = {u: troops_support.get(u, 0) + troops_moving.get(u, 0)
-                           for u in total_troops}
+            troops_partial = bool(cache.get("partial"))
+        else:
+            # Degraded reading: the complete table would not parse, or nothing
+            # is cached yet (first cycle). Every estimate left is a lower bound
+            # taken at its own moment - the per-village totals cannot see units
+            # parked in another village, the away pools are only what is out,
+            # the home snapshot only what is in. Take the largest per unit.
+            # Never ADD across them: the village snapshots are minutes apart, so
+            # home + moving counts the same gather squad twice, once where it
+            # stood and once where it is now. Flagged partial either way.
+            troops_partial = True
+            estimates = (total_troops, snapshot_home,
+                         {u: troops_support.get(u, 0) + troops_moving.get(u, 0)
+                          for u in set(troops_support) | set(troops_moving)})
+            units_seen = set().union(*(set(e) for e in estimates))
+            total_troops = {u: max(e.get(u, 0) for e in estimates) for u in units_seen}
+
+        # Away is never derived by subtracting two snapshots taken at different
+        # moments - that leaves phantom troops. It is the two away pools added.
+        troops_away = {u: troops_support.get(u, 0) + troops_moving.get(u, 0)
+                       for u in total_troops}
 
         # Last-24h and all-time counters over the FULL report cache (sync() only
         # passes the newest ~100, which is enough for the feed but not for totals).
@@ -2286,6 +2304,12 @@ class OverviewBuilder:
                 "troops_away": troops_away,
                 "troops_support": troops_support,
                 "troops_moving": troops_moving,
+                # Age of the troop-location reading the four columns come from,
+                # and whether it was complete. The panel shows both: a silently
+                # stale or half-parsed split is the one failure mode that makes
+                # these numbers look like missing units.
+                "troops_age": troops_age,
+                "troops_partial": troops_partial,
                 "loot_recent": loot_recent,
                 "last_activity": last_activity,
                 "watchdog": _watchdog,
@@ -2482,17 +2506,57 @@ class DefenseOverview:
         incomings_by_target = OverviewBuilder._build_incomings(village_db)
         now = int(time.time())
 
+        # Garrisons come from the account-wide troop-location reading the bot
+        # refreshes every few minutes (cache/troops_moving.json), NOT from each
+        # village's cached available_troops. That snapshot is only rewritten
+        # when the bot next runs the village, so a stack that left on a gather
+        # run half an hour ago still reads as sitting at home - the page then
+        # promises defence that is nowhere near the wall.
+        locations = DataReader.troop_locations()
+        if not isinstance(locations, dict):
+            locations = {}
+        by_village = locations.get("by_village") or {}
+        # A partial write carries the previous by_village breakdown forward, so
+        # age the garrison figures by when that breakdown was actually read.
+        reading_when = (OverviewBuilder._to_int(locations.get("complete_when"))
+                        or OverviewBuilder._to_int(locations.get("when")))
+        reading_age = (now - reading_when) if reading_when else None
+
         villages = []
         total_def = {u: 0 for u in cls.DEFENSIVE_UNITS}
+        total_def_away = {u: 0 for u in cls.DEFENSIVE_UNITS}
+        stale_villages = 0
         under_attack_count = 0
         total_incoming = 0
 
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
-            avail = vdata.get("available_troops", {}) or {}
-            home_def = {u: OverviewBuilder._to_int(avail.get(u)) for u in cls.DEFENSIVE_UNITS}
+            located = by_village.get(str(vid))
+            if located:
+                # "own" is this village's own units standing in it right now;
+                # "elsewhere"/"moving" are the same village's units parked in
+                # another village or in transit (gather runs included).
+                own = located.get("own") or {}
+                home_def = {u: OverviewBuilder._to_int(own.get(u)) for u in cls.DEFENSIVE_UNITS}
+                away_def = {
+                    u: OverviewBuilder._to_int((located.get("elsewhere") or {}).get(u))
+                       + OverviewBuilder._to_int((located.get("moving") or {}).get(u))
+                    for u in cls.DEFENSIVE_UNITS
+                }
+                fresh = True
+            else:
+                # No live reading for this village (first cycle, or the overview
+                # would not parse). Fall back to its own snapshot and say so
+                # rather than showing it as an empty village.
+                avail = vdata.get("available_troops", {}) or {}
+                home_def = {u: OverviewBuilder._to_int(avail.get(u)) for u in cls.DEFENSIVE_UNITS}
+                away_def = {u: 0 for u in cls.DEFENSIVE_UNITS}
+                fresh = False
+                stale_villages += 1
+
             for u in cls.DEFENSIVE_UNITS:
                 total_def[u] += home_def[u]
+                total_def_away[u] += away_def[u]
 
             cmds = incomings_by_target.get(str(vid), [])
             future = [c for c in cmds if (c.get("eta") or 0) > 0]
@@ -2512,6 +2576,9 @@ class DefenseOverview:
                 "commands": future,
                 "def_troops": home_def,
                 "def_total": sum(home_def.values()),
+                "def_away": away_def,
+                "def_away_total": sum(away_def.values()),
+                "def_fresh": fresh,
             })
 
         # Under-attack villages first (soonest arrival first), then strongest garrisons.
@@ -2526,6 +2593,15 @@ class DefenseOverview:
             "defensive_units": cls.DEFENSIVE_UNITS,
             "total_def": total_def,
             "total_def_sum": sum(total_def.values()),
+            # What is out (supporting elsewhere or in transit) and will not be
+            # home for an incoming unless it is recalled in time.
+            "total_def_away": total_def_away,
+            "total_def_away_sum": sum(total_def_away.values()),
+            # Provenance of the garrison figures, so a stale or partial reading
+            # is visible instead of being read as "this is what I have".
+            "reading_age": reading_age,
+            "reading_live": bool(by_village),
+            "stale_villages": stale_villages,
             "under_attack_count": under_attack_count,
             "total_incoming": total_incoming,
             "village_count": len(managed),
