@@ -88,6 +88,11 @@ class TroopManager:
 
     total_troops = {}
 
+    # A cached troop-location reading older than this is not used for recruiting
+    # decisions. The main loop refreshes it every TROOP_MOVE_REFRESH_SECONDS, so
+    # only a reading nothing has touched for hours can get this old.
+    TROOP_LOCATION_MAX_AGE = 6 * 3600
+
     _research_wait = 0
 
     wrapper = None
@@ -165,17 +170,65 @@ class TroopManager:
 
         self.logger.debug("Units in village: %s", str(self.troops))
 
-        if not self.can_recruit:
-            return
-
-        self.total_troops = {}
-        for u in Extractor.units_in_total(result_all):
-            k, v = u
-            if k in self.total_troops:
-                self.total_troops[k] = self.total_troops[k] + int(v)
-            else:
-                self.total_troops[k] = int(v)
+        # What this village owns = what stands at home right now (the reading
+        # above - fresh, and the only half recruiting itself changes) plus what
+        # is away. The units page cannot see that away half at all: it never
+        # lists the troops this village has parked in another village. It used
+        # to be scraped page-wide, which missed exactly that support and swept
+        # up unrelated tables instead (the scavenging squads, the table's own
+        # total row), so the recruiter compared its template against a number
+        # that was neither total nor home.
+        away, world_units = self.troops_elsewhere()
+        if away is None:
+            # No usable reading cached yet (first cycle after a fresh start, or
+            # the overview would not parse). Fall back to the old page scrape
+            # rather than recruiting as if everything away had been lost.
+            self.total_troops = {}
+            for u in Extractor.units_in_total(result_all):
+                k, v = u
+                if k in self.total_troops:
+                    self.total_troops[k] = self.total_troops[k] + int(v)
+                else:
+                    self.total_troops[k] = int(v)
+        else:
+            # Keep every unit the world has as a key, zeroes included: callers
+            # read the key set as "does this world have archers".
+            units = list(world_units)
+            for unit in list(self.troops) + list(away):
+                if unit not in units:
+                    units.append(unit)
+            self.total_troops = {
+                unit: int(self.troops.get(unit, 0) or 0) + int(away.get(unit, 0))
+                for unit in units
+            }
         self.logger.debug("Village units total: %s", str(self.total_troops))
+
+    def troops_elsewhere(self):
+        """This village's own units that are not at home: stationed in another
+        village ("elders") plus everything in transit ("op pad", which includes
+        the squads out scavenging).
+
+        Read from the account-wide units overview the main loop caches in
+        cache/troops_moving.json - a village's own page cannot supply it.
+        Returns (counts, world unit list), or (None, None) when there is no
+        usable reading for this village.
+        """
+        cache = FileManager.load_json_file("cache/troops_moving.json") or {}
+        located = (cache.get("by_village") or {}).get(str(self.village_id))
+        if not located:
+            return None, None
+        # by_village can be carried forward by a partial write, so age it by
+        # when that breakdown was actually read, not by the file's timestamp.
+        age = int(time.time()) - int(cache.get("complete_when") or cache.get("when", 0) or 0)
+        if age > self.TROOP_LOCATION_MAX_AGE:
+            self.logger.debug(
+                "Ignoring troop locations cached %d minutes ago", age // 60)
+            return None, None
+        away = {}
+        for where in ("elsewhere", "moving"):
+            for unit, count in (located.get(where) or {}).items():
+                away[unit] = away.get(unit, 0) + int(count)
+        return away, list(located.get("own") or {})
 
     def start_update(self, building="barracks", disabled_units=[]):
         """
@@ -480,11 +533,18 @@ class TroopManager:
             return status
         return status
 
-    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=0):
+    def gather(self, selection=1, disabled_units=[], advanced_gather=True, consolidate=0,
+               reserved=None):
         """
         Used for the gather resources functionality where it uses two options:
         - Basic: all troops gather on the selected gather level
         - Advanced: troops are split
+
+        reserved ({unit: count}): troops another module has first claim on this
+        cycle (currently the escort of an armed noble job, which is only sent
+        after every village has run). Held back from the scavenge squads only -
+        unlike disabled_units these units still scavenge with whatever is left
+        over above the reserved count.
 
         consolidate (night mode): seconds left until the night window ends.
         When > 0, override the split and send troops into a single run on the
@@ -538,6 +598,16 @@ class TroopManager:
             self.troops[k] = v
 
         troops = dict(self.troops)
+        for unit, count in (reserved or {}).items():
+            if unit in troops:
+                # self.troops keeps the real counts (recruiting, dashboard);
+                # only the scavenge split sees the reduced number.
+                troops[unit] = max(0, int(troops[unit]) - int(count))
+        if reserved:
+            self.logger.info(
+                "Keeping %s home for a reserved send, scavenging with the rest",
+                {u: int(n) for u, n in reserved.items() if u in self.troops},
+            )
 
         haul_dict = [
             "spear:25",

@@ -12,12 +12,12 @@ try:
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
-                                  PlayerFarmOverview)
+                                  PlayerFarmOverview, PlanImport)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
-                       UnitTemplateManager, OverviewBuilder)
+                       UnitTemplateManager, OverviewBuilder, PlanImport)
 
 import datetime
 from html import escape as html_escape
@@ -214,9 +214,25 @@ FLAG_TYPE_OPTIONS = [
     (7, "Reduce coin cost"),
     (8, "Haul capacity"),
 ]
+TARGET_ORDER_OPTIONS = [
+    ("nearest", "Nearest village first (shortest merchant trip)"),
+    ("emptiest", "Emptiest village first (most starved)"),
+]
+FILL_MODE_OPTIONS = [
+    ("even", "Lowest first, stopping once it catches up with the next"),
+    ("biggest_gap", "Lowest first, but all the way to the top before the next"),
+]
+SENDER_ORDER_OPTIONS = [
+    ("nearest", "Nearest to the receiver (shortest merchant trip)"),
+    ("highest_points", "Highest points first (biggest village gives)"),
+    ("most_resources", "Most spare resources first (spreads the load)"),
+]
 FIXED_SELECTS = {
     'village_template.flag_type': FLAG_TYPE_OPTIONS,
+    'balancer.sender_order': SENDER_ORDER_OPTIONS,
     'village.flag_type': FLAG_TYPE_OPTIONS,
+    'balancer.target_order': TARGET_ORDER_OPTIONS,
+    'balancer.fill_mode': FILL_MODE_OPTIONS,
 }
 
 
@@ -361,10 +377,21 @@ def pre_process_config():
     example = _example_defaults()
     to_hide = ["build", "villages"]
     sections = {}
-    for section in config:
-        if section in to_hide or not isinstance(config[section], dict):
+    # Whole sections added to the bot after this world's config.json was written
+    # (not just new keys inside an existing section) still get a tab, rendered
+    # from the example defaults. Saving any field creates the section for real.
+    names = list(config) + [s for s in example if s not in config]
+    for section in names:
+        if section in to_hide:
             continue
-        fields = _with_defaults(config[section], example.get(section))
+        current = config.get(section)
+        if current is None:
+            current = {}
+        elif not isinstance(current, dict):
+            continue
+        fields = _with_defaults(current, example.get(section))
+        if not fields:
+            continue
         sections[section] = render_grouped(section, section, fields)
     return sections
 
@@ -501,7 +528,7 @@ def noble_overview(data):
 def attacks_page():
     data = sync()
     scheduled = sorted(
-        DataReader.schedule_grab(),
+        DataReader.schedule_display(),
         key=lambda c: (c.get("status") != "pending", c.get("send_ts") or 0),
     )
     return render_template('attacks.html', data=data,
@@ -533,6 +560,17 @@ def noble_toggle():
     return jsonify({"ok": state is not None, "status": state})
 
 
+@app.route('/app/noble/move', methods=['GET', 'POST'])
+def noble_move():
+    """Reorder a noble job: the list order is the priority order."""
+    payload = request.get_json(silent=True) or {}
+    jid = request.args.get("id") or payload.get("id")
+    direction = request.args.get("dir") or payload.get("dir") or "up"
+    if direction not in ("up", "down"):
+        return jsonify({"ok": False, "error": "direction must be up or down"})
+    return jsonify({"ok": bool(DataReader.noble_move(jid, direction))})
+
+
 @app.route('/app/noble/remove', methods=['GET', 'POST'])
 def noble_remove():
     jid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
@@ -542,7 +580,9 @@ def noble_remove():
 @app.route('/app/attack/schedule', methods=['POST'])
 def attack_schedule():
     """Queue a timed attack. Expects JSON: origin_id, target_x, target_y,
-    arrival (unix seconds), units {unit: count}."""
+    arrival (unix seconds), units {unit: count}. Optional: train
+    {mode, escort} to split the stack into a noble train, and dry_run to get
+    the resulting waves back without queueing anything."""
     body = request.get_json(silent=True) or {}
     entry, error = DataReader.schedule_create(
         origin_id=body.get("origin_id"),
@@ -550,10 +590,60 @@ def attack_schedule():
         target_y=body.get("target_y"),
         units=body.get("units") or {},
         arrival_ts=body.get("arrival"),
+        train=body.get("train"),
+        dry_run=bool(body.get("dry_run")),
     )
     if error:
         return jsonify({"ok": False, "error": error})
     return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/attack/templates/refresh', methods=['GET', 'POST'])
+def attack_templates_refresh():
+    """Ask the bot to re-read the in-game troop templates on its next pass."""
+    return jsonify({"ok": DataReader.troop_templates_expire()})
+
+
+@app.route('/app/attack/plan/parse', methods=['POST'])
+def attack_plan_parse():
+    """Read a pasted attack plan and report what it would queue. No side effects:
+    the Attack tab shows this for review before anything is scheduled."""
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, "plan": PlanImport.build(body.get("text") or "")})
+
+
+@app.route('/app/attack/plan/queue', methods=['POST'])
+def attack_plan_queue():
+    """Queue the rows the user ticked in the import table. Expects JSON:
+    rows [{origin_id, target_x, target_y, arrival, units, train}], where train
+    is {mode, escort} for the noble rows. Every row goes through the same
+    validation as a hand-made scheduled attack, and each reports its own
+    result - one bad line does not stop the rest of the plan."""
+    body = request.get_json(silent=True) or {}
+    results = []
+    for index, row in enumerate(body.get("rows") or []):
+        entry, error = DataReader.schedule_create(
+            origin_id=row.get("origin_id"),
+            target_x=row.get("target_x"),
+            target_y=row.get("target_y"),
+            units=row.get("units") or {},
+            arrival_ts=row.get("arrival"),
+            train=row.get("train"),
+            support=bool(row.get("support")),
+        )
+        results.append({
+            "line": row.get("line", index + 1),
+            "ok": error is None,
+            "error": error,
+            "id": (entry or {}).get("id"),
+            "waves": len((entry or {}).get("waves") or []),
+            "notes": (entry or {}).get("notes") or [],
+        })
+    return jsonify({
+        "ok": True,
+        "queued": sum(1 for r in results if r["ok"]),
+        "results": results,
+    })
 
 
 @app.route('/app/attack/schedule/cancel', methods=['GET', 'POST'])
@@ -698,9 +788,23 @@ def pre_process_village_detail(data, vid):
         pop = _i(vd.get('pop_used'))
     else:
         pop = max(0, pop_cap - _i(res.get('pop')))
-    total = {k: _i(v) for k, v in (vd.get('troops', {}) or {}).items()}
     home = {k: _i(v) for k, v in (vd.get('available_troops', {}) or {}).items()}
-    away = {k: max(0, total.get(k, 0) - home.get(k, 0)) for k in total}
+    # The village's own snapshot cannot see the units it has standing in another
+    # village, so its "troops" figure is not a real total. Use the account-wide
+    # reading the bot caches (own + elsewhere + in transit) whenever it has one.
+    located = (DataReader.troop_locations().get('by_village') or {}).get(str(vid)) or {}
+    if located:
+        home = {k: _i(v) for k, v in (located.get('own') or {}).items()}
+        away = {}
+        for part in ('elsewhere', 'moving'):
+            for unit, count in (located.get(part) or {}).items():
+                away[unit] = away.get(unit, 0) + _i(count)
+        total = dict(home)
+        for unit, count in away.items():
+            total[unit] = total.get(unit, 0) + count
+    else:
+        total = {k: _i(v) for k, v in (vd.get('troops', {}) or {}).items()}
+        away = {k: max(0, total.get(k, 0) - home.get(k, 0)) for k in total}
     return {
         'id': str(vid),
         'name': vd.get('name') or public.get('name') or vid,
@@ -740,6 +844,17 @@ def get_map():
     return render_template('map.html', data=sync_data, map=map_data)
 
 
+def _template_select_value(value):
+    """Village building/units as a <select> value: a name, 'false' for the
+    per-village off-switch, or '' when the key is absent (inherits the global
+    building.default / units.default)."""
+    if value is False:
+        return 'false'
+    if isinstance(value, str) and value:
+        return value
+    return ''
+
+
 def pre_process_overrides(data):
     """Per-village override rows for the villages page.
 
@@ -772,6 +887,8 @@ def pre_process_overrides(data):
                 'diff': [],
                 'building': None,
                 'units': None,
+                'building_value': '',
+                'units_value': '',
                 'managed': False,
                 'gather_enabled': bool(template.get('gather_enabled', False)),
                 'farm_enabled': bool(template.get('farm_enabled', True)),
@@ -794,6 +911,8 @@ def pre_process_overrides(data):
             'diff': diff,
             'building': vcfg.get('building'),
             'units': vcfg.get('units'),
+            'building_value': _template_select_value(vcfg.get('building')),
+            'units_value': _template_select_value(vcfg.get('units')),
             'managed': bool(vcfg.get('managed')),
             'gather_enabled': bool(vcfg.get('gather_enabled', template.get('gather_enabled', False))),
             'farm_enabled': bool(vcfg.get('farm_enabled', template.get('farm_enabled', True))),
@@ -803,7 +922,17 @@ def pre_process_overrides(data):
     total = len(rows)
     summary = '{} of {} village{} override the global template.'.format(
         overriding, total, '' if total == 1 else 's')
-    return {'rows': rows, 'summary': summary, 'overriding': overriding, 'total': total}
+    return {
+        'rows': rows,
+        'summary': summary,
+        'overriding': overriding,
+        'total': total,
+        # Options for the inline editors on the villages page.
+        'builder_templates': template_names('builder'),
+        'troop_templates': template_names('troops'),
+        'building_default': config.get('building', {}).get('default') or 'purple_predator',
+        'units_default': config.get('units', {}).get('default') or 'basic',
+    }
 
 
 @app.route('/villages', methods=['GET'])

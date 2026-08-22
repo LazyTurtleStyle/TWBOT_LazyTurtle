@@ -11,6 +11,7 @@ from core.templates import TemplateManager
 from core.twstats import TwStats
 from game.attack import AttackManager
 from game.barbshaper import BarbShaper
+from game.balancer import ResourceBalancer
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.incomings import load_groups
@@ -25,6 +26,7 @@ from core.exceptions import *
 class Village:
     village_id = None
     builder = None
+    balancer = None
     units = None
     wrapper = None
     resources = {}
@@ -57,6 +59,10 @@ class Village:
     def __init__(self, village_id=None, wrapper=None):
         self.village_id = village_id
         self.wrapper = wrapper
+        # {unit: count} this village must keep home this cycle, set by the run
+        # loop before run(). Currently the escort of an armed noble job, which
+        # is only sent after every village has run (see twb.py).
+        self.troop_reserve = {}
 
     def get_config(self, section, parameter, default=None):
         # A missing key just means an older config predates the parameter;
@@ -500,6 +506,49 @@ class Village:
                         continue
                     self.units.start_update(building, self.disabled_units)
 
+    def run_balancer(self):
+        """Push spare resources to poorer villages (see game/balancer.py).
+
+        Runs after manage_local_resources so resman.requested is already pruned
+        of empty entries: anything left there means this village still wants
+        resources itself, and a village that needs resources never gives any
+        away.
+        """
+        if not self.get_config(section="balancer", parameter="enabled", default=False):
+            return
+        if not self.balancer:
+            self.balancer = ResourceBalancer(
+                wrapper=self.wrapper, village_id=self.village_id
+            )
+        cfg = self.config.get("balancer", {}) or {}
+        self.balancer.enabled = True
+        self.balancer.sender_min_points = int(cfg.get("sender_min_points", 4000))
+        self.balancer.receiver_max_points = int(cfg.get("receiver_max_points", 1000))
+        self.balancer.target_fill_pct = int(cfg.get("target_fill_pct", 90))
+        self.balancer.fill_mode = cfg.get("fill_mode", "even")
+        self.balancer.target_order = cfg.get("target_order", "nearest")
+        self.balancer.send_cooldown = int(cfg.get("send_cooldown_minutes", 60)) * 60
+        # Renamed from max_sends_per_run: the cap is per receiver now, so a
+        # sender may top up several villages but none gets served twice.
+        self.balancer.max_sends_per_receiver = int(
+            cfg.get("max_sends_per_receiver", cfg.get("max_sends_per_run", 1)))
+        self.balancer.reserve_merchants = int(cfg.get("reserve_merchants", 0))
+        self.balancer.sender_keep = int(cfg.get("sender_keep", 0))
+        self.balancer.min_send_amount = int(cfg.get("min_send_amount", 250))
+
+        public = self.area.in_cache(self.village_id) if self.area else None
+        my_points = int((public or {}).get("points") or 0)
+        try:
+            self.balancer.run(
+                my_points=my_points,
+                my_stock=self.resman.actual,
+                has_own_needs=bool(self.resman.requested),
+            )
+        except Exception as exc:
+            # Balancing is a convenience: a bad page parse must not take the
+            # village run (and with it building/recruiting) down.
+            self.logger.warning("Resource balancing failed: %s", exc)
+
     def manage_local_resources(self):
         to_dell = []
         for x in self.resman.requested:
@@ -594,10 +643,32 @@ class Village:
         self.set_farm_options()
         return True
 
+    def farm_conflicts_with_reserve(self):
+        """Units this village must keep home that the farm pass could spend.
+
+        Farm sends are sized by the in-game Farm Assistant, so unlike the
+        shaper and scavenging we cannot hand it a reduced troop count - the
+        only way to protect a reserved unit is to skip the pass. That is A
+        (scouts), the configured B template, and C (light cavalry, what the
+        loot-based forecast sends)."""
+        if not self.troop_reserve:
+            return []
+        spends = {"spy", "light"}
+        spends.update(self.get_config(
+            section="farms", parameter="template_minimal_troops", default={}) or {})
+        return sorted(u for u in self.troop_reserve if u in spends)
+
     def run_farming(self):
         """
         Runs the farming logic. Needs setup_attack_manager() to have returned True.
         """
+        conflict = self.farm_conflicts_with_reserve()
+        if conflict:
+            self.logger.info(
+                "Skipping the farm pass this cycle: the Farm Assistant sizes "
+                "its own sends and would spend %s, reserved here for an armed "
+                "noble job", ", ".join(conflict))
+            return
         if (
                 self.get_config(section="farms", parameter="farm", default=False)
                 and self.get_village_config(
@@ -659,6 +730,7 @@ class Village:
         excluded = list(self.disabled_units) + list(self.get_village_config(
             self.village_id, parameter="gather_exclude_units", default=[]) or [])
         shaper.scavenge_uses_axes = bool(gather_on and "axe" not in excluded)
+        shaper.reserved = dict(self.troop_reserve or {})
         shaper.run()
 
     def _gather_night_consolidate(self):
@@ -846,6 +918,7 @@ class Village:
             # Never night-consolidate under attack: one long run with every
             # troop is the opposite of what you want with an incoming.
             consolidate=0 if under_attack else self._gather_night_consolidate(),
+            reserved=self.troop_reserve,
         )
 
     def go_manage_market(self):
@@ -856,8 +929,24 @@ class Village:
                 section="market", parameter="auto_trade", default=False
         ) and self.builder.get_level("market"):
             self.logger.info("Managing market")
-            self.resman.trade_max_per_hour = self.get_config(
-                section="market", parameter="trade_max_per_hour", default=1
+            # trades_per_hour means what its name says: higher is more trading.
+            # The older trade_max_per_hour key does the opposite despite its
+            # name (it is multiplied by 3600 into a cooldown, so it really means
+            # "hours between trades"), so it is only honoured when the new key
+            # is absent and no existing config changes meaning under it.
+            try:
+                per_hour = float(self.get_config(
+                    section="market", parameter="trades_per_hour", default=0) or 0)
+            except (TypeError, ValueError):
+                per_hour = 0
+            if per_hour > 0:
+                self.resman.trade_cooldown = int(3600 / per_hour)
+            else:
+                self.resman.trade_cooldown = int(3600 * self.get_config(
+                    section="market", parameter="trade_max_per_hour", default=1
+                ))
+            self.resman.max_trade_amount = self.get_config(
+                section="market", parameter="max_trade_amount", default=4000
             )
             self.resman.trade_max_duration = self.get_config(
                 section="market", parameter="max_trade_duration", default=1
@@ -939,6 +1028,7 @@ class Village:
         self.run_snob_recruit()
         self.do_recruit()
         self.manage_local_resources()
+        self.run_balancer()
 
         # Refresh forced-peace state before farming so run_farming() can skip
         # sending attacks during (or arriving into) a configured peace window.
@@ -1074,6 +1164,7 @@ class Village:
             "buidling_levels": self.builder.levels,
             "building_queue": self.builder.queue,
             "active_building_queue": getattr(self.builder, "queue_count_ingame", 0),
+            "building_queue_ingame": getattr(self.builder, "queue_ingame", []) or [],
             "troops": self.units.total_troops,
             "under_attack": self.def_man.under_attack,
             # Exact capacity/pop/production straight from the game (per-hour for

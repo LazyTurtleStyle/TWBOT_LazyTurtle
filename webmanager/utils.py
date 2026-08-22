@@ -13,7 +13,7 @@ import time
 import psutil
 
 from core.instance_lock import InstanceLock
-from game import attack_scheduler
+from game import attack_scheduler, attack_plan
 
 try:
     from game import csnipe
@@ -84,8 +84,42 @@ def parse_queue_entry(entry):
         "building": building,
         "level": level,
         "short": short,
+        "name": name,
         "label": "%s → level %s" % (name, level) if level else name,
     }
+
+
+def _short_duration(seconds):
+    """'3h 20m' / '45s' - for saying how far off something is, not for clocks."""
+    seconds = int(abs(seconds))
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm" % (seconds // 60)
+    return "%dh %dm" % (seconds // 3600, seconds % 3600 // 60)
+
+
+def parse_hq_queue(entries):
+    """Display data for the jobs sitting in the in-game HQ queue.
+
+    Takes what the bot cached from the game's own build queue (building, level,
+    when it finishes) - not the bot's planned build order, which is a different
+    and much longer list.
+    """
+    out = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        item = parse_queue_entry("%s:%s" % (
+            entry.get("building") or "", entry.get("level") or ""))
+        item["ready_at"] = entry.get("ready_at")
+        item["duration"] = entry.get("duration")
+        # Seconds left, so the cell reads right before the page's ticker takes
+        # over on the first second.
+        ready = item["ready_at"]
+        item["eta"] = max(0, int(ready) - int(time.time())) if ready else None
+        out.append(item)
+    return out
 
 
 class DataReader:
@@ -221,6 +255,62 @@ class DataReader:
         return 0.0
 
     @staticmethod
+    def troop_locations():
+        """Where the account's units stand, as the bot last read it from the
+        game (cache/troops_moving.json, written by update_troop_movements).
+
+        {"home": {}, "support": {}, "moving": {}, "by_village": {vid: {"own",
+        "in_village", "elsewhere", "moving"}}, "when": ts} - or {} when the bot
+        has not cached it yet. This is the only source that knows about troops
+        stationed in another village: a village's own snapshot never lists them.
+        """
+        try:
+            path = DataReader.data_path("cache", "troops_moving.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def troop_templates():
+        """The player's rally-point troop templates as the bot last read them
+        (cache/troop_templates.json): {id: {"name", "units", "use_all"}}.
+
+        "units" already speaks the scheduler's language, so a template can fill
+        the unit fields directly - a send-everything template comes through as
+        "all" per unit and resolves at send time like any other 'all'.
+        """
+        try:
+            path = DataReader.data_path("cache", "troop_templates.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return (json.load(f) or {}).get("templates") or {}
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def troop_templates_expire():
+        """Mark the cached templates stale so the bot re-reads them from the
+        rally point on its next pass - for right after editing a template
+        in-game. The old contents stay readable until then, so the picker never
+        goes empty while waiting."""
+        try:
+            path = DataReader.data_path("cache", "troop_templates.json")
+            if not os.path.exists(path):
+                return False
+            with open(path) as f:
+                cached = json.load(f) or {}
+            cached["when"] = 0
+            with open(path, "w") as f:
+                json.dump(cached, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def session_logged_out():
         """True when the incoming poller last recorded a logged-out session for
         the active world (cookie expired). World-aware read for the web process."""
@@ -307,12 +397,58 @@ class DataReader:
             speeds = dict(DEFAULT_UNIT_SPEEDS)
         return world_speed, unit_speed, speeds
 
+    # Memo for cache_grab, invalidated by content rather than by a timer.
+    # sync() is the shared data loader behind nearly every dashboard page, so
+    # each page view re-parsed the whole cache directory - and cache/reports is
+    # tens of thousands of files (measured 2026-08-03: ~44s and 29.5k file reads
+    # for one pass on a loaded box). Fingerprinting the directory instead costs
+    # ~0.1s, so the parse only reruns when a file is actually added or rewritten.
+    # A time-based memo was the obvious alternative but is wrong here: a cold
+    # parse can outlast any sane TTL, so it could expire midway through the very
+    # render it was meant to speed up. Keyed on the resolved path, so switching
+    # worlds never serves another world's cache.
+    _grab_memo = {}
+    _grab_memo_lock = threading.Lock()
+
+    @staticmethod
+    def _dir_signature(path):
+        """Cheap fingerprint of a cache dir: (file_count, newest_mtime).
+
+        Statting is far cheaper than parsing, and this catches both new files
+        (count) and rewritten ones (mtime), which is every way the bot changes
+        a cache directory.
+        """
+        count = 0
+        newest = 0.0
+        try:
+            with os.scandir(path) as it:
+                for e in it:
+                    if not e.name.endswith(".json"):
+                        continue
+                    count += 1
+                    try:
+                        m = e.stat().st_mtime
+                    except OSError:
+                        continue
+                    if m > newest:
+                        newest = m
+        except OSError:
+            return (0, 0.0)
+        return (count, newest)
+
     @staticmethod
     def cache_grab(cache_location):
         output = {}
         c_path = DataReader.data_path("cache", cache_location)
         if not os.path.isdir(c_path):
             return output
+
+        signature = DataReader._dir_signature(c_path)
+        with DataReader._grab_memo_lock:
+            hit = DataReader._grab_memo.get(c_path)
+            if hit and hit[0] == signature:
+                return hit[1]
+
         for existing in os.listdir(c_path):
             existing = str(existing)
             if not existing.endswith(".json"):
@@ -326,6 +462,14 @@ class DataReader:
                     f.close()
                     os.remove(t_path)
 
+        with DataReader._grab_memo_lock:
+            # Deliberately the signature taken *before* parsing. If the bot wrote
+            # a report while we were reading, the post-parse signature would
+            # match a result that never contained it and pin that stale copy
+            # until the next write; the pre-parse one simply misses next time and
+            # re-reads. Same for the broken entries removed above - one extra
+            # pass and the memo settles.
+            DataReader._grab_memo[c_path] = (signature, output)
         return output
 
     @staticmethod
@@ -385,10 +529,18 @@ class DataReader:
         return False
 
     @staticmethod
-    def schedule_create(origin_id, target_x, target_y, units, arrival_ts):
+    def schedule_create(origin_id, target_x, target_y, units, arrival_ts,
+                        train=None, dry_run=False, support=False):
         """Queue a timed attack scheduled to LAND at arrival_ts (unix seconds).
         The send moment is back-calculated from the slowest selected unit's
-        travel time. Returns (entry, error_message)."""
+        travel time. Returns (entry, error_message).
+
+        With `train` ({"mode": "front"|"even", "escort": {unit: n}}) the stack is
+        split into one command per noble, all fired back-to-back at the send
+        moment. dry_run=True validates and returns the entry without queueing it,
+        which is what the dashboard's wave preview uses. support=True sends the
+        troops as support instead of an attack (imported plans mark those rows,
+        and sending one as an attack would hit an ally)."""
         origin_id = str(origin_id)
         managed = DataReader.cache_grab("managed")
         origin = managed.get(origin_id) or {}
@@ -421,6 +573,43 @@ class DataReader:
                 selected[unit] = count
         if not selected:
             return None, "no units selected"
+
+        waves = None
+        dynamic = False
+        notes = []
+        if train and support:
+            return None, "a support command cannot be a noble train"
+        if train:
+            home = {}
+            for unit, count in (origin.get("available_troops") or {}).items():
+                try:
+                    home[unit] = int(count)
+                except (TypeError, ValueError):
+                    continue
+            # "all" is only a real count at send time, so the split shown here is
+            # a preview off the last snapshot; the bot re-reads the rally point
+            # and re-splits just before launching (resolve_train_waves).
+            dynamic = attack_scheduler.has_all(selected)
+            if dynamic and not home:
+                return None, ("no troop snapshot for this village yet - "
+                              "type the counts instead of 'all'")
+            counts = attack_scheduler.resolve_all_units(selected, home)
+            waves, err = attack_scheduler.split_train(
+                counts, mode=(train.get("mode") or "front"),
+                escort=train.get("escort") or {})
+            if err:
+                return None, err
+            # Fewer nobles at home than the train asks for is worth saying out
+            # loud, but not worth refusing: the command may be hours away, a
+            # noble may well finish before then, and the send-time split shrinks
+            # to whatever is actually standing there rather than failing.
+            at_home = home.get("snob", 0)
+            if at_home < len(waves):
+                notes.append(
+                    "only %d noble%s at home right now - unless more finish "
+                    "before it leaves, this goes as %d wave%s"
+                    % (at_home, "" if at_home == 1 else "s",
+                       max(at_home, 1), "" if at_home == 1 else "s"))
 
         if arrival_ts <= int(time.time()):
             return None, "arrival time is in the past"
@@ -462,10 +651,72 @@ class DataReader:
             "status": "pending",
             "created": int(time.time()),
         }
+        if support:
+            entry["support"] = True
+        if notes:
+            # Things worth knowing about a command that was still queued.
+            entry["notes"] = notes
+        if waves:
+            # The waves are what actually gets sent; `units` stays the whole
+            # stack so every existing view keeps reading the same field.
+            entry["waves"] = waves
+            entry["train"] = {
+                "mode": train.get("mode") or "front",
+                "nobles": len(waves),
+                "escort": train.get("escort") or {},
+                # Re-read the village and re-split at send time. Leave room for
+                # a couple of nobles that finish training between now and then;
+                # the pre-stage window is sized for max_waves, so the train can
+                # grow that far and no further.
+                "dynamic": dynamic,
+                "max_waves": len(waves) + (2 if dynamic else 0),
+            }
+        if dry_run:
+            return entry, None
         # Append through the shared, locked, atomic store so the bot's concurrent
         # status writes can't clobber this command (and vice versa).
         attack_scheduler.add_command(entry, path=DataReader.schedule_path())
         return entry, None
+
+    @staticmethod
+    def schedule_display():
+        """The queue as the dashboard should show it.
+
+        A train queued with "all" stores the split that its troop snapshot
+        implied at the time, which goes stale the moment a noble finishes or a
+        farm run comes home. Recompute those previews against the newest
+        snapshot - the same arithmetic the bot runs against the live rally point
+        when the command is due - so the table shows what would be sent now
+        instead of what was guessed then.
+        """
+        commands = DataReader.schedule_grab()
+        managed = DataReader.cache_grab("managed")
+        for command in commands:
+            spec = command.get("train") or {}
+            if command.get("status") != "pending" or not spec.get("dynamic"):
+                continue
+            origin = managed.get(str(command.get("origin_id"))) or {}
+            home = {}
+            for unit, count in (origin.get("available_troops") or {}).items():
+                try:
+                    home[unit] = int(count)
+                except (TypeError, ValueError):
+                    continue
+            if not home:
+                continue
+            counts = attack_scheduler.resolve_all_units(command.get("units") or {}, home)
+            budget = int(spec.get("max_waves") or 0) or counts.get("snob", 0)
+            nobles = min(counts.get("snob", 0), budget)
+            if nobles < 2:
+                continue  # nothing to preview as a train right now
+            counts["snob"] = nobles
+            escort, _notes = attack_scheduler.fit_escort(
+                spec.get("escort"), counts, nobles - 1)
+            waves, err = attack_scheduler.split_train(
+                counts, mode=spec.get("mode") or "front", escort=escort)
+            if waves and not err:
+                command["waves"] = waves
+        return commands
 
     @staticmethod
     def schedule_cancel(command_id):
@@ -820,11 +1071,26 @@ class DataReader:
         except (TypeError, ValueError):
             speed = 1.0
         managed = DataReader.cache_grab("managed") or {}
+        # Nobles on their way to each target as the bot last saw them, whoever
+        # sent them. The job's own in_flight only covers the bot's own sends,
+        # so on its own it under-reports a train launched by hand.
+        flying = {}
+        flying_age = None
+        try:
+            with open(DataReader.data_path("cache", "noble_flying.json")) as fh:
+                seen = json.load(fh) or {}
+            flying = seen.get("targets") or {}
+            flying_age = int(time.time()) - int(seen.get("at") or 0)
+        except (OSError, ValueError, TypeError):
+            pass
         for job in jobs:
             est = noblebarb.estimate_loyalty(job, speed=speed)
             job["loyalty_est"] = est
             job["nobles_needed"] = noblebarb.nobles_needed_worst_case(est)
             job["train_allowed"] = noblebarb.max_safe_nobles(est)
+            job["nobles_flying"] = int(flying.get(
+                "%s|%s" % (job.get("target_x"), job.get("target_y")), 0) or 0)
+            job["flying_age"] = flying_age
             source = managed.get(str(job.get("source_id"))) or {}
             job["nobles_home"] = int(
                 (source.get("available_troops") or {}).get("snob", 0) or 0)
@@ -903,6 +1169,14 @@ class DataReader:
         if noblebarb is None:
             return None
         return noblebarb.toggle_job(str(job_id), path=DataReader.noble_path())
+
+    @staticmethod
+    def noble_move(job_id, direction):
+        """Shift a job up or down the priority list (see focus_budgets)."""
+        if noblebarb is None:
+            return False
+        return noblebarb.move_job(str(job_id), direction,
+                                  path=DataReader.noble_path())
 
     @staticmethod
     def noble_remove(job_id):
@@ -1018,6 +1292,11 @@ class DataReader:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
             if "." in parameter:
                 section, param = parameter.split('.')
+                # A section added to the bot after this world's config.json was
+                # written (e.g. balancer) has no key yet; create it on first save
+                # rather than 500-ing on a KeyError.
+                if section not in template:
+                    template[section] = collections.OrderedDict()
                 template[section][param] = value
             else:
                 template[parameter] = value
@@ -1523,23 +1802,7 @@ class OverviewBuilder:
         rpath = DataReader.data_path("cache", "reports")
         if not os.path.isdir(rpath):
             return (rpath, 0, 0.0)
-        count = 0
-        newest = 0.0
-        try:
-            with os.scandir(rpath) as it:
-                for e in it:
-                    if not e.name.endswith(".json"):
-                        continue
-                    count += 1
-                    try:
-                        m = e.stat().st_mtime
-                    except OSError:
-                        continue
-                    if m > newest:
-                        newest = m
-        except OSError:
-            return (rpath, 0, 0.0)
-        return (rpath, count, newest)
+        return (rpath,) + DataReader._dir_signature(rpath)
 
     @classmethod
     def _farm_trade_records(cls):
@@ -1822,16 +2085,26 @@ class OverviewBuilder:
                     "commands": future,
                 })
 
+            # Warehouse pressure, measured on the fullest resource: production
+            # of that one is being thrown away long before the other two catch
+            # up, so an average would hide exactly the villages worth looking at.
+            capacity = cls._to_int(vdata.get("storage_max"))
+            fullest = max(cls._to_int(resources.get(k)) for k in ("wood", "stone", "iron"))
+
             villages.append({
                 "id": vid,
                 "name": name,
                 "points": public.get("points"),
                 "location": public.get("location"),
                 "resources": resources,
+                "storage_max": capacity,
+                "storage_pct": min(100, round(fullest * 100 / capacity)) if capacity else None,
                 "troops": {u: a for u, a in available.items() if cls._to_int(a) > 0},
                 "queue_len": len(queue),
-                # First few planned builds, rendered as chips with mouseover.
-                "queue_preview": [parse_queue_entry(e) for e in queue[:5]],
+                # What the game's own HQ queue is building right now, which is
+                # what the villages table shows - the plan above can be a
+                # hundred entries long and says nothing about what is underway.
+                "queue_ingame": parse_hq_queue(vdata.get("building_queue_ingame")),
             })
 
         villages.sort(key=lambda v: cls._to_int(v.get("points")), reverse=True)
@@ -1896,29 +2169,56 @@ class OverviewBuilder:
             cfg_villages = {}
         scavenging_enabled = sum(1 for v in cfg_villages.values() if v.get("gather_enabled"))
 
-        # Troops away from home (supporting other villages, attacking, or in transit)
-        # = total owned minus what is currently sitting at home, per unit.
-        troops_away = {u: max(0, total_troops.get(u, 0) - home_troops.get(u, 0))
-                       for u in total_troops}
-        # Split "away" into in-transit ("op pad") and support (stationed in other
-        # villages). Both are read straight from the game and cached by the bot
-        # (cache/troops_moving.json); we do NOT derive support by subtraction
-        # because the snapshots are taken at different moments and that leaves
-        # phantom troops. If the cache is missing, fall back to lumped "away".
-        cache = {}
-        try:
-            mpath = DataReader.data_path("cache", "troops_moving.json")
-            if os.path.exists(mpath):
-                with open(mpath) as f:
-                    cache = json.load(f) or {}
-        except Exception:
+        # Where the account's units actually stand. The account-wide
+        # type=complete overview (cache/troops_moving.json, refreshed every few
+        # minutes by the bot) is the only reading that knows: a village's own
+        # units page shows what is standing in the village and nothing about
+        # what it has out scavenging or parked in another village. Summing the
+        # per-village snapshots is therefore "at home right now", never a total
+        # - with the defensive stacks out on a gather run that reads a fraction
+        # of the real army, which is exactly how a 34k spear account renders as
+        # 16k. `home_troops` below is that snapshot sum; keep it separate.
+        snapshot_home = dict(home_troops)
+        cache = DataReader.troop_locations()
+        if not isinstance(cache, dict):
             cache = {}
-        has_cache = isinstance(cache, dict) and ("moving" in cache or "support" in cache)
-        troops_moving = {u: cls._to_int(c) for u, c in (cache.get("moving", {}) or {}).items() if cls._to_int(c)}
-        if has_cache:
-            troops_support = {u: cls._to_int(c) for u, c in (cache.get("support", {}) or {}).items() if cls._to_int(c)}
+        troops_when = cls._to_int(cache.get("complete_when")) or cls._to_int(cache.get("when"))
+        troops_age = (int(time.time()) - troops_when) if troops_when else None
+        troops_moving = {u: cls._to_int(c) for u, c in (cache.get("moving", {}) or {}).items()
+                         if cls._to_int(c)}
+        troops_support = {u: cls._to_int(c) for u, c in (cache.get("support", {}) or {}).items()
+                          if cls._to_int(c)}
+
+        if cache.get("by_village"):
+            # Complete reading: home, support and moving all come off the same
+            # page, so every column is consistent and Total is exactly the sum.
+            home_troops = {u: cls._to_int(c) for u, c in (cache.get("home", {}) or {}).items()
+                           if cls._to_int(c)}
+            total_troops = {}
+            for part in (home_troops, troops_support, troops_moving):
+                for unit, count in part.items():
+                    total_troops[unit] = total_troops.get(unit, 0) + count
+            troops_partial = bool(cache.get("partial"))
         else:
-            troops_support = troops_away  # no live split yet: show the lumped total
+            # Degraded reading: the complete table would not parse, or nothing
+            # is cached yet (first cycle). Every estimate left is a lower bound
+            # taken at its own moment - the per-village totals cannot see units
+            # parked in another village, the away pools are only what is out,
+            # the home snapshot only what is in. Take the largest per unit.
+            # Never ADD across them: the village snapshots are minutes apart, so
+            # home + moving counts the same gather squad twice, once where it
+            # stood and once where it is now. Flagged partial either way.
+            troops_partial = True
+            estimates = (total_troops, snapshot_home,
+                         {u: troops_support.get(u, 0) + troops_moving.get(u, 0)
+                          for u in set(troops_support) | set(troops_moving)})
+            units_seen = set().union(*(set(e) for e in estimates))
+            total_troops = {u: max(e.get(u, 0) for e in estimates) for u in units_seen}
+
+        # Away is never derived by subtracting two snapshots taken at different
+        # moments - that leaves phantom troops. It is the two away pools added.
+        troops_away = {u: troops_support.get(u, 0) + troops_moving.get(u, 0)
+                       for u in total_troops}
 
         # Last-24h and all-time counters over the FULL report cache (sync() only
         # passes the newest ~100, which is enough for the feed but not for totals).
@@ -2004,6 +2304,12 @@ class OverviewBuilder:
                 "troops_away": troops_away,
                 "troops_support": troops_support,
                 "troops_moving": troops_moving,
+                # Age of the troop-location reading the four columns come from,
+                # and whether it was complete. The panel shows both: a silently
+                # stale or half-parsed split is the one failure mode that makes
+                # these numbers look like missing units.
+                "troops_age": troops_age,
+                "troops_partial": troops_partial,
                 "loot_recent": loot_recent,
                 "last_activity": last_activity,
                 "watchdog": _watchdog,
@@ -2016,6 +2322,112 @@ class OverviewBuilder:
             "incoming_total": sum(len(v["commands"]) for v in active_incoming),
             "recent_incoming": recent_incoming,
             "incoming_logged_out": incoming_logged_out,
+        }
+
+
+class PlanImport:
+    """Review data for a pasted attack plan (devilicious.dev and friends).
+
+    Matches every planned line to one of our villages, re-derives the travel
+    time from this world's own unit speeds, and flags whatever would go wrong -
+    an origin that is not ours, a send moment already past, a plan built for
+    different world settings, two commands emptying the same village. Nothing
+    is queued here: the Attack tab shows this table first and only sends what
+    the user then confirms.
+    """
+
+    @staticmethod
+    def _suggest_units(row):
+        """A starting point for the troops, which no plan actually specifies.
+
+        Only units at least as fast as the one the plan paced the command with,
+        so the send moment the plan calculated still holds.
+        """
+        if row["unit"] == "snob":
+            return {"snob": row["count"], "axe": "all", "light": "all"}
+        return {row["unit"]: "all"}
+
+    @classmethod
+    def build(cls, text):
+        rows, skipped = attack_plan.parse_plan(text)
+
+        managed = DataReader.cache_grab("managed")
+        mine = {}
+        for vid, village in managed.items():
+            loc = (village.get("public") or {}).get("location")
+            if loc and len(loc) == 2:
+                mine[(int(loc[0]), int(loc[1]))] = (
+                    str(vid), village.get("name") or str(vid))
+
+        named = {}
+        for village in DataReader.cache_grab("villages").values():
+            loc = village.get("location")
+            name = village.get("name")
+            if loc and len(loc) == 2 and isinstance(name, str) and name:
+                named[(int(loc[0]), int(loc[1]))] = name
+
+        ws, us, speeds = DataReader.world_speeds()
+        now = time.time()
+        seen_origins = {}
+        out = []
+        for row in rows:
+            entry = dict(row)
+            # Blocking problems are ones we cannot send through at all; warnings
+            # are judgement calls the user may well have reasons for, so those
+            # rows stay tickable, just not ticked for them.
+            problems, warnings = [], []
+
+            origin = mine.get(tuple(row["origin"]))
+            entry["origin_id"], entry["origin_name"] = origin or (None, None)
+            if not origin:
+                problems.append("%d|%d is not one of your villages"
+                                % tuple(row["origin"]))
+            entry["target_name"] = named.get(tuple(row["target"]))
+
+            speed = speeds.get(row["unit"])
+            if speed and field_distance and unit_travel_seconds:
+                travel = unit_travel_seconds(
+                    field_distance(row["origin"], row["target"]), speed, ws, us)
+                entry["travel_seconds"] = int(travel)
+                # The plan's own travel column, for comparison: a mismatch means
+                # it was built against different world speeds, and every send
+                # moment in it is wrong for this world.
+                entry["travel_delta"] = int(round(travel - row["plan_travel_seconds"]))
+                entry["send_ts"] = row["arrival_ts"] - travel
+                if abs(entry["travel_delta"]) > 60:
+                    warnings.append("plan's travel time is off by %+ds for this "
+                                    "world - check the plan's speed settings"
+                                    % entry["travel_delta"])
+                if entry["send_ts"] <= now:
+                    problems.append("would have to leave %s ago"
+                                    % _short_duration(now - entry["send_ts"]))
+            else:
+                problems.append("no travel speed for '%s' on this world" % row["unit"])
+
+            if origin:
+                first = seen_origins.get(origin[0])
+                if first:
+                    warnings.append("village also sends on line %d - give each "
+                                    "command its own counts, not 'all'" % first)
+                else:
+                    seen_origins[origin[0]] = row["line"]
+
+            entry["units"] = cls._suggest_units(row)
+            entry["train"] = (row["unit"] == "snob" and row["count"] > 1)
+            entry["problems"] = problems
+            entry["warnings"] = warnings
+            entry["ok"] = not problems
+            # Only pre-tick what is both sendable and unremarkable.
+            entry["selected"] = not problems and not warnings
+            out.append(entry)
+
+        return {
+            "rows": out,
+            "skipped": skipped,
+            "queueable": sum(1 for r in out if r["ok"]),
+            # Plan timestamps are read on the host clock; say how far that is
+            # from the game server so an off-by-minutes host is visible here.
+            "clock_offset": round(DataReader.server_clock_offset(), 1),
         }
 
 
@@ -2073,6 +2485,9 @@ class AttackPlanner:
             "speeds": {u: speeds[u] for u in units},
             "world_speed": world_speed,
             "unit_speed": unit_speed,
+            # The player's own rally-point templates ("OFF", "Fake", ...), for
+            # filling the unit fields without retyping them here.
+            "templates": DataReader.troop_templates(),
             "now": int(time.time()),
         }
 
@@ -2091,17 +2506,57 @@ class DefenseOverview:
         incomings_by_target = OverviewBuilder._build_incomings(village_db)
         now = int(time.time())
 
+        # Garrisons come from the account-wide troop-location reading the bot
+        # refreshes every few minutes (cache/troops_moving.json), NOT from each
+        # village's cached available_troops. That snapshot is only rewritten
+        # when the bot next runs the village, so a stack that left on a gather
+        # run half an hour ago still reads as sitting at home - the page then
+        # promises defence that is nowhere near the wall.
+        locations = DataReader.troop_locations()
+        if not isinstance(locations, dict):
+            locations = {}
+        by_village = locations.get("by_village") or {}
+        # A partial write carries the previous by_village breakdown forward, so
+        # age the garrison figures by when that breakdown was actually read.
+        reading_when = (OverviewBuilder._to_int(locations.get("complete_when"))
+                        or OverviewBuilder._to_int(locations.get("when")))
+        reading_age = (now - reading_when) if reading_when else None
+
         villages = []
         total_def = {u: 0 for u in cls.DEFENSIVE_UNITS}
+        total_def_away = {u: 0 for u in cls.DEFENSIVE_UNITS}
+        stale_villages = 0
         under_attack_count = 0
         total_incoming = 0
 
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
-            avail = vdata.get("available_troops", {}) or {}
-            home_def = {u: OverviewBuilder._to_int(avail.get(u)) for u in cls.DEFENSIVE_UNITS}
+            located = by_village.get(str(vid))
+            if located:
+                # "own" is this village's own units standing in it right now;
+                # "elsewhere"/"moving" are the same village's units parked in
+                # another village or in transit (gather runs included).
+                own = located.get("own") or {}
+                home_def = {u: OverviewBuilder._to_int(own.get(u)) for u in cls.DEFENSIVE_UNITS}
+                away_def = {
+                    u: OverviewBuilder._to_int((located.get("elsewhere") or {}).get(u))
+                       + OverviewBuilder._to_int((located.get("moving") or {}).get(u))
+                    for u in cls.DEFENSIVE_UNITS
+                }
+                fresh = True
+            else:
+                # No live reading for this village (first cycle, or the overview
+                # would not parse). Fall back to its own snapshot and say so
+                # rather than showing it as an empty village.
+                avail = vdata.get("available_troops", {}) or {}
+                home_def = {u: OverviewBuilder._to_int(avail.get(u)) for u in cls.DEFENSIVE_UNITS}
+                away_def = {u: 0 for u in cls.DEFENSIVE_UNITS}
+                fresh = False
+                stale_villages += 1
+
             for u in cls.DEFENSIVE_UNITS:
                 total_def[u] += home_def[u]
+                total_def_away[u] += away_def[u]
 
             cmds = incomings_by_target.get(str(vid), [])
             future = [c for c in cmds if (c.get("eta") or 0) > 0]
@@ -2121,6 +2576,9 @@ class DefenseOverview:
                 "commands": future,
                 "def_troops": home_def,
                 "def_total": sum(home_def.values()),
+                "def_away": away_def,
+                "def_away_total": sum(away_def.values()),
+                "def_fresh": fresh,
             })
 
         # Under-attack villages first (soonest arrival first), then strongest garrisons.
@@ -2135,6 +2593,15 @@ class DefenseOverview:
             "defensive_units": cls.DEFENSIVE_UNITS,
             "total_def": total_def,
             "total_def_sum": sum(total_def.values()),
+            # What is out (supporting elsewhere or in transit) and will not be
+            # home for an incoming unless it is recalled in time.
+            "total_def_away": total_def_away,
+            "total_def_away_sum": sum(total_def_away.values()),
+            # Provenance of the garrison figures, so a stale or partial reading
+            # is visible instead of being read as "this is what I have".
+            "reading_age": reading_age,
+            "reading_live": bool(by_village),
+            "stale_villages": stale_villages,
             "under_attack_count": under_attack_count,
             "total_incoming": total_incoming,
             "village_count": len(managed),

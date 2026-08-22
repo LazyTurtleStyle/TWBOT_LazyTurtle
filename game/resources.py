@@ -6,6 +6,22 @@ import re
 import time
 
 from core.extractors import Extractor
+from core.filemanager import FileManager
+
+# Offers the bot itself placed on the market: {offer_id: {"village", "created"}}.
+# Kept on disk so the ledger survives a restart, because an offer outlives the
+# process that made it. Anything NOT in here was placed by hand and is never
+# touched by the bot.
+MARKET_OFFER_LEDGER = "cache/market_offers.json"
+
+
+def _load_bot_offers():
+    """The bot's own market offers, keyed by offer id."""
+    return FileManager.load_json_file(MARKET_OFFER_LEDGER) or {}
+
+
+def _save_bot_offers(ledger):
+    FileManager.save_json_file(ledger, MARKET_OFFER_LEDGER)
 
 
 class PremiumExchange:
@@ -103,7 +119,9 @@ class ResourceManager:
     # not allowed to bias
     trade_bias = 1
     last_trade = 0
-    trade_max_per_hour = 1
+    # Seconds to wait between trades. Set from config by go_manage_market; the
+    # default matches the old trade_max_per_hour default of one trade per hour.
+    trade_cooldown = 3600
     trade_max_duration = 2
     trade_round_to_1000 = False
     wrapper = None
@@ -341,8 +359,18 @@ class ResourceManager:
         """
         url = f"game.php?village={self.village_id}&screen=market&mode=own_offer"
         res = self.wrapper.get_url(url=url)
-        if 'market_merchant_available_count">0' in res.text:
-            self.logger.debug("Not trading because not enough merchants available")
+        # One merchant carries 1000, so an offer of me_amount needs that many
+        # of them free. Checking only for zero (as this used to) means a large
+        # offer gets posted and refused by the game.
+        available = re.search(
+            r'market_merchant_available_count">(\d+)', res.text)
+        available = int(available.group(1)) if available else 0
+        needed = -(-int(me_amount) // 1000)  # ceil
+        if available < needed:
+            self.logger.debug(
+                "Not trading because not enough merchants available (%d free, %d needed for %d)",
+                available, needed, me_amount,
+            )
             return False
         payload = {
             "res_sell": me_item,
@@ -354,9 +382,49 @@ class ResourceManager:
             "h": self.wrapper.last_h,
         }
         post_url = f"game.php?village={self.village_id}&screen=market&mode=own_offer&action=new_offer"
+        before = self.own_offer_ids()
         self.wrapper.post_url(post_url, data=payload)
         self.last_trade = int(time.time())
+        self.remember_own_offer(before)
         return True
+
+    def own_offer_ids(self):
+        """
+        Ids of the offers currently on the market for this village
+        """
+        url = f"game.php?village={self.village_id}&screen=market&mode=all_own_offer"
+        data = self.wrapper.get_url(url)
+        return {
+            offer
+            for offer, village in re.findall(
+                r'data-id="(\d+)".+?data-village="(\d+)"', data.text)
+            if village == str(self.village_id)
+        }
+
+    def remember_own_offer(self, before):
+        """
+        Records the offer we just placed, so drop_existing_trades can tell our
+        own offers apart from the ones you placed by hand.
+
+        The offer id isn't in the response to the create POST, so it is found by
+        diffing the village's offer list around the post: whatever is new is
+        ours. If that diff is not exactly one offer the result is ambiguous and
+        nothing is recorded - the offer then stays untracked and the bot will
+        never remove it, which is the safe direction to fail in.
+        """
+        new = self.own_offer_ids() - before
+        if len(new) != 1:
+            self.logger.debug(
+                "Could not pin down the new offer id (%d candidates), leaving it untracked",
+                len(new),
+            )
+            return
+        ledger = _load_bot_offers()
+        ledger[new.pop()] = {
+            "village": str(self.village_id),
+            "created": int(time.time()),
+        }
+        _save_bot_offers(ledger)
 
     def round_to_merchant_capacity(self, amount):
         """
@@ -370,24 +438,58 @@ class ResourceManager:
 
     def drop_existing_trades(self):
         """
-        Removes an existing trade if resources are needed elsewhere or it expired
+        Removes the bot's own expired offers from the market.
+
+        Only offers the bot placed itself are considered - they are recorded in
+        the ledger as they are created. Offers you placed by hand are never in
+        that ledger, so they are left alone.
+
+        An offer is only dropped once it is older than trade_max_duration hours,
+        the max_time it was posted with: until then it still stands a chance of
+        being accepted, and deleting it early would mean no offer of ours ever
+        survives long enough to be taken.
         """
         url = f"game.php?village={self.village_id}&screen=market&mode=all_own_offer"
         data = self.wrapper.get_url(url)
         existing = re.findall(r'data-id="(\d+)".+?data-village="(\d+)"', data.text)
-        for entry in existing:
-            offer, village = entry
-            if village == str(self.village_id):
-                post_url = f"game.php?village={self.village_id}&screen=market&mode=all_own_offer&action=delete_offers"
-                post = {
-                    "id_%s" % offer: "on",
-                    "delete": "Verwijderen",
-                    "h": self.wrapper.last_h,
-                }
-                self.wrapper.post_url(url=post_url, data=post)
-                self.logger.info(
-                    "Removing offer %s from market because it existed too long" % offer
-                )
+        on_market = {
+            offer for offer, village in existing if village == str(self.village_id)
+        }
+        ledger = _load_bot_offers()
+        now = int(time.time())
+        expiry = int(3600 * self.trade_max_duration)
+        changed = False
+
+        for offer in on_market:
+            entry = ledger.get(offer)
+            if not entry:
+                # Not ours - yours, or from before the ledger existed. Leave it.
+                continue
+            if now - int(entry.get("created", now)) < expiry:
+                continue
+            post_url = f"game.php?village={self.village_id}&screen=market&mode=all_own_offer&action=delete_offers"
+            post = {
+                "id_%s" % offer: "on",
+                "delete": "Verwijderen",
+                "h": self.wrapper.last_h,
+            }
+            self.wrapper.post_url(url=post_url, data=post)
+            self.logger.info(
+                "Removing our own offer %s from market because it existed too long" % offer
+            )
+            ledger.pop(offer, None)
+            changed = True
+
+        # Forget the ones that are no longer on the market: accepted by another
+        # player, or removed by you. Only this village's entries are pruned, the
+        # ledger is shared by every village.
+        for offer, entry in list(ledger.items()):
+            if entry.get("village") == str(self.village_id) and offer not in on_market:
+                ledger.pop(offer)
+                changed = True
+
+        if changed:
+            _save_bot_offers(ledger)
 
     def readable_ts(self, seconds):
         """
@@ -406,7 +508,7 @@ class ResourceManager:
         """
         Manages the market for you
         """
-        last = self.last_trade + int(3600 * self.trade_max_per_hour)
+        last = self.last_trade + int(self.trade_cooldown)
         if last > int(time.time()):
             rts = self.readable_ts(last)
             self.logger.debug(f"Won't trade for {rts}")

@@ -11,7 +11,7 @@ from game.reports import ReportCache
 
 class VillageManager:
     @staticmethod
-    def farm_manager(verbose=False, clean_reports=False, prune_after_days=0):
+    def farm_manager(verbose=False, clean_reports=False, prune_after_days=0, reports=None):
         logger = logging.getLogger("FarmManager")
         # Read through FileManager so the active world's config is found
         # (worlds/<name>/config.json), not just the project-root config.json.
@@ -23,7 +23,13 @@ class VillageManager:
         if verbose:
             logger.info("Villages: %d", len(config["villages"]))
         attacks = AttackCache.cache_grab()
-        reports = ReportCache.cache_grab()
+        # The running bot already holds every report in ReportManager.last_reports,
+        # so re-reading the whole cache directory here would parse tens of
+        # thousands of files and allocate a second full copy of them - every
+        # cycle. Callers that have them in memory pass them in; standalone use
+        # (python manager.py) still falls back to reading from disk.
+        if reports is None:
+            reports = ReportCache.cache_grab()
 
         if verbose:
             logger.info("Reports: %d", len(reports))
@@ -140,17 +146,36 @@ class VillageManager:
                     pruned, int(prune_after_days),
                 )
 
+        # Cap the report cache at the newest N reports. Off (0/False) by default:
+        # the loot averages above are computed over all of a farm's history, so
+        # shortening that history changes how farms get profiled - that has to be
+        # a deliberate choice, not something that silently kicks in.
         if clean_reports:
             reports_dir = FileManager._resolve("cache/reports")
-            list_of_files = sorted([os.path.join(reports_dir, f) for f in os.listdir(reports_dir)],
-                                   key=os.path.getctime)
+            list_of_files = sorted(
+                [os.path.join(reports_dir, f) for f in os.listdir(reports_dir)
+                 if f.endswith(".json")],
+                key=os.path.getctime)
 
             logger.info(f"Found {len(list_of_files)} files")
 
+            removed = 0
             while len(list_of_files) > clean_reports:
                 oldest_file = list_of_files.pop(0)
-                logger.info(f"Delete old report ({oldest_file})")
+                logger.debug(f"Delete old report ({oldest_file})")
                 os.remove(os.path.abspath(oldest_file))
+                # Drop it from the in-memory copy too. When the bot passed its
+                # live ReportManager.last_reports in, this is the same dict the
+                # villages read from, so deleting the file alone would free disk
+                # but leave the report resident until the next restart - which is
+                # the memory this cap exists to bound in the first place.
+                reports.pop(os.path.basename(oldest_file)[:-len(".json")], None)
+                removed += 1
+            if removed:
+                logger.info(
+                    "Pruned %d old report(s), keeping the newest %d",
+                    removed, int(clean_reports),
+                )
 
 
 if __name__ == "__main__":

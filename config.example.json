@@ -38,6 +38,8 @@
     "auto_set_village_names": false,
     "user_agent": null,
     "check_update": false,
+    "clean_reports": 0,
+    "farm_prune_days": 0,
     "incoming_check": true,
     "incoming_check_min": 300,
     "incoming_check_max": 570,
@@ -116,6 +118,8 @@
     "max_kind_refusals": 3,
     "gather_group_policies": {},
     "noble_barb": true,
+    "noble_escort_reserve": true,
+    "noble_focus_fire": true,
     "barb_shaper": false,
     "shaper_min_wall": 2,
     "shaper_loss_tolerance": 1.0,
@@ -128,12 +132,27 @@
   "market": {
     "auto_trade": true,
     "max_trade_duration": 1,
+    "trades_per_hour": 1,
+    "max_trade_amount": 4000,
     "auto_remove": true,
     "trade_multiplier": true,
     "trade_multiplier_value": 1.0,
-    "trade_max_per_hour": 1,
     "trade_round_to_1000": false,
     "trade_for_premium": false
+  },
+  "balancer": {
+    "enabled": false,
+    "sender_min_points": 4000,
+    "receiver_max_points": 1000,
+    "target_fill_pct": 90,
+    "fill_mode": "even",
+    "target_order": "nearest",
+    "sender_order": "nearest",
+    "send_cooldown_minutes": 60,
+    "max_sends_per_receiver": 1,
+    "reserve_merchants": 0,
+    "sender_keep": 0,
+    "min_send_amount": 250
   },
   "world": {
     "knight_enabled": null,
@@ -148,7 +167,5 @@
     "manage": false,
     "auto_upgrade": false
   },
-  "villages": {
-
-  }
+  "villages": {}
 }

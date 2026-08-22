@@ -1,0 +1,13 @@
+[
+  {
+    "building": "barracks",
+    "level": 1,
+    "build": {
+      "barracks": {
+        "spear": 6000,
+        "sword": 6000,
+        "archer": 6000
+      }
+    }
+  }
+]

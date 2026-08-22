@@ -41,11 +41,12 @@ from core.instance_lock import InstanceLock
 from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
+from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
 from game import dailybonus
 from game import snipe
-from game.noblebarb import NobleBarbManager
+from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
@@ -159,7 +160,12 @@ class TWB:
     # Troop-movement data is dashboard-only and doesn't need per-cycle freshness.
     # Refresh it at most this often to avoid two extra full-page GETs every cycle
     # (cuts request volume and the bot-like request count).
-    TROOP_MOVE_REFRESH_SECONDS = 900
+    TROOP_MOVE_REFRESH_SECONDS = 300
+    # Rally-point troop templates belong to the player, not the village, and
+    # only change when the player edits one - but when they do, they want it in
+    # the dashboard's picker now, not next cycle. Cheap enough to re-read hourly
+    # (and the dashboard can expire this to pull an edit in straight away).
+    TEMPLATE_REFRESH_SECONDS = 3600
 
     def __init__(self):
         # Mutable state must live on the instance: main() retries a crash with
@@ -168,6 +174,9 @@ class TWB:
         # (villages named 004+ instead of 001+).
         self.villages = []
         self.found_villages = []
+        # {village_id: {unit: count}} held back for the armed noble jobs this
+        # cycle, see noble_escort_reserve().
+        self.troop_reserve = {}
 
     @staticmethod
     def internet_online():
@@ -402,6 +411,7 @@ class TWB:
         # Cache account-wide "op pad" (moving) troops so the dashboard can split
         # away troops into support (in other villages) vs in transit.
         self.update_troop_movements()
+        self.update_troop_templates()
 
         return overview_page, config
 
@@ -464,13 +474,17 @@ class TWB:
             )
 
     def update_troop_movements(self):
-        """Cache account-wide troop locations the snapshot can't tell apart:
+        """Cache troop locations the per-village snapshot cannot tell apart:
         'op pad' (moving / in transit) and 'elders' (support stationed in other
         villages). Read straight from the game so the dashboard never has to
-        derive support from mismatched snapshots."""
+        derive support from mismatched snapshots.
+
+        The type=complete overview carries all of it in one page, per village,
+        so that is what we ask for; the older per-type pages are only a fallback
+        for when that table cannot be parsed."""
         if not self.found_villages:
             return
-        # Skip the two extra GETs while the cached split is still fresh; the
+        # Skip the extra GET while the cached split is still fresh; the
         # dashboard tolerates slightly stale movement data.
         existing = FileManager.load_json_file("cache/troops_moving.json")
         if existing and int(time.time()) - int(existing.get("when", 0) or 0) < self.TROOP_MOVE_REFRESH_SECONDS:
@@ -478,17 +492,81 @@ class TWB:
         vid = self.found_villages[0]
         base = f"game.php?village={vid}&screen=overview_villages&mode=units&type="
         try:
+            # page=-1 keeps every village on one page once the account outgrows
+            # the overview's default page size.
+            page = self.wrapper.get_url(base + "complete&page=-1")
+            by_village = Extractor.units_overview_complete(page) if page else {}
+            if by_village:
+                def total(key):
+                    out = {}
+                    for village in by_village.values():
+                        for unit, count in (village.get(key) or {}).items():
+                            out[unit] = out.get(unit, 0) + count
+                    return out
+
+                stamp = int(time.time())
+                FileManager.save_json_file({
+                    "moving": total("moving"),
+                    "support": total("elsewhere"),
+                    "home": total("own"),
+                    "by_village": by_village,
+                    "when": stamp,
+                    # When the by_village breakdown was last read for real, so a
+                    # later partial write cannot pass stale detail off as fresh.
+                    "complete_when": stamp,
+                    "partial": False,
+                }, "cache/troops_moving.json")
+                return
             mv = self.wrapper.get_url(base + "moving")
             sup = self.wrapper.get_url(base + "away")
-            FileManager.save_json_file({
+            # Never clobber a good reading with a partial one. The per-type
+            # pages carry no per-village breakdown and no "home" figure, so
+            # writing them alone would strip both - and every consumer that
+            # asks "where do this village's troops stand" would silently fall
+            # back to the per-village snapshot, which only knows what is
+            # standing at home. Carry the last complete reading forward and
+            # mark the write partial instead.
+            payload = {
                 "moving": Extractor.units_overview(mv) if mv else {},
                 "support": Extractor.units_overview(sup) if sup else {},
                 "when": int(time.time()),
-            }, "cache/troops_moving.json")
+                "partial": True,
+            }
+            if existing:
+                for key in ("by_village", "home"):
+                    if existing.get(key):
+                        payload[key] = existing[key]
+                payload["complete_when"] = existing.get("complete_when", existing.get("when"))
+            FileManager.save_json_file(payload, "cache/troops_moving.json")
         except Exception as exc:
             # Non-critical: the dashboard falls back to lumped "away". Still log
             # at debug so a persistent parse/markup regression is visible.
             logging.getLogger("twb").debug("update_troop_movements failed: %s", exc)
+
+    def update_troop_templates(self):
+        """Cache the player's rally-point troop templates for the dashboard.
+
+        They are what the player already set up in-game ("OFF", "Fake", ...),
+        so the Attack tab can offer them instead of asking for the same unit
+        list to be typed again. Templates are account-wide and rarely edited,
+        hence the long refresh."""
+        if not self.found_villages:
+            return
+        existing = FileManager.load_json_file("cache/troop_templates.json")
+        if existing and int(time.time()) - int(existing.get("when", 0) or 0) < self.TEMPLATE_REFRESH_SECONDS:
+            return
+        vid = self.found_villages[0]
+        try:
+            page = self.wrapper.get_url(
+                f"game.php?village={vid}&screen=place&target_type=coord")
+            templates = Extractor.troop_templates(page) if page else {}
+            if templates:
+                FileManager.save_json_file(
+                    {"templates": templates, "when": int(time.time())},
+                    "cache/troop_templates.json")
+        except Exception as exc:
+            # Cosmetic feature: the dashboard just offers no templates.
+            logging.getLogger("twb").debug("update_troop_templates failed: %s", exc)
 
     def add_village(self, village_id, template=None):
         """
@@ -675,7 +753,7 @@ class TWB:
                 if now - last_prune > 3600:
                     attack_scheduler.prune()
                     last_prune = now
-                next_send = attack_scheduler.next_send_ts()
+                next_send = attack_scheduler.next_send_ts(lead=prestage)
                 if next_send is None:
                     time.sleep(2)
                     continue
@@ -770,6 +848,35 @@ class TWB:
                 logger.warning("Snipe runner error: %s", exc)
                 time.sleep(2)
 
+    def noble_escort_reserve(self, config):
+        """Troops the armed noble jobs will need at the end of this cycle,
+        as {village_id: {unit: count}}.
+
+        Runs before anything that spends troops (player farms, and per village
+        the barb shaper, scavenging and the farm pass) so the escort is still
+        home when run_noble_barbs() gets there. Cache-only, no requests. Jobs
+        whose escort trigger is not met yet reserve nothing, so a job waiting
+        for troops never keeps scavenging idle."""
+        farms = config.get("farms", {})
+        if not farms.get("noble_barb", True) or \
+                not farms.get("noble_escort_reserve", True):
+            return {}
+        try:
+            # Live troop counts (one rally point request per sending village):
+            # the managed cache is written after that village's farm pass, so
+            # it under-reports exactly the units an escort competes for.
+            reserve = escort_reservations(
+                wrapper=self.wrapper,
+                focus=farms.get("noble_focus_fire", True))
+        except Exception as exc:
+            logging.getLogger("NobleBarb").warning(
+                "Escort reservation failed: %s", exc)
+            return {}
+        for village_id, units in reserve.items():
+            print("Reserving %s in village %s for an armed noble job"
+                  % (units, village_id))
+        return reserve
+
     def run_player_farms(self, config):
         """One player-farm pass (curated hit list, report-driven auto-stop).
 
@@ -779,14 +886,22 @@ class TWB:
         if not config.get("farms", {}).get("player_farm", True):
             return
         try:
-            PlayerFarmManager(wrapper=self.wrapper, config=config).run()
+            PlayerFarmManager(wrapper=self.wrapper, config=config,
+                              reserve=self.troop_reserve).run()
         except Exception as exc:
             logging.getLogger("PlayerFarm").warning(
                 "Player farm pass failed: %s", exc)
 
     def run_noble_barbs(self, config):
-        """One auto-noble pass (alpha). Runs AFTER the village loop so the
-        troop/report caches it decides from are fresh this cycle."""
+        """One auto-noble pass (alpha).
+
+        Runs twice per cycle: once at the top, so an armed job fires within a
+        minute of the cycle starting instead of waiting out every village (the
+        pass reads the sending village's rally point live, so it no longer
+        needs the end-of-cycle troop snapshot), and once after the village
+        loop, which catches jobs whose escort only came home mid-cycle. Jobs
+        that already sent are held by their in_flight guard, so the second
+        pass is a no-op for them."""
         if not config.get("farms", {}).get("noble_barb", True):
             return
         try:
@@ -975,6 +1090,14 @@ class TWB:
                         logging.getLogger("DailyBonus").warning(
                             "Daily bonus check failed: %s", exc)
 
+                # Nobles first: nothing has spent a troop yet this cycle, so a
+                # job that is ready goes out now instead of 20 minutes later.
+                self.run_noble_barbs(config)
+                # Then hold back the escorts of the jobs that did NOT send (in
+                # flight, or still short) so the rest of the cycle leaves them
+                # alone and the pass after the village loop can still fire.
+                self.troop_reserve = self.noble_escort_reserve(config)
+
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
 
@@ -1005,6 +1128,16 @@ class TWB:
                         template = template.replace("{num}", num_pad)
                         village.village_set_name = template
 
+                    village.troop_reserve = self.troop_reserve.get(
+                        str(village.village_id), {})
+                    # The recruiter counts troops standing in other villages
+                    # from this cache, and a full cycle takes far longer than
+                    # its refresh window - so top it up here rather than once
+                    # per cycle. Costs nothing while the reading is still fresh.
+                    self.update_troop_movements()
+                    # Same reason: a template edited in-game should reach the
+                    # dashboard within minutes, not at the next cycle start.
+                    self.update_troop_templates()
                     village.run(config=config)
                     # Each village is minutes of work; stamp as we go so the
                     # watchdog sees progress instead of one silent gap.
@@ -1031,6 +1164,8 @@ class TWB:
                 if not config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
 
+                # Second pass: escorts that only came home while the village
+                # loop was running.
                 self.run_noble_barbs(config)
 
                 sleep = 0
@@ -1048,6 +1183,10 @@ class TWB:
                 VillageManager.farm_manager(
                     verbose=True,
                     prune_after_days=config["bot"].get("farm_prune_days", 0),
+                    # Hand over the reports the villages already loaded rather
+                    # than making farm_manager re-read the cache from disk.
+                    reports=ReportManager.last_reports or None,
+                    clean_reports=config["bot"].get("clean_reports", 0),
                 )
                 print(
                     "Dead for %.2f minutes (next run at: %s)"

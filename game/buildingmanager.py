@@ -29,6 +29,9 @@ class BuildingManager:
     waits = []
     waits_building = []
 
+    # The jobs actually sitting in the in-game HQ queue (see start_update).
+    queue_ingame = []
+
     costs = {}
 
     wrapper = None
@@ -113,6 +116,8 @@ class BuildingManager:
         # 5 with premium), surfaced on the dashboard, distinct from self.queue
         # which is the bot's full planned build order.
         self.queue_count_ingame = existing_queue
+        # ... and what those jobs are, in queue order, for the dashboard.
+        self.queue_ingame = Extractor.building_queue(main_data)
         if existing_queue == 0:
             self.waits = []
             self.waits_building = []

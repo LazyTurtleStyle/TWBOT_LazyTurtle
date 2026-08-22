@@ -245,6 +245,23 @@
 		.troop-cols, .troop-cols.troop-cols-4 { grid-template-columns: 1fr; }
 	}
 
+	/* ---------- Resource + HQ-queue cells (villages table) ---------- */
+	.res { display: inline-flex; align-items: center; gap: 4px; margin-right: 11px; }
+	.res:last-of-type { margin-right: 0; }
+	.res img { width: 14px; height: 14px; flex: none; image-rendering: -webkit-optimize-contrast; }
+	.res .rv { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12px; }
+	/* The HQ queue is drawn the way the game's own production overview draws it:
+	   one building icon per job, in queue order, with the level it is building. */
+	.hqq { display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 12px; }
+	.hqq .bq { position: relative; display: inline-block; width: 18px; height: 18px; }
+	.hqq .bq img { width: 18px; height: 18px; object-fit: contain; image-rendering: -webkit-optimize-contrast; }
+	.hqq .bq .lv { position: absolute; right: -4px; bottom: -4px; font-style: normal; font-weight: 600;
+		font-family: var(--mono); font-size: 10px; line-height: 1; padding: 1px 2px; border-radius: 3px;
+		background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-dim); }
+	/* Own line, always: a long queue would otherwise wrap the countdown for some
+	   villages and not others, and the column stops lining up. */
+	.hqq .eta { flex-basis: 100%; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+
 	/* ---------- Activity feed ---------- */
 	.feed { display: flex; flex-direction: column; }
 	.feed .fi { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line-soft); align-items: flex-start; }
@@ -624,6 +641,53 @@
 		$('[data-toggle="tooltip"]').tooltip();
 		showConfigTab();
 	});
+
+	// Coordinates are copied out of the game as "564|454", but every screen
+	// here takes them as a separate X and a separate Y. Paste the whole thing
+	// into either box and it fills both, so nobody has to hand-strip the pipe.
+	//
+	// Pairs are found by id: the X box ends in "tx" and its partner is the
+	// same id ending in "ty" (tx/ty, cs-tx/cs-ty, nb_tx/nb_ty, ...). Bound on
+	// document rather than per input so boxes rendered later still work.
+	document.addEventListener('paste', function(e){
+		var el = e.target;
+		if (!el || el.tagName !== 'INPUT') return;
+		var id = el.id || '';
+		var partnerId = /tx$/.test(id) ? id.slice(0, -1) + 'y'
+		              : /ty$/.test(id) ? id.slice(0, -1) + 'x' : null;
+		if (!partnerId) return;
+		var partner = document.getElementById(partnerId);
+		if (!partner) return;
+		var clip = e.clipboardData || window.clipboardData;
+		if (!clip) return;
+		var text = clip.getData('text') || '';
+		// Only claim the paste when it really is a coordinate pair; a plain
+		// "564" must still paste normally into whichever box was focused.
+		var m = String(text).match(/^\s*(\d{1,4})\s*[|,;: ]\s*(\d{1,4})\s*$/);
+		if (!m) return;
+		e.preventDefault();
+		var xBox = /tx$/.test(id) ? el : partner;
+		var yBox = xBox === el ? partner : el;
+		xBox.value = m[1];
+		yBox.value = m[2];
+		[xBox, yBox].forEach(function(box){
+			// Whatever the page wires up (live totals, travel times, enabling a
+			// Send button) listens for these, so a scripted fill must announce
+			// itself the same way typing would.
+			box.dispatchEvent(new Event('input', { bubbles: true }));
+			box.dispatchEvent(new Event('change', { bubbles: true }));
+		});
+		// Focus stays put; flash the box that filled itself so the split is
+		// visible rather than silent.
+		var flashed = xBox === el ? yBox : xBox;
+		var before = flashed.style.transition;
+		flashed.style.transition = 'background-color .15s';
+		flashed.style.backgroundColor = '#d4edda';
+		setTimeout(function(){
+			flashed.style.backgroundColor = '';
+			setTimeout(function(){ flashed.style.transition = before; }, 200);
+		}, 450);
+	}, true);
 </script>
 {% block scripts %}{% endblock %}
 </body>

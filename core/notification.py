@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import telegram
 
@@ -79,8 +80,19 @@ class _Notification:
         if category is not None and not self.events.get(category, True):
             return
 
-        task = self.loop.create_task(self.send_async(message))
-        self.loop.run_until_complete(task)
+        # Best-effort, like test() below: a notification must never be the thing
+        # that takes the bot down. main()'s crash handler calls this while
+        # already handling an exception, so a Telegram timeout raising here
+        # escapes the retry loop entirely and the bot exits instead of
+        # restarting - which is exactly what happened on 2026-08-03, when a
+        # dropped game request crashed a cycle and telegram.error.TimedOut
+        # turned that into a full stop.
+        try:
+            task = self.loop.create_task(self.send_async(message))
+            self.loop.run_until_complete(task)
+        except Exception as exc:
+            logging.getLogger("Notification").warning(
+                "Could not send notification (%s): %s", category, exc)
 
     async def send_async(self, message):
         await self.bot.send_message(chat_id=self.channel_id, text=message)

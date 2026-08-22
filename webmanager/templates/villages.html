@@ -2,14 +2,47 @@
 {% block title %}Villages{% endblock %}
 
 {% block content %}
+<style>
+	/* Inline editors: sit flush in the table and read as badges until touched. */
+	.cell-edit {
+		font-family: var(--mono); font-size: 11px; padding: 2px 22px 2px 7px;
+		border-radius: 4px; border: 1px solid var(--line); background: var(--surface-2);
+		color: var(--ink-dim); max-width: 190px; cursor: pointer;
+		appearance: none; -webkit-appearance: none;
+		background-image: linear-gradient(45deg, transparent 50%, var(--ink-faint) 50%),
+			linear-gradient(135deg, var(--ink-faint) 50%, transparent 50%);
+		background-position: right 9px top 50%, right 5px top 50%;
+		background-size: 4px 4px, 4px 4px; background-repeat: no-repeat;
+	}
+	.cell-edit:hover { border-color: var(--ember-dim); color: var(--ink); }
+	.cell-edit:focus { outline: none; border-color: var(--ember); color: var(--ink); }
+	.cell-edit option { background: var(--surface-2); color: var(--ink); font-family: var(--mono); }
+	.cell-edit.is-override { color: var(--ember); border-color: rgba(224,123,44,.4); background-color: rgba(224,123,44,.1); }
+	.cell-edit.is-off { font-style: italic; }
+	.cell-toggle { cursor: pointer; }
+	.cell-toggle:hover { border-color: var(--ember-dim); }
+	.is-dirty, .cell-toggle.is-dirty {
+		border-color: var(--ember) !important;
+		box-shadow: 0 0 0 2px rgba(224,123,44,.18);
+	}
+	.edit-bar { display: flex; align-items: center; gap: 8px; }
+	.edit-bar .faint { font-size: 12px; }
+</style>
+
 <div class="module-section">
 	<div class="section-head">
 		<div class="subhead" style="border:0;padding:0">Per-village overrides</div>
-		<button id="apply_all_default" class="btn btn-sm"
-			title="Overwrite every village's settings with the default village template">Reset all to default</button>
+		<div class="edit-bar">
+			<span id="dirty_count" class="faint"></span>
+			<button id="discard_changes" class="btn btn-sm disabled">Discard</button>
+			<button id="save_changes" class="btn btn-ember btn-sm disabled">Save</button>
+			<button id="apply_all_default" class="btn btn-sm"
+				title="Overwrite every village's settings with the default village template">Reset all to default</button>
+		</div>
 	</div>
 	<div class="faint" style="font-size:12px;margin-top:-4px">
-		{{ overrides.summary }} Villages with a badge below override the global template, edit them here, not in a separate menu.
+		{{ overrides.summary }} Change the build/unit template or the scavenge and farm switches straight from this
+		table, then hit Save &mdash; nothing is written until you do.
 	</div>
 
 	<div class="panel" style="box-shadow:none;margin-top:10px">
@@ -34,25 +67,61 @@
 						{% if row.coord %}<span class="coord">{{ row.coord }}</span>{% endif %}
 					</td>
 					<td>
-						{% if row.building %}
-							<span class="badge {% if 'building' in row.diff %}ember{% else %}dim{% endif %}"
-								{% if 'building' in row.diff %}title="Overrides the global template"{% endif %}>{{ row.building }}</span>
+						{% if row.has_config %}
+						<select class="cell-edit {% if 'building' in row.diff %}is-override{% endif %} {% if row.building_value == 'false' %}is-off{% endif %}"
+							data-village-id="{{ row.id }}" data-param="building" data-original="{{ row.building_value }}"
+							title="{% if 'building' in row.diff %}Overrides the global template{% else %}Build template for this village{% endif %}">
+							{% if not row.building_value %}
+							<option value="" selected>&mdash; global default ({{ overrides.building_default }})</option>
+							{% endif %}
+							<option value="false" {% if row.building_value == 'false' %}selected{% endif %}>off, do not build here</option>
+							{% for name in overrides.builder_templates %}
+							<option value="{{ name }}" {% if row.building_value == name %}selected{% endif %}>{{ name }}</option>
+							{% endfor %}
+							{% if row.building_value and row.building_value != 'false' and row.building_value not in overrides.builder_templates %}
+							<option value="{{ row.building_value }}" selected>{{ row.building_value }} (missing template!)</option>
+							{% endif %}
+						</select>
 						{% else %}<span class="faint">&mdash;</span>{% endif %}
 					</td>
 					<td>
-						{% if row.units %}
-							<span class="badge {% if 'units' in row.diff %}ember{% else %}dim{% endif %}"
-								{% if 'units' in row.diff %}title="Overrides the global template"{% endif %}>{{ row.units }}</span>
+						{% if row.has_config %}
+						<select class="cell-edit {% if 'units' in row.diff %}is-override{% endif %} {% if row.units_value == 'false' %}is-off{% endif %}"
+							data-village-id="{{ row.id }}" data-param="units" data-original="{{ row.units_value }}"
+							title="{% if 'units' in row.diff %}Overrides the global template{% else %}Troop template for this village{% endif %}">
+							{% if not row.units_value %}
+							<option value="" selected>&mdash; global default ({{ overrides.units_default }})</option>
+							{% endif %}
+							<option value="false" {% if row.units_value == 'false' %}selected{% endif %}>off, do not recruit here</option>
+							{% for name in overrides.troop_templates %}
+							<option value="{{ name }}" {% if row.units_value == name %}selected{% endif %}>{{ name }}</option>
+							{% endfor %}
+							{% if row.units_value and row.units_value != 'false' and row.units_value not in overrides.troop_templates %}
+							<option value="{{ row.units_value }}" selected>{{ row.units_value }} (missing template!)</option>
+							{% endif %}
+						</select>
 						{% else %}<span class="faint">&mdash;</span>{% endif %}
 					</td>
 					<td class="num mono">{{ data.bot[row.id].building_queue | count if data.bot[row.id].building_queue else 0 }}</td>
 					<td>
-						<span class="badge {% if row.gather_enabled %}moss{% else %}dim{% endif %}"
-							{% if 'gather_enabled' in row.diff %}title="Overrides the global template"{% endif %}>{{ 'on' if row.gather_enabled else 'off' }}</span>
+						{% if row.has_config %}
+						<button class="badge cell-toggle {% if row.gather_enabled %}moss{% else %}dim{% endif %}"
+							data-village-id="{{ row.id }}" data-param="gather_enabled"
+							data-original="{{ 'true' if row.gather_enabled else 'false' }}"
+							title="{% if 'gather_enabled' in row.diff %}Overrides the global template. {% endif %}Click to flip">{{ 'on' if row.gather_enabled else 'off' }}</button>
+						{% else %}
+						<span class="badge {% if row.gather_enabled %}moss{% else %}dim{% endif %}">{{ 'on' if row.gather_enabled else 'off' }}</span>
+						{% endif %}
 					</td>
 					<td>
-						<span class="badge {% if row.farm_enabled %}moss{% else %}dim{% endif %}"
-							{% if 'farm_enabled' in row.diff %}title="Overrides the global template"{% endif %}>{{ 'on' if row.farm_enabled else 'off' }}</span>
+						{% if row.has_config %}
+						<button class="badge cell-toggle {% if row.farm_enabled %}moss{% else %}dim{% endif %}"
+							data-village-id="{{ row.id }}" data-param="farm_enabled"
+							data-original="{{ 'true' if row.farm_enabled else 'false' }}"
+							title="{% if 'farm_enabled' in row.diff %}Overrides the global template. {% endif %}Click to flip">{{ 'on' if row.farm_enabled else 'off' }}</button>
+						{% else %}
+						<span class="badge {% if row.farm_enabled %}moss{% else %}dim{% endif %}">{{ 'on' if row.farm_enabled else 'off' }}</span>
+						{% endif %}
 					</td>
 					<td>
 						{% if not row.has_config %}<span class="badge dim">no config</span>
@@ -82,14 +151,90 @@
 		var url = '/app/village/apply_template' + (vid ? ('?village_id=' + encodeURIComponent(vid)) : '');
 		$.ajax({ url: url, method: 'POST' }).done(function () { location.reload(); });
 	}
+
+	// Pending edits, keyed "<village id>|<parameter>". Nothing touches config.json
+	// until Save, so a mis-click on a live bot setting costs nothing.
+	var pending = {};
+
+	function pendingCount() { return Object.keys(pending).length; }
+
+	function refreshBar() {
+		var n = pendingCount();
+		$('#dirty_count').text(n ? (n + ' unsaved change' + (n === 1 ? '' : 's')) : '');
+		$('#save_changes').toggleClass('disabled', n === 0).text(n ? ('Save ' + n) : 'Save');
+		$('#discard_changes').toggleClass('disabled', n === 0);
+	}
+
+	function track(el, value) {
+		var key = $(el).attr('data-village-id') + '|' + $(el).attr('data-param');
+		if (value === $(el).attr('data-original')) {
+			delete pending[key];
+			$(el).removeClass('is-dirty');
+		} else {
+			pending[key] = { village_id: $(el).attr('data-village-id'), parameter: $(el).attr('data-param'), value: value };
+			$(el).addClass('is-dirty');
+		}
+		refreshBar();
+	}
+
+	// One request at a time: /app/config/set is a read-modify-write of
+	// config.json, so firing a batch in parallel would lose edits.
+	function saveSequential(items, done, failed) {
+		if (!items.length) { done(failed); return; }
+		var item = items.shift();
+		$.getJSON('/app/config/set?village_id=' + encodeURIComponent(item.village_id)
+			+ '&parameter=' + encodeURIComponent(item.parameter)
+			+ '&value=' + encodeURIComponent(item.value))
+			.done(function () { saveSequential(items, done, failed); })
+			.fail(function () { failed.push(item); saveSequential(items, done, failed); });
+	}
+
 	$(document).ready(function () {
+		$('.cell-edit').change(function () { track(this, $(this).val()); });
+
+		$('.cell-toggle').click(function (e) {
+			e.preventDefault();
+			var t = $(this), next = t.text().trim() !== 'on';
+			t.text(next ? 'on' : 'off').toggleClass('moss', next).toggleClass('dim', !next);
+			track(this, next ? 'true' : 'false');
+		});
+
+		$('#save_changes').click(function () {
+			if (!pendingCount() || $(this).hasClass('disabled')) return;
+			var items = Object.keys(pending).map(function (k) { return pending[k]; });
+			$(this).addClass('disabled').text('Saving...');
+			saveSequential(items, function (failed) {
+				pending = {};
+				$(window).off('beforeunload');
+				if (failed.length) {
+					alert(failed.length + ' change(s) could not be saved:\n'
+						+ failed.map(function (f) { return f.village_id + ' -> ' + f.parameter; }).join('\n'));
+				}
+				location.reload();
+			}, []);
+		});
+
+		$('#discard_changes').click(function () {
+			if ($(this).hasClass('disabled')) return;
+			pending = {};
+			$(window).off('beforeunload');
+			location.reload();
+		});
+
+		// Leaving with edits still pending is almost always a mistake.
+		$(window).on('beforeunload', function () {
+			if (pendingCount()) return 'You have unsaved village changes.';
+		});
+
 		$('.apply-default').click(function () {
 			var vid = $(this).attr('data-village-id');
 			if (!confirm('Reset this village to the default village template? Its current settings will be overwritten.')) return;
+			$(window).off('beforeunload');
 			applyDefault(vid);
 		});
 		$('#apply_all_default').click(function () {
 			if (!confirm('Reset ALL villages to the default village template? Every village\'s settings will be overwritten.')) return;
+			$(window).off('beforeunload');
 			applyDefault(null);
 		});
 	});
