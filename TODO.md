@@ -108,7 +108,7 @@ is probably to let a receiver be served more than once per window rather than
 to go back to `biggest_gap` - worth deciding deliberately rather than by
 flipping the setting back.
 
-## Make the report "reset to Alle" optional, if captchas prove request-driven
+## Make the screen resets optional, if captchas prove request-driven
 
 **Status:** blocked on measurement. The tracker is running; do not act on this
 until it has a verdict.
@@ -136,17 +136,32 @@ roughly 3 days. The instrumentation itself is the counter in
 `core/request.py` (`_track_request` / `track_event`); it changes no behaviour
 and makes no extra requests.
 
+There is now a second reset of the same kind: `reset_overview_view()` in
+`game/incomings.py` puts the villages overview back on Gecombineerd / all
+villages, because `update_incomings` always leaves the mode on incomings and
+`ensure_groups` leaves the group on whichever one it walked last. It costs one
+GET per incoming poll - roughly 190 a day at the default 380-570s interval,
+call it another 1% on top of the reports reset's ~4%.
+
+**Keep in mind that both resets make the captcha situation worse, not better,
+if the per-request theory holds.** They are cosmetic: they buy a tidier screen
+for the player at the price of requests. Neither is load-bearing, so both
+should be behind the same switch if the measurement says requests are what the
+game counts.
+
 **Then:**
-- **Flatter per 1000 requests** -> requests are the currency. Add
-  `reports.reset_group_view` (default true, since it exists to fix a real
-  annoyance) so it can be turned off, and take the much bigger win first:
+- **Flatter per 1000 requests** -> requests are the currency. Add one setting
+  covering both resets (default true, since they exist to fix a real
+  annoyance) - `reports.reset_group_view` and `incomings.reset_overview_view`
+  are the two call sites - so they can be turned off, and take the much bigger
+  win first:
   report polling is account-wide but re-walked by all 37 villages every cycle,
   4 list GETs each, ~17% of all requests with three quarters of it redundant.
   A short account-wide TTL would cut ~15%. The trade-off there is farm
   decisions (`has_resources_left` / `safe_to_engage` in `game/attack.py` and
   `game/barbshaper.py`) acting on slightly staler reports.
-- **Flatter per hour** -> requests are not the currency. Leave the reset alone,
-  drop the TTL idea entirely, and note in this file that request-count
+- **Flatter per hour** -> requests are not the currency. Leave both resets
+  alone, drop the TTL idea entirely, and note in this file that request-count
   optimisation is a dead end for captchas so nobody re-derives it.
 
 Delete `/root/twb-captcha-tracker/` and back out the `core/request.py`
