@@ -107,3 +107,47 @@ directory once this item is closed.
 is probably to let a receiver be served more than once per window rather than
 to go back to `biggest_gap` - worth deciding deliberately rather than by
 flipping the setting back.
+
+## Make the report "reset to Alle" optional, if captchas prove request-driven
+
+**Status:** blocked on measurement. The tracker is running; do not act on this
+until it has a verdict.
+
+**What is already shipped:** `reset_group_view()` in `game/reports.py` puts the
+report screen back on the main folder after the bot has walked the filtered
+ones, so the player is not left staring at Farm-assistent every time they open
+the game. It costs one extra GET per village cycle - about 37 per pass, ~4% of
+everything the bot does.
+
+**Why that might matter:** bot protection on nl116 fires roughly 3.8 times a
+day, once per ~6,000 requests, and each one stalls the bot until the captcha is
+solved in a browser (31 hours of stall over the four days to 2026-08-27, the
+worst of it overnight). Nothing about *which* endpoint or *what time of day*
+predicts a hit, and neither elapsed time nor request count showed a threshold -
+which points at a random per-request check. If that is right, every avoidable
+request is a proportional share of the captchas, and a purely cosmetic 4% is
+worth being able to switch off.
+
+**Measure first:** `/root/twb-captcha-tracker/track.py report`. Section 1 is
+the whole point - it buckets the bot's own running time by request rate and
+asks whether captchas per hour or captchas per 1000 requests is the flatter
+number. Needs ~12 captchas recorded after the instrumentation restart, so
+roughly 3 days. The instrumentation itself is the counter in
+`core/request.py` (`_track_request` / `track_event`); it changes no behaviour
+and makes no extra requests.
+
+**Then:**
+- **Flatter per 1000 requests** -> requests are the currency. Add
+  `reports.reset_group_view` (default true, since it exists to fix a real
+  annoyance) so it can be turned off, and take the much bigger win first:
+  report polling is account-wide but re-walked by all 37 villages every cycle,
+  4 list GETs each, ~17% of all requests with three quarters of it redundant.
+  A short account-wide TTL would cut ~15%. The trade-off there is farm
+  decisions (`has_resources_left` / `safe_to_engage` in `game/attack.py` and
+  `game/barbshaper.py`) acting on slightly staler reports.
+- **Flatter per hour** -> requests are not the currency. Leave the reset alone,
+  drop the TTL idea entirely, and note in this file that request-count
+  optimisation is a dead end for captchas so nobody re-derives it.
+
+Delete `/root/twb-captcha-tracker/` and back out the `core/request.py`
+instrumentation once this is closed.

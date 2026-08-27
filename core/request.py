@@ -2,6 +2,7 @@
 Class for using one generic cookie jar, emulating a single tab
 """
 
+import json
 import os
 import requests
 
@@ -56,6 +57,25 @@ class WebWrapper:
     # with a stale heartbeat. Matches the timeout already used for the other
     # direct requests calls in this codebase (twb.py, game/incomings.py).
     REQUEST_TIMEOUT = (10, 30)
+    # -- request accounting (instrumentation only, changes no behaviour) -----
+    # Written so the captcha tracker can answer one question the logs cannot:
+    # is bot protection triggered per REQUEST or per unit of TIME? The two are
+    # indistinguishable while the bot runs at a steady pace, so the tracker
+    # needs periods where the request rate differs (nights, stalls, between
+    # passes) and an exact request count for each - not the 5s-per-request
+    # estimate the log timestamps allow.
+    #
+    # Counters are class-level on purpose: background pollers build their own
+    # WebWrapper, and what matters is every request this process makes.
+    REQUEST_TRACK_FILE = "cache/request_track.jsonl"
+    # One row per this many requests: ~4 minutes apart at the usual pace, so a
+    # day of running costs about 30KB.
+    REQUEST_TRACK_EVERY = 50
+    TRACK_SESSION = int(time.time())
+    request_count = 0
+    request_by_screen = {}
+    _tracked_at = 0
+
     # Only the wrapper that owns the login (the main loop) persists its rotated
     # cookies back to cache/session.json. Background pollers read that file but
     # must never write it, or two sessions would fight over the session id.
@@ -110,6 +130,41 @@ class WebWrapper:
         }, "cache/session.json")
         self._last_persisted_cookies = cookies
 
+    @classmethod
+    def _track_write(cls, row):
+        """Append one row to the tracker file. Never raises: this is
+        instrumentation, and it must not be able to take a request down."""
+        try:
+            row["ts"] = int(time.time())
+            row["session"] = cls.TRACK_SESSION
+            path = FileManager.get_path(cls.REQUEST_TRACK_FILE)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    @classmethod
+    def _track_request(cls, url):
+        """Count one request, bucketed by the game screen it went to."""
+        try:
+            cls.request_count += 1
+            found = re.search(r"[?&]screen=(\w+)", url or "")
+            screen = found.group(1) if found else "other"
+            cls.request_by_screen[screen] = cls.request_by_screen.get(screen, 0) + 1
+            if cls.request_count - cls._tracked_at >= cls.REQUEST_TRACK_EVERY:
+                cls._tracked_at = cls.request_count
+                cls._track_write({"kind": "tick", "requests": cls.request_count,
+                                  "by_screen": dict(cls.request_by_screen)})
+        except Exception:
+            pass
+
+    @classmethod
+    def track_event(cls, kind):
+        """Stamp a captcha hit/clear against the exact request count so far."""
+        cls._track_write({"kind": kind, "requests": cls.request_count,
+                          "by_screen": dict(cls.request_by_screen)})
+
     def get_url(self, url, headers=None):
         """
         Fetches a URL using a basic GET request
@@ -122,6 +177,7 @@ class WebWrapper:
             headers = self.headers
         try:
             res = self.web.get(url=url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+            self._track_request(url)
             self.logger.debug("GET %s [%d]", url, res.status_code)
             self.post_process(res)
             if 'data-bot-protect="forced"' in res.text and not self.block_on_captcha:
@@ -147,6 +203,11 @@ class WebWrapper:
         re-check; if the page is still forced the marker is re-armed so the banner
         stays honest.
         """
+        # Stamped before anything else so the request count is the one that
+        # was standing when the captcha fired. The re-check polls below are
+        # deliberately not counted: they cannot trigger a fresh captcha, and
+        # counting them would inflate every blocked interval.
+        self.track_event("captcha_hit")
         self.logger.warning(
             "Bot protection hit! Solve the captcha in a browser on the same "
             "session - the bot will auto-resume when it clears.")
@@ -177,6 +238,7 @@ class WebWrapper:
                 heartbeat = FileManager.load_json_file("cache/heartbeat.json") or {}
                 heartbeat["ts"] = int(time.time())
                 FileManager.save_json_file_atomic(heartbeat, "cache/heartbeat.json")
+                self.track_event("captcha_clear")
                 self.logger.info("Captcha cleared - resuming.")
                 Notification.send("Captcha cleared, bot resumed.", category="captcha")
                 return res
@@ -201,6 +263,7 @@ class WebWrapper:
             headers = self.headers
         try:
             res = self.web.post(url=url, data=data, headers=headers, timeout=self.REQUEST_TIMEOUT)
+            self._track_request(url)
             self.logger.debug("POST %s %s [%d]", url, enc, res.status_code)
             self.post_process(res)
             if 'data-bot-protect="forced"' in res.text and not self.block_on_captcha:
