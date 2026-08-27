@@ -292,12 +292,31 @@ class IncomingManager:
 
     def _parse_group_menu(self, text):
         """The group-menu ajax payload -> [{id, name, type}], skipping the
-        built-in 'all villages' pseudo group. Returns None (and dumps the raw
-        payload) when the shape is not recognised."""
+        built-in 'all villages' pseudo group. Returns None when the menu could
+        not be read, and dumps the raw payload first if the shape is one this
+        code has never met."""
         try:
             payload = json.loads(text or "{}")
         except ValueError:
             payload = None
+        # An ajax request the game will not serve is answered with HTTP 200 and
+        # a bare `false` - or {"response": false} when the ajax headers are set.
+        # In practice that means bot protection is up: all 227 of these seen
+        # live between 2026-08-24 and 2026-08-27 were followed 3-8s later by the
+        # captcha being detected on the next normal page request, and none
+        # happened without one. This call just gets there first, because the
+        # captcha never reaches it as HTML for the wrapper to recognise.
+        #
+        # So it is a refusal, not an unknown payload shape. Treating it as the
+        # latter cried wolf several times an hour all night and kept
+        # overwriting the raw dump - which exists to catch a real change in the
+        # game's markup - with the useless five bytes `false`.
+        if payload is False or (isinstance(payload, dict)
+                                and payload.get("response") is False):
+            self.logger.debug(
+                "Group menu refused by the game (bot protection, most likely) "
+                "- keeping the cached groups and retrying next cycle")
+            return None
         raw = None
         if isinstance(payload, dict):
             for key in ("result", "groups"):
