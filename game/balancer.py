@@ -54,6 +54,9 @@ class ResourceBalancer:
         self.reserve_merchants = 0
         self.min_send_amount = 250
         self.sender_keep = 0
+        # Per-resource hold-back for this village's own unpaid queue, filled in
+        # by run() from the resource manager. See _needed_resources().
+        self.reserve = {}
 
     # ---------------------------------------------------------------- helpers
 
@@ -119,6 +122,18 @@ class ResourceBalancer:
             seen[key] = int(time.time())
             _save_state(state)
         return int(seen[key])
+
+    def _mark_turn(self):
+        """Record that this village got its chance to send during this pass."""
+        state = _load_state()
+        turns = state.setdefault("_turns", {})
+        turns[self.village_id] = int(time.time())
+        _save_state(state)
+
+    @staticmethod
+    def _last_turn(village_id):
+        """When that village last reached the sending stage of its own run."""
+        return int((_load_state().get("_turns") or {}).get(str(village_id), 0))
 
     @staticmethod
     def _managed_villages():
@@ -207,17 +222,74 @@ class ResourceBalancer:
                 key=lambda c: self._distance(my_loc, self._location(c[1])))
         return candidates
 
+    @staticmethod
+    def _needed_resources(requested):
+        """What a village still cannot pay for, per resource.
+
+        `requested` is the resource manager's {source: {resource: shortfall}}:
+        an entry appears only when the village wants something it cannot
+        currently afford, and is zeroed again as soon as it can.
+
+        Two things are deliberately dropped. `pop` is not a resource - it is
+        missing farm space, and no amount of wood fixes it, so a village that
+        wants a farm it has no room for must not be stopped from giving its
+        overflowing warehouse away. And sources are combined with max() rather
+        than sum(): each one computes its shortfall against the same stock, so
+        adding them up counts the same missing wood once per queue item.
+        """
+        need = {}
+        for wants in (requested or {}).values():
+            for res, amount in (wants or {}).items():
+                if res in RESOURCES and amount and int(amount) > 0:
+                    need[res] = max(need.get(res, 0), int(amount))
+        return need
+
+    def _spare(self, res, stock):
+        """How much of one resource this village may give away.
+
+        Held back: the flat `sender_keep`, plus whatever its own build or
+        recruit queue still cannot pay for. Reserving the shortfall alone, and
+        only of the resource that is actually short, is the whole difference
+        between a queue item costing the sender 5k wood and it costing every
+        send the village would otherwise have made.
+        """
+        have = int(stock.get(res, 0) or 0)
+        return max(0, have - self.sender_keep - int(self.reserve.get(res, 0)))
+
     def _spare_stock(self, village):
-        """Total resources this village could give away."""
+        """Total resources this village could give away.
+
+        Reads another village's snapshot, so the queue shortfall comes from the
+        `required_resources` it wrote there rather than from a live manager.
+        """
         res = village.get("resources") or {}
-        return sum(max(0, int(res.get(r, 0) or 0) - self.sender_keep)
+        need = self._needed_resources(village.get("required_resources"))
+        return sum(max(0, int(res.get(r, 0) or 0) - self.sender_keep - need.get(r, 0))
                    for r in RESOURCES)
+
+    def _spare_fill(self, village):
+        """Spare stock as a fraction of this village's own warehouse, 0..1.
+
+        Ranking on raw stock always hands the job to whoever built the biggest
+        warehouse, even when it sits half empty while a smaller village is
+        about to overflow. Measuring each sender against its own capacity picks
+        the one closest to wasting production instead.
+        """
+        cap = int(village.get("storage_max") or 0)
+        if cap <= 0:
+            return 0.0
+        return self._spare_stock(village) / float(cap * len(RESOURCES))
 
     def rank_senders(self, villages, target):
         """Qualifying senders for one target, best first.
 
         'nearest' is relative to the target, so the ranking is computed per
         target rather than once globally.
+
+        Every sender must rank a given target identically - that agreement is
+        what lets `may_serve` decide who owns it without any of them talking to
+        each other - so ties break on village id rather than on whatever order
+        the snapshots happened to be read off disk in.
         """
         target_loc = self._location(target)
         senders = [
@@ -226,36 +298,78 @@ class ResourceBalancer:
             and self._points(v) > self._points(target)
         ]
         if self.sender_order == "most_resources":
-            senders.sort(key=lambda s: -self._spare_stock(s[1]))
+            senders.sort(key=lambda s: (-self._spare_stock(s[1]), s[0]))
+        elif self.sender_order == "fullest":
+            senders.sort(key=lambda s: (-self._spare_fill(s[1]), s[0]))
         elif self.sender_order == "highest_points":
-            senders.sort(key=lambda s: -self._points(s[1]))
+            senders.sort(key=lambda s: (-self._points(s[1]), s[0]))
         else:
             senders.sort(
-                key=lambda s: self._distance(target_loc, self._location(s[1])))
+                key=lambda s: (self._distance(target_loc, self._location(s[1])),
+                               s[0]))
         return [vid for vid, _ in senders]
 
     def may_serve(self, target_id, ranked):
         """Whether this village should be the one to feed `target_id`.
 
-        The preferred sender always may. A lower-ranked one only steps in once
-        the target has gone a full cooldown without a delivery - otherwise a
+        The preferred sender always may. A lower-ranked one steps in only once
+        the preferred sender has demonstrably passed on the job - otherwise a
         target whose designated sender is out of merchants (the normal state for
         a heavy trading village) would never be fed at all.
+
+        "Passed on the job" used to mean "the target has gone a full cooldown
+        without a delivery", and that opens the door for every sender at the
+        same instant the target becomes eligible again. Whichever village the
+        bot happens to visit first that pass claims it, `max_sends_per_receiver`
+        then locks everyone else out, and the configured order never gets a
+        say: the village at the top of the run order feeds the whole rim.
+
+        Measuring against the preferred sender's own last turn removes the
+        race. It has to have actually run, and left this target unserved,
+        before anyone else may take it.
         """
         if not ranked or ranked[0] == self.village_id:
             return True
         if self.village_id not in ranked:
             return False
-        # Measure from the last delivery; only fall back to when the target was
-        # first seen as needy if it has never been served at all.
-        last = self._last_delivery(target_id)
-        since = time.time() - (last or self._first_seen(target_id))
-        if since >= self.send_cooldown:
+        preferred = ranked[0]
+        turn = self._last_turn(preferred)
+        opened = self._eligible_since(target_id)
+        # The preferred sender has run since this receiver came back up for a
+        # delivery, and still sent it nothing: no merchants, or nothing to
+        # spare. Comparing against when the *window* opened rather than
+        # against the last delivery matters - a turn taken while the receiver
+        # was still in its cooldown is not a turn it passed on.
+        if turn > opened:
             self.logger.debug(
-                "Stepping in for %s: preferred sender %s has not delivered in %ds",
-                target_id, ranked[0], int(since))
+                "Stepping in for %s: preferred sender %s had its turn and passed",
+                target_id, preferred)
+            return True
+        # Backstop for a preferred sender that is not running at all - never
+        # has, or not since before the window opened a whole cooldown ago.
+        # Without it a paused or balancer-disabled village would still rank
+        # first and quietly starve everything it was picked for.
+        idle = time.time() - max(turn, opened)
+        if idle >= self.send_cooldown:
+            self.logger.debug(
+                "Stepping in for %s: preferred sender %s has not run in %ds",
+                target_id, preferred, int(idle))
             return True
         return False
+
+    def _eligible_since(self, target_id):
+        """When this receiver last became free to accept another delivery.
+
+        `max_sends_per_receiver` deliveries inside one cooldown fill the
+        window, so it reopens when the oldest of those ages out. A receiver
+        that has never had a full window has been eligible since it was first
+        seen as needy.
+        """
+        cap = max(1, self.max_sends_per_receiver)
+        times = sorted(self._delivery_times(target_id))
+        if len(times) >= cap:
+            return times[-cap] + self.send_cooldown
+        return self._first_seen(target_id)
 
     # ------------------------------------------------------------------ market
 
@@ -289,8 +403,8 @@ class ResourceBalancer:
         for res, want in sorted(room.items(), key=lambda kv: -kv[1]):
             if left < 1:
                 break
-            spare = max(0, int(stock.get(res, 0) or 0) - self.sender_keep)
-            amount = min(int(want), spare, left * MERCHANT_CAPACITY)
+            amount = min(int(want), self._spare(res, stock),
+                         left * MERCHANT_CAPACITY)
             if amount < self.min_send_amount:
                 continue
             plan[res] = amount
@@ -318,8 +432,7 @@ class ResourceBalancer:
         # fed by a sender sitting on stone, gets its fullest resource topped up.
         cap = {}
         for res, want in room.items():
-            spare = max(0, int(stock.get(res, 0) or 0) - self.sender_keep)
-            limit = min(int(want), spare)
+            limit = min(int(want), self._spare(res, stock))
             if limit > 0:
                 cap[res] = limit
         budget = int(merchants) * MERCHANT_CAPACITY
@@ -428,8 +541,16 @@ class ResourceBalancer:
 
     # -------------------------------------------------------------------- main
 
-    def run(self, my_points, my_stock, has_own_needs=False):
-        """Send spare resources to poorer villages. Returns sends performed."""
+    def run(self, my_points, my_stock, my_needs=None):
+        """Send spare resources to poorer villages. Returns sends performed.
+
+        `my_needs` is the resource manager's request table. It used to be a
+        single boolean that vetoed the whole run - one unpaid queue item and a
+        village with three full warehouses sent nothing to anybody, including
+        the two resources it was drowning in. It is now a per-resource
+        hold-back instead: the queue keeps first claim on what it is short of,
+        and everything above that still goes out.
+        """
         if not self.enabled:
             return 0
         if my_points < self.sender_min_points:
@@ -437,10 +558,17 @@ class ResourceBalancer:
                 "Not a sender: %d points is under the %d threshold",
                 my_points, self.sender_min_points)
             return 0
-        if has_own_needs:
+        # From here on this village counts as having had its turn this pass,
+        # whether or not it ends up sending anything. Everything below is a
+        # reason it *cannot* send - its own cooldown, no free merchants,
+        # nothing spare - and each of those is a reason a lower-ranked sender
+        # should be allowed to cover for it.
+        self._mark_turn()
+        self.reserve = self._needed_resources(my_needs)
+        if self.reserve:
             self.logger.debug(
-                "Not sending: this village still needs resources itself")
-            return 0
+                "Holding back for this village's own queue: %s",
+                ", ".join("%d %s" % (v, k) for k, v in self.reserve.items()))
         left = self._cooldown_left()
         if left:
             self.logger.debug("Not sending for another %d seconds", left)

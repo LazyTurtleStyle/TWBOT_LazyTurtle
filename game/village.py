@@ -527,6 +527,7 @@ class Village:
         self.balancer.target_fill_pct = int(cfg.get("target_fill_pct", 90))
         self.balancer.fill_mode = cfg.get("fill_mode", "even")
         self.balancer.target_order = cfg.get("target_order", "nearest")
+        self.balancer.sender_order = cfg.get("sender_order", "nearest")
         self.balancer.send_cooldown = int(cfg.get("send_cooldown_minutes", 60)) * 60
         # Renamed from max_sends_per_run: the cap is per receiver now, so a
         # sender may top up several villages but none gets served twice.
@@ -542,7 +543,7 @@ class Village:
             self.balancer.run(
                 my_points=my_points,
                 my_stock=self.resman.actual,
-                has_own_needs=bool(self.resman.requested),
+                my_needs=self.resman.requested,
             )
         except Exception as exc:
             # Balancing is a convenience: a bad page parse must not take the

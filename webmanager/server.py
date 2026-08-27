@@ -225,7 +225,8 @@ FILL_MODE_OPTIONS = [
 SENDER_ORDER_OPTIONS = [
     ("nearest", "Nearest to the receiver (shortest merchant trip)"),
     ("highest_points", "Highest points first (biggest village gives)"),
-    ("most_resources", "Most spare resources first (spreads the load)"),
+    ("most_resources", "Most spare resources first (biggest pile gives)"),
+    ("fullest", "Fullest warehouses first (closest to overflowing)"),
 ]
 FIXED_SELECTS = {
     'village_template.flag_type': FLAG_TYPE_OPTIONS,
