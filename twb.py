@@ -710,12 +710,11 @@ class TWB:
                 time.sleep(random.randint(low, high))
                 if not self.should_run:
                     break
-            # Mirror the main loop's activity window so we don't poll all night
-            # on an otherwise dormant account.
-            if not self.is_active_hours(config=config) and not config["bot"].get(
-                    "inactive_still_active", False
-            ):
-                continue
+            # Deliberately NOT gated on the activity window. Attack detection
+            # is the one thing that still matters while the account is meant to
+            # look asleep: an attack landing at 04:00 is exactly the one you
+            # cannot afford to first hear about at 05:00. Set `incoming_check`
+            # to false to turn this loop off entirely.
             try:
                 session = FileManager.load_json_file("cache/session.json")
                 if session and session.get("cookies"):
@@ -910,8 +909,11 @@ class TWB:
             logging.getLogger("NobleBarb").warning(
                 "Noble-barb pass failed: %s", exc)
 
-    def heartbeat(self):
+    def heartbeat(self, sleeping=False):
         """Stamp proof that the main loop is still turning.
+
+        `sleeping` marks the deliberate overnight pause, so a watchdog can tell
+        "idle on purpose" apart from "hung".
 
         Called as the loop makes progress - not just once per cycle. A full
         cycle over several villages takes far longer than the watchdog's
@@ -920,8 +922,45 @@ class TWB:
         back half of every cycle.
         """
         FileManager.save_json_file_atomic(
-            {"ts": int(time.time()), "runs": self.runs, "started": self.started},
+            {"ts": int(time.time()), "runs": self.runs, "started": self.started,
+             "sleeping": bool(sleeping)},
             "cache/heartbeat.json")
+
+    def sleep_through_inactive_hours(self, config):
+        """Idle until the activity window reopens, doing nothing at all.
+
+        This is what `inactive_still_active: false` is supposed to mean. The
+        point is not to save requests, it is that the account should look like
+        a player who went to bed: a human does not start a scavenge run at
+        02:40 or keep a build queue topped up all night, and doing so is the
+        pattern that makes a bot a bot.
+
+        The heartbeat keeps ticking (flagged as sleeping) so the watchdog does
+        not read a deliberate pause as a hang, and the wait is chunked so a
+        stop signal is honoured within the minute rather than at dawn.
+        """
+        chunk = 60
+        announced = False
+        while self.should_run:
+            if self.is_active_hours(config=config):
+                if announced:
+                    print("Waking up - back inside active hours.")
+                return
+            if not announced:
+                logging.getLogger("twb").info(
+                    "Outside active hours (%s) and inactive_still_active is "
+                    "off - idling until the window reopens",
+                    config["bot"].get("active_hours"))
+                print("Sleeping: outside active hours, nothing but incoming "
+                      "attack checks will run.")
+                announced = True
+            self.heartbeat(sleeping=True)
+            time.sleep(chunk)
+            # Re-read now and then so an active_hours edit in the dashboard is
+            # picked up tonight instead of tomorrow.
+            self.slept_chunks = getattr(self, "slept_chunks", 0) + 1
+            if self.slept_chunks % 10 == 0:
+                config = self.config()
 
     def run(self):
         """
@@ -1027,6 +1066,14 @@ class TWB:
             # (e.g. waiting out a captcha in WebWrapper._await_captcha_clear).
             # OverviewBuilder uses staleness here as a generic "bot stalled" signal.
             self.heartbeat()
+            # A sleeping player does nothing at all - see
+            # sleep_through_inactive_hours. Checked before the network so a
+            # bot that wakes into the dark goes straight back to sleep.
+            if not self.is_active_hours(config=config) and not config["bot"].get(
+                    "inactive_still_active", False):
+                self.sleep_through_inactive_hours(config)
+                config = self.config()
+                continue
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
                 sleep = 0

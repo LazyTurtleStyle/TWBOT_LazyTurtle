@@ -128,6 +128,22 @@ which points at a random per-request check. If that is right, every avoidable
 request is a proportional share of the captchas, and a purely cosmetic 4% is
 worth being able to switch off.
 
+**The night-mode change sharpened this test considerably.** Before it, the
+bot ran full village passes all night on a longer inter-pass delay, so night
+was only about 2x quieter than day (8.9 vs 18.2 village-runs/hour, and the
+gap *between* villages was near-identical at 115s vs 127s) - a 2x rate spread
+is a weak discriminator. With `inactive_still_active: false` the main loop now
+idles completely from 23:31 to 04:59 and only the incoming poller runs, which
+is roughly 30 requests/hour against ~750 by day. That is a ~25x spread across
+5.5 hours every night, and it makes section 1 close to a binary read:
+
+- captchas keep firing overnight at the old rate -> the game counts TIME
+- overnight captchas nearly vanish -> the game counts REQUESTS
+
+Night captchas are worth settling on their own account: they are 19% of hits
+but 39% of the lost hours (4.14h average stall against 1.52h by day), because
+a 02:00 captcha sits until someone wakes up.
+
 **Measure first:** `/root/twb-captcha-tracker/track.py report`. Section 1 is
 the whole point - it buckets the bot's own running time by request rate and
 asks whether captchas per hour or captchas per 1000 requests is the flatter
