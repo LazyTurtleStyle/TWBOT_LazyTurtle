@@ -668,6 +668,24 @@ class TWB:
         # the start bound through the end bound inclusive.
         return now_m >= start or now_m <= end
 
+    def in_quiet_hours(self, config=None):
+        """True while the account is meant to look asleep.
+
+        One definition for the two places that need it: the main loop, which
+        decides whether to sleep the cycle away, and the captcha wait, which
+        decides how often to re-check a blocked page (core/request.py's
+        _captcha_poll_interval).
+
+        The main loop passes its cycle config. The captcha wait passes nothing
+        and gets a fresh read, because it may have been blocked for hours and an
+        active_hours edit made in the dashboard meanwhile should count.
+        """
+        if config is None:
+            config = self.config()
+        if config["bot"].get("inactive_still_active", False):
+            return False
+        return not self.is_active_hours(config=config)
+
     def _make_poller_wrapper(self, config):
         """A separate, GET-only web session for the incoming-attack poller.
 
@@ -1011,6 +1029,9 @@ class TWB:
             reporter_constr=config["reporting"]["connection_string"],
         )
 
+        # Lets the captcha wait slow its re-checks down overnight instead of
+        # polling a blocked session every 20s until someone wakes up.
+        self.wrapper.quiet_hours_check = self.in_quiet_hours
         self.wrapper.start()
         # A fresh process can't already be inside the captcha-wait loop that owns
         # this marker (core/request.py's _await_captcha_clear), so any leftover
@@ -1069,8 +1090,7 @@ class TWB:
             # A sleeping player does nothing at all - see
             # sleep_through_inactive_hours. Checked before the network so a
             # bot that wakes into the dark goes straight back to sleep.
-            if not self.is_active_hours(config=config) and not config["bot"].get(
-                    "inactive_still_active", False):
+            if self.in_quiet_hours(config):
                 self.sleep_through_inactive_hours(config)
                 config = self.config()
                 continue

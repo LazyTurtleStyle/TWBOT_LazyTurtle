@@ -144,6 +144,42 @@ Night captchas are worth settling on their own account: they are 19% of hits
 but 39% of the lost hours (4.14h average stall against 1.52h by day), because
 a 02:00 captcha sits until someone wakes up.
 
+**First night with it on (2026-08-27 -> 28) says the ~25x is conditional on no
+captcha standing.** nl117 did exactly what it says on the tin: last village
+work 23:58, sleep announced 00:03, idle until 06:00, incoming poller ticking
+~9/hr throughout. nl116 never got there. A captcha hit at 22:40, 50 minutes
+before the window closed, so the main loop went into `_await_captcha_clear`
+and never reached the sleep check at the top of `run()`. It sat there until
+06:59 - 8h19m, well above the 4.14h night average above.
+
+The consequence is the one that matters for this measurement: the *pause was
+the loudest part of the night*. `CAPTCHA_POLL_SECONDS` was a flat 20s, so the
+re-check fired ~1,500 times over those 8.3 hours - about 180 requests/hour
+against the ~30/hr the sleep path was supposed to produce. Worse, those polls
+are deliberately uncounted (see the comment on `track_event("captcha_hit")`),
+so the tracker cannot see them either: a night like this reads as quiet in the
+data while actually being busier than intended.
+
+Fixed on 2026-08-28: `_captcha_poll_interval()` in `core/request.py` drops the
+re-check to `CAPTCHA_POLL_SECONDS_QUIET` (300s) while `TWB.in_quiet_hours()`
+is true, re-evaluated each pass so a block spanning the boundary speeds back
+up at dawn. Nothing is lost by slowing down, because a clear detected outside
+active hours only sends the main loop into `sleep_through_inactive_hours`
+anyway. Replaying last night through it: 1,496 -> 573 requests.
+
+Two things that follow:
+
+- **Last night is not a usable data point for section 1** on nl116. The night
+  was neither quiet nor honestly counted. Discard it and wait for a night that
+  either sleeps clean or blocks under the new backoff.
+- **The residual is now the fast polls inside active hours** - 507 of those
+  573, almost all in the 05:00-06:59 stretch after the window reopened. That
+  is deliberate: in-hours is when someone is around to solve it, and slowing
+  down there trades resume latency for requests. But two hours of hitting a
+  blocked session every 20s is its own bot signal. If it needs addressing, a
+  bounded ramp (20s -> 60s over the first ~10 minutes) covers most of it
+  without meaningfully hurting resume time.
+
 **Measure first:** `/root/twb-captcha-tracker/track.py report`. Section 1 is
 the whole point - it buckets the bot's own running time by request rate and
 asks whether captchas per hour or captchas per 1000 requests is the flatter
@@ -182,3 +218,33 @@ game counts.
 
 Delete `/root/twb-captcha-tracker/` and back out the `core/request.py`
 instrumentation once this is closed.
+
+
+## Alert when a captcha blinds the incoming poller
+
+**Found:** 2026-08-27 overnight, alongside the night-mode change above.
+
+Making the incoming poller ungated was the whole point of letting the bot sleep
+- an attack landing at 04:00 is the one you cannot afford to first hear about
+at 05:00. On nl116 that night the poller ran ~65 times and *every single one*
+logged `Bot protection hit during background poll, skipping` (`core/request.py`
+in `get_url`/`post_url`, where `block_on_captcha` is false). Attack detection
+was dead for 8 hours while the logs showed a poller dutifully polling.
+
+Nothing was actually lost - `Tracking 0 incoming attack(s)` all night, and the
+22:40 Telegram alert went out with no send failure logged - but that was luck.
+The failure mode is that a skipped poll and a genuinely quiet night look
+identical unless you go looking, so the guarantee the ungated poller was meant
+to provide silently evaporates exactly when a captcha is standing.
+
+**Worth doing:** the poller knows it is being refused. A run of consecutive
+skips while `cache/captcha_block.json` exists should escalate - a distinct
+Telegram message ("captcha standing, incoming detection is down"), repeated on
+a slow cadence rather than once, since the existing captcha notification fires
+at the moment of the hit and is easy to sleep through. The dashboard banner
+should probably say the same thing: not just "captcha", but "captcha, and you
+are blind to incomings until it clears".
+
+Deliberately not folded into the poll-interval fix above, which only changes
+how *often* a blocked session is re-checked, not whether anyone is told that
+the blocking has a second cost.
