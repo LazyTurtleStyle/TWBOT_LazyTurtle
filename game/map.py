@@ -15,7 +15,6 @@ class Map:
     """
     wrapper = None
     village_id = None
-    map_data = []
     villages = {}
     my_location = None
     map_pos = {}
@@ -38,9 +37,12 @@ class Map:
         self.last_fetch = time.time()
         res = self.wrapper.get_action(village_id=self.village_id, action="map")
         game_state = Extractor.game_state(res)
-        self.map_data = Extractor.map_data(res)
-        if self.map_data:
-            for tile in self.map_data:
+        # Kept local on purpose. This is only needed to populate the shared
+        # villages/map_pos caches below; retaining it as an attribute keeps one
+        # parsed copy of the map alive per village for the life of the process.
+        map_data = Extractor.map_data(res)
+        if map_data:
+            for tile in map_data:
                 data = tile["data"]
                 x = int(data["x"])
                 y = int(data["y"])
@@ -73,16 +75,16 @@ class Map:
                         game_state["village"]["x"],
                         game_state["village"]["y"],
                     ]
-        if not self.map_data or not self.villages:
-            return self.get_map_old(game_state=game_state)
+        if not map_data or not self.villages:
+            return self.get_map_old(game_state=game_state, map_data=map_data)
         return True
 
-    def get_map_old(self, game_state):
+    def get_map_old(self, game_state, map_data=None):
         """
         Old method of parsing the map, might work, might not, who knows
         """
-        if self.map_data:
-            for tile in self.map_data:
+        if map_data:
+            for tile in map_data:
                 data = tile["data"]
                 x = int(data["x"])
                 y = int(data["y"])
@@ -103,7 +105,7 @@ class Map:
                     game_state["village"]["x"],
                     game_state["village"]["y"],
                 ]
-        if not self.map_data or not self.villages:
+        if not map_data or not self.villages:
             logging.warning(
                 "Error reading map state for village %s, farming might not work properly",
                 self.village_id
