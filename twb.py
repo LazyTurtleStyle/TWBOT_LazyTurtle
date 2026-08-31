@@ -19,7 +19,6 @@ TWB - an open source Tribal Wars bot
 #
 
 import collections
-import copy
 import datetime
 import difflib
 import json
@@ -1048,8 +1047,12 @@ class TWB:
             return
         self.wrapper.headers["user-agent"] = config["bot"]["user_agent"]
         for vid in config["villages"]:
-            v = Village(wrapper=self.wrapper, village_id=vid)
-            self.villages.append(copy.deepcopy(v))
+            # Append the village as-is. It is freshly constructed each iteration,
+            # so there is nothing to copy - and deep-copying it would clone the
+            # whole WebWrapper graph (session, cookies, last_response) once per
+            # village, which is both a large allocation and wrong: the villages
+            # are meant to share one live session, not 41 snapshots of it.
+            self.villages.append(Village(wrapper=self.wrapper, village_id=vid))
         # setup additional builder
         rm = None
         defense_states = {}
@@ -1141,8 +1144,8 @@ class TWB:
                 for vid in config["villages"]:
                     if vid not in known_village_ids:
                         print("Village %s was newly added, registering it for management" % vid)
-                        v = Village(wrapper=self.wrapper, village_id=vid)
-                        self.villages.append(copy.deepcopy(v))
+                        self.villages.append(
+                            Village(wrapper=self.wrapper, village_id=vid))
 
                 # Claim the daily login bonus once per day, only during active
                 # hours: a chest opened at the same minute past midnight every
