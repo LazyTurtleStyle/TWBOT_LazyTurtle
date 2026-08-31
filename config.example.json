@@ -152,7 +152,8 @@
     "max_sends_per_receiver": 1,
     "reserve_merchants": 0,
     "sender_keep": 0,
-    "min_send_amount": 250
+    "min_send_amount": 250,
+    "merchant_minutes_per_field": null
   },
   "world": {
     "knight_enabled": null,

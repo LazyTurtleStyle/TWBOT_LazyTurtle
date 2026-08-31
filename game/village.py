@@ -536,6 +536,11 @@ class Village:
         self.balancer.reserve_merchants = int(cfg.get("reserve_merchants", 0))
         self.balancer.sender_keep = int(cfg.get("sender_keep", 0))
         self.balancer.min_send_amount = int(cfg.get("min_send_amount", 250))
+        # What to assume about merchant speed until the game has stated a real
+        # trip time; after that the measured value wins and this is ignored.
+        # See ResourceBalancer.minutes_per_field.
+        self.balancer.merchant_minutes_per_field = cfg.get(
+            "merchant_minutes_per_field") or None
 
         public = self.area.in_cache(self.village_id) if self.area else None
         my_points = int((public or {}).get("points") or 0)
