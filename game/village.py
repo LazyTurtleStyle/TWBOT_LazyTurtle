@@ -318,6 +318,40 @@ class Village:
             )
             raise InvalidUnitTemplateException
 
+    def account_manager_handles(self, job):
+        """True when the in-game Account Manager is set to do `job` here.
+
+        The premium Account Manager builds, recruits and researches on its own
+        once it is switched on, so the bot doing the same work is duplicated
+        effort - it fights the manager's own queue and costs a request per
+        village per cycle either way. Each job is its own switch because the
+        manager is enabled per feature in game.
+
+        This is deliberately not the same thing as building/recruiting being
+        off. "Off" means nobody is doing it; "account managed" means somebody
+        else is, which is what makes it safe to skip reading the main screen
+        at all - see run_builder.
+        """
+        if not self.get_config(section="account_manager", parameter="enabled",
+                               default=False):
+            return False
+        return bool(self.get_config(section="account_manager", parameter=job,
+                                    default=False))
+
+    def rename_pending(self):
+        """Whether this village still has to be renamed to its configured name.
+
+        Read off the village page we already have, so the answer is available
+        without opening the main screen - which is the one thing that would
+        otherwise force that request.
+        """
+        if not self.village_set_name:
+            return False
+        try:
+            return self.game_data["village"]["name"] != self.village_set_name
+        except (KeyError, TypeError):
+            return True
+
     def run_builder(self):
         """
         Run building construction actions
@@ -377,10 +411,31 @@ class Village:
             self.builder.farm_priority_pop_pct = int(farm_pop or 0)
         except (TypeError, ValueError):
             self.builder.farm_priority_pop_pct = 0
+        # The main screen is read even with building off, because it is what
+        # carries the building levels the recruit templates and the smith need.
+        # When the Account Manager is doing all three of those, nothing left in
+        # the cycle reads a level, so the request itself can go - one per
+        # village per cycle, which is the whole point of the switch.
+        #
+        # Two things still need it and are checked rather than assumed: minting
+        # reads the academy level, and a village waiting to be renamed is
+        # renamed by this call.
+        if (self.account_manager_handles("building")
+                and self.account_manager_handles("recruiting")
+                and self.account_manager_handles("research")
+                and not self.get_village_config(
+                    self.village_id, parameter="snobs", default=None)
+                and not self.rename_pending()):
+            self.logger.debug(
+                "Village %s: building, recruiting and research are account "
+                "managed - skipping the main screen", self.village_id)
+            return
         self.builder.start_update(
-            build=not build_disabled and self.get_config(
-                section="building", parameter="manage_buildings", default=True
-            ),
+            build=(not build_disabled
+                   and not self.account_manager_handles("building")
+                   and self.get_config(
+                       section="building", parameter="manage_buildings", default=True
+                   )),
             set_village_name=self.village_set_name,
         )
 
@@ -454,6 +509,10 @@ class Village:
         """
         Uses smith to research or upgrade units
         """
+        if self.account_manager_handles("research"):
+            self.logger.debug("Village %s: research is account managed",
+                              self.village_id)
+            return
         if (
                 self.get_config(section="units", parameter="upgrade", default=False)
                 and self.units.wanted_levels != {}
@@ -464,6 +523,10 @@ class Village:
         """
         Recruits new units
         """
+        if self.account_manager_handles("recruiting"):
+            self.logger.debug("Village %s: recruiting is account managed",
+                              self.village_id)
+            return
         if self.get_config(section="units", parameter="recruit", default=False):
             self.units.can_fix_queue = self.get_config(
                 section="units", parameter="remove_manual_queued", default=False

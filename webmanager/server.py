@@ -1109,6 +1109,13 @@ QUICK_TOGGLES = {
     "scavenge": ("Scavenging", "village_template.gather_enabled"),
     "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
     "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
+    # The in-game (premium) Account Manager. Each job is its own switch because
+    # it is enabled per feature in game, and the master switch is separate so
+    # the three can be set up before handing the work over.
+    "am": ("Account manager", "account_manager.enabled"),
+    "am_build": ("Building", "account_manager.building"),
+    "am_recruit": ("Recruiting", "account_manager.recruiting"),
+    "am_research": ("Research", "account_manager.research"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).

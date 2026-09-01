@@ -55,6 +55,12 @@
     "max_queued_items": 2,
     "farm_priority_pop_pct": 0
   },
+  "account_manager": {
+    "enabled": false,
+    "building": false,
+    "recruiting": false,
+    "research": false
+  },
   "units": {
     "recruit": true,
     "upgrade": true,
