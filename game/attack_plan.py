@@ -15,6 +15,11 @@ for different world settings, which is worth seeing before queueing 30 attacks.
 
 A plan never says which troops to send (it only names the unit that paces the
 command), so the units are chosen in the dashboard before anything is queued.
+
+The waves of a noble train are exported as one line each, which is how they are
+sent in game; parse_plan folds those back into a single row of N nobles (see
+fold_noble_trains) because they have to be queued as one command to land
+together.
 """
 import datetime
 import re
@@ -72,12 +77,64 @@ def _duration(text):
     return hours * 3600 + minutes * 60 + seconds + int((fraction or "0")[:3] or 0) / 1000.0
 
 
+# Waves of a noble train land together by definition, so noble lines further
+# apart than this are a deliberate spread rather than one train.
+TRAIN_WINDOW_SECONDS = 2.0
+
+
+def fold_noble_trains(rows, window=TRAIN_WINDOW_SECONDS):
+    """Merge the per-noble lines of one train into a single row of N nobles.
+
+    A plan exports a train as one line per noble - same origin, same target,
+    the same arrival - because that is how the waves leave the rally point.
+    Queued as separate commands they would each run their own open -> confirm ->
+    launch sequence and so leave seconds apart, which is exactly the gap a
+    defender snipes; as one row they become one command whose waves are prepared
+    up front and fired back-to-back.
+
+    Rows are grouped on origin, target and an arrival within `window` seconds of
+    the line that opened the group, so a second train to the same target later
+    in the plan stays its own row. The merged row keeps the earliest arrival it
+    folded - the train lands as one command, and never later than the plan asked
+    for - and records the lines it swallowed in `merged_lines` so the import
+    table can say what it did. Anything else (support, non-noble commands, a
+    lone noble) is passed through untouched.
+    """
+    out, groups, open_group = [], [], {}
+    for row in rows:
+        # Support cannot be a train, and a train is only ever nobles.
+        if row["unit"] != "snob" or row["kind"] != "attack":
+            out.append(row)
+            continue
+        key = (tuple(row["origin"]), tuple(row["target"]))
+        group = open_group.get(key)
+        if group is not None and abs(row["arrival_ts"] - group["arrival_ts"]) <= window:
+            group["count"] += row["count"]
+            group["merged_lines"].append(row["line"])
+            if row["arrival_ts"] < group["arrival_ts"]:
+                group["arrival_ts"] = row["arrival_ts"]
+                group["send_ts"] = row["send_ts"]
+            continue
+        row = dict(row)
+        row["merged_lines"] = [row["line"]]
+        open_group[key] = row
+        groups.append(row)
+        out.append(row)
+    for group in groups:
+        # Only a row that actually folded something says so.
+        if len(group["merged_lines"]) < 2:
+            del group["merged_lines"]
+    return out
+
+
 def parse_plan(text):
     """Read a pasted plan. Returns (rows, skipped).
 
     `rows` are dicts with origin/target coordinate pairs, the paced unit, the
     command kind, arrival/send unix timestamps, the plan's own travel time and
-    how many commands the line asks for. `skipped` holds the lines that carried
+    how many commands the line asks for - the lines of a noble train are folded
+    into one row of N nobles, so a row can cover several lines.
+    `skipped` holds the lines that carried
     something command-shaped but could not be read, so the dashboard can say
     which ones were ignored instead of silently dropping them.
     """
@@ -121,4 +178,4 @@ def parse_plan(text):
             "plan_travel_seconds": travel,
             "count": int(data["count"] or 1),
         })
-    return rows, skipped
+    return fold_noble_trains(rows), skipped

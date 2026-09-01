@@ -78,6 +78,22 @@ def format_timestamp(value):
         return "-"
 
 
+@app.template_filter('tsms')
+def format_timestamp_ms(value):
+    """Like `ts`, but to the second - and to the millisecond when the timestamp
+    has them. A timed attack is queued to land on an exact moment, so the queue
+    has to show that moment: two commands 300ms apart would otherwise be
+    indistinguishable in the table."""
+    if not value:
+        return "-"
+    try:
+        moment = datetime.datetime.fromtimestamp(float(value))
+    except (ValueError, OSError, TypeError):
+        return "-"
+    millis = moment.microsecond // 1000
+    return moment.strftime("%d %b %H:%M:%S") + (".%03d" % millis if millis else "")
+
+
 @app.template_filter('comma')
 def format_comma(value):
     """Thousands-separated integer, or the original value if not numeric."""

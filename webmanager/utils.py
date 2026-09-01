@@ -553,7 +553,15 @@ class DataReader:
         except (TypeError, ValueError):
             return None, "invalid target coordinates"
         try:
-            arrival_ts = int(float(arrival_ts))
+            # Milliseconds are kept. The game computes travel as a whole number
+            # of seconds, so a command's arrival carries the milliseconds of its
+            # send - a plan that deliberately spaces commands sub-second only
+            # survives being queued if that survives here. A whole second is
+            # stored as an int, so a command written without milliseconds looks
+            # exactly as it always did.
+            arrival_ts = round(float(arrival_ts), 3)
+            if arrival_ts == int(arrival_ts):
+                arrival_ts = int(arrival_ts)
         except (TypeError, ValueError):
             return None, "invalid arrival time"
 
@@ -645,6 +653,9 @@ class DataReader:
             "target_name": target_name,
             "units": selected,
             "arrival_ts": arrival_ts,
+            # Whole seconds: this only decides when the command is claimed and
+            # pre-staged. The launch moment is worked out from the server's own
+            # travel time when it fires, and that is what carries the ms.
             "send_ts": int(arrival_ts - travel),
             "travel_seconds": int(travel),
             "distance": round(distance, 1),
@@ -2336,16 +2347,37 @@ class PlanImport:
     the user then confirms.
     """
 
-    @staticmethod
-    def _suggest_units(row):
+    # What an attack is made of, in the order the units field reads best. A
+    # plan only ever names the unit it paced a command with, so a nuke row used
+    # to arrive here as "ram: all" and had to be typed out by hand every time.
+    # Defensive units stay home and nobles get their own row; the paladin rides
+    # along because "all" costs nothing in a village that has none - the rally
+    # point resolves it to what is standing there and drops the units that are
+    # not, so the command still goes out.
+    OFF_UNITS = ["axe", "light", "marcher", "knight", "spy", "ram", "catapult"]
+
+    @classmethod
+    def _suggest_units(cls, row, speeds=None):
         """A starting point for the troops, which no plan actually specifies.
 
         Only units at least as fast as the one the plan paced the command with,
-        so the send moment the plan calculated still holds.
+        so the send moment the plan calculated still holds. That is what makes
+        catapults free in a ram-paced nuke: they walk at exactly ram pace, so
+        they ride along without the command having to leave a second earlier.
+        An axe-paced row gets no siege for the same reason - rams and catapults
+        would double its travel time and throw the plan's send moment out.
+
+        Fakes are left alone: the plan already says what they are, and a fake
+        is a handful of units, not an army.
         """
         if row["unit"] == "snob":
             return {"snob": row["count"], "axe": "all", "light": "all"}
-        return {row["unit"]: "all"}
+        pace = (speeds or {}).get(row["unit"])
+        if (row["kind"] != "attack" or row["kind_raw"].lower() == "fake"
+                or row["unit"] not in cls.OFF_UNITS or not pace):
+            return {row["unit"]: "all"}
+        return {unit: "all" for unit in cls.OFF_UNITS
+                if speeds.get(unit) and speeds[unit] <= pace}
 
     @classmethod
     def build(cls, text):
@@ -2412,7 +2444,7 @@ class PlanImport:
                 else:
                     seen_origins[origin[0]] = row["line"]
 
-            entry["units"] = cls._suggest_units(row)
+            entry["units"] = cls._suggest_units(row, speeds)
             entry["train"] = (row["unit"] == "snob" and row["count"] > 1)
             entry["problems"] = problems
             entry["warnings"] = warnings
