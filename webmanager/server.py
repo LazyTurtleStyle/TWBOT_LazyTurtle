@@ -671,6 +671,29 @@ def attack_schedule_cancel():
     return jsonify({"ok": DataReader.schedule_cancel(cid)})
 
 
+@app.route('/app/attack/schedule/retime', methods=['POST'])
+def attack_schedule_retime():
+    """Move queued commands to new arrival times. Expects JSON:
+    {rows: [{id, arrival}]}, arrival in unix seconds (milliseconds kept).
+
+    Takes a list because the useful edits are relative ones across several
+    commands at once - pushing a noble train a second behind the nukes it is
+    following in. Each row reports its own result, so one command that has run
+    out of lead time does not stop the rest.
+    """
+    body = request.get_json(silent=True) or {}
+    results = []
+    for row in body.get("rows") or []:
+        entry, error = DataReader.schedule_retime(
+            (row or {}).get("id"), (row or {}).get("arrival"))
+        results.append({"id": (row or {}).get("id"), "ok": bool(entry),
+                        "error": error,
+                        "arrival": entry.get("arrival_ts") if entry else None,
+                        "send_ts": entry.get("send_ts") if entry else None})
+    return jsonify({"ok": True, "moved": sum(1 for r in results if r["ok"]),
+                    "results": results})
+
+
 @app.route('/defense', methods=['GET'])
 def defense_page():
     data = sync()

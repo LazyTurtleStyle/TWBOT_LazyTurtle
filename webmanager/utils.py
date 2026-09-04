@@ -740,6 +740,71 @@ class DataReader:
         return commands
 
     @staticmethod
+    def schedule_retime(command_id, arrival_ts):
+        """Move a queued command's arrival, re-deriving when it has to leave.
+
+        A planner solves for "these commands land together", which is rarely
+        what you want once they are queued - the nuke has to land before the
+        train, a fake has to arrive a moment earlier than the real one. Rather
+        than making the import guess at that, the queue itself is editable.
+
+        The travel time is not recalculated: it belongs to the units this
+        command is already carrying, and those have not changed. So the send is
+        simply the new arrival minus that, and it has to stay far enough ahead
+        for the scheduler to still claim and pre-stage the command - which for a
+        train is several waves' worth of round trips, hence command_prestage
+        rather than a flat margin.
+
+        Returns (entry, error). Runs inside the queue's own lock, so a command
+        the bot is claiming in the same moment cannot be moved out from under it.
+        """
+        try:
+            arrival_ts = round(float(arrival_ts), 3)
+            if arrival_ts == int(arrival_ts):
+                arrival_ts = int(arrival_ts)
+        except (TypeError, ValueError):
+            return None, "invalid arrival time"
+        if DataReader._forced_peace_conflict(arrival_ts):
+            return None, "arrival falls inside a forced-peace window"
+
+        outcome = {}
+
+        def mutate(commands):
+            for command in commands:
+                if command.get("id") != command_id:
+                    continue
+                if command.get("status") != "pending":
+                    outcome["error"] = ("this command is %s, so it can no longer "
+                                        "be moved" % command.get("status"))
+                    return
+                travel = int(command.get("travel_seconds") or 0)
+                if travel <= 0:
+                    outcome["error"] = "no travel time on file for this command"
+                    return
+                send_ts = int(arrival_ts - travel)
+                lead = attack_scheduler.command_prestage(command)
+                now = time.time()
+                if send_ts <= now:
+                    outcome["error"] = ("too late - it would have had to leave "
+                                        "%s ago" % _short_duration(now - send_ts))
+                    return
+                if send_ts <= now + lead:
+                    outcome["error"] = (
+                        "too close - it would leave in %s, and this command needs "
+                        "%ds of lead time to be claimed and pre-staged"
+                        % (_short_duration(send_ts - now), lead))
+                    return
+                command["arrival_ts"] = arrival_ts
+                command["send_ts"] = send_ts
+                command["retimed"] = int(time.time())
+                outcome["entry"] = command
+                return
+            outcome["error"] = "no such command in the queue"
+
+        attack_scheduler.update(mutate, path=DataReader.schedule_path())
+        return outcome.get("entry"), outcome.get("error")
+
+    @staticmethod
     def schedule_cancel(command_id):
         return attack_scheduler.cancel_command(command_id, path=DataReader.schedule_path())
 

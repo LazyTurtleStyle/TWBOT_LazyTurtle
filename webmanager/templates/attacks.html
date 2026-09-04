@@ -177,17 +177,35 @@
 
 	<div class="col-lg-7 mb-3">
 		<div class="card">
-			<div class="card-header py-2"><strong>Scheduled commands ({{ scheduled|length }})</strong></div>
+			<div class="card-header py-2 d-flex align-items-center flex-wrap">
+				<strong>Scheduled commands ({{ scheduled|length }})</strong>
+				{% set movable = scheduled|selectattr('status', 'equalto', 'pending')|list|length %}
+				{% if movable %}
+				<span class="ml-auto d-flex align-items-center" style="gap:.35rem">
+					<small class="text-muted">shift ticked by</small>
+					<input id="rt_shift" type="number" step="0.1" value="1"
+						class="form-control form-control-sm" style="width:5.5rem">
+					<small class="text-muted">s</small>
+					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(-1)"
+						title="Land earlier">&minus;</button>
+					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(1)"
+						title="Land later">+</button>
+				</span>
+				{% endif %}
+			</div>
 			<div class="table-responsive">
 				<table class="table table-sm planner-table mb-0">
 					<thead><tr>
+						<th><input type="checkbox" id="rt_all" title="tick every movable command"></th>
 						<th>Target</th><th>Origin</th><th>Units</th>
 						<th class="text-right">Lands</th><th class="text-right">Sends in</th>
 						<th>Status</th><th></th>
 					</tr></thead>
 					<tbody>
 						{% for c in scheduled %}
-						<tr>
+						<tr data-cid="{{ c.id }}">
+							<td>{% if c.status == 'pending' %}<input type="checkbox" class="rt-pick"
+								data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">{% endif %}</td>
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
 								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
 							<td><small>{{ c.origin_name }}</small></td>
@@ -206,7 +224,10 @@
 								{% else %}
 								{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
 								{% endif %}</small></td>
-							<td class="text-right">{{ c.arrival_ts|tsms }}</td>
+							<td class="text-right rt-lands" data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">
+								{% if c.status == 'pending' %}<a href="#" class="rt-edit" data-id="{{ c.id }}"
+									title="Click to set this command's arrival exactly">{{ c.arrival_ts|tsms }}</a>
+								{% else %}{{ c.arrival_ts|tsms }}{% endif %}</td>
 							<td class="text-right">
 								{% if c.status == 'pending' %}<span class="sched-eta" data-send="{{ c.send_ts }}">…</span>
 								{% else %}—{% endif %}</td>
@@ -220,7 +241,7 @@
 								onclick="cancelSched('{{ c.id }}')">Cancel</button>{% endif %}</td>
 						</tr>
 						{% else %}
-						<tr><td colspan="7" class="text-muted">No scheduled commands.</td></tr>
+						<tr><td colspan="8" class="text-muted">No scheduled commands.</td></tr>
 						{% endfor %}
 					</tbody>
 				</table>
@@ -778,6 +799,66 @@ function cancelSched(id) {
 	fetch(appUrl('/app/attack/schedule/cancel', 'id='+encodeURIComponent(id)))
 		.then(r => r.json()).then(() => location.reload());
 }
+/* ---------- retiming queued commands ----------------------------------
+   A plan lands everything on the same moment, which is almost never what is
+   wanted once it is queued: the nuke has to land before the train, a fake a
+   moment before the real one. Rather than making the import guess, the queue
+   is editable - tick the commands and nudge them, or set one exactly. */
+function rtPost(rows, what) {
+	if (!rows.length) { alert('Tick the commands to move first.'); return; }
+	fetch(appUrl('/app/attack/schedule/retime'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({rows: rows})
+	}).then(r => r.json()).then(d => {
+		const bad = (d.results || []).filter(r => !r.ok);
+		if (bad.length) {
+			alert('Moved ' + d.moved + ' of ' + rows.length + '.\n\n' +
+				bad.map(b => b.error).join('\n'));
+		}
+		location.reload();
+	}).catch(e => alert('Could not move: ' + e));
+}
+function shiftSched(sign) {
+	const box = document.getElementById('rt_shift');
+	const step = parseFloat(box ? box.value : '0');
+	if (isNaN(step) || !step) { alert('Set how many seconds to shift by.'); return; }
+	const rows = [];
+	document.querySelectorAll('.rt-pick:checked').forEach(cb => {
+		const at = parseFloat(cb.getAttribute('data-arrival'));
+		rows.push({id: cb.getAttribute('data-id'),
+			arrival: Math.round((at + sign * step) * 1000) / 1000});
+	});
+	rtPost(rows, 'shifted');
+}
+/* Local wall-clock text for a timestamp, in the same shape the editor takes
+   back, so what you see is what you edit. */
+function rtStamp(ts) {
+	const d = new Date(ts * 1000), p = (n, w) => String(n).padStart(w || 2, '0');
+	return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+		p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' +
+		p(d.getMilliseconds(), 3);
+}
+document.addEventListener('click', function(e) {
+	const link = e.target.closest ? e.target.closest('.rt-edit') : null;
+	if (!link) return;
+	e.preventDefault();
+	const cell = link.closest('td');
+	const id = link.getAttribute('data-id');
+	const current = parseFloat(cell.getAttribute('data-arrival'));
+	const typed = prompt('Land this command at (local time, milliseconds kept):',
+		rtStamp(current));
+	if (typed === null) return;
+	const when = new Date(typed.trim().replace(' ', 'T'));
+	if (isNaN(when.getTime())) { alert('Could not read "' + typed + '".'); return; }
+	rtPost([{id: id, arrival: Math.round(when.getTime()) / 1000}], 'set');
+});
+(function() {
+	const all = document.getElementById('rt_all');
+	if (all) all.addEventListener('change', function() {
+		document.querySelectorAll('.rt-pick').forEach(cb => { cb.checked = this.checked; });
+	});
+})();
+
 document.getElementById('s_submit').addEventListener('click', function() {
 	const opt = originOpt();
 	const av = document.getElementById('s_arrival').value;
