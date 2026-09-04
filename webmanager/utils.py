@@ -612,9 +612,31 @@ class DataReader:
                 return None, ("no troop snapshot for this village yet - "
                               "type the counts instead of 'all'")
             counts = attack_scheduler.resolve_all_units(selected, home)
+            # A front-loaded train takes the escort out of the stack it is
+            # sending, so "25 heavy each" needs 25 x every following noble. Ask
+            # for more than the stack carries and there are two different
+            # situations, worth treating differently:
+            #
+            #   the stack has some, just not that many - a shortage. Trim to
+            #     what fits, which is exactly what the send-time re-split would
+            #     do anyway (fit_escort), and say so.
+            #   the stack has none at all, or not even one per wave - a mistake,
+            #     usually an escort unit this village does not train. Left for
+            #     split_train to refuse, because silently sending bare nobles is
+            #     not what anyone meant.
+            escort = dict(train.get("escort") or {})
+            followers = max(counts.get("snob", 0) - 1, 0)
+            if followers:
+                for unit, per_wave in sorted(escort.items()):
+                    have = counts.get(unit, 0)
+                    if have and 0 < have // followers < per_wave:
+                        escort[unit] = have // followers
+                        notes.append(
+                            "escort trimmed to %d %s per wave - the stack "
+                            "carries %d, and you asked for %d each"
+                            % (escort[unit], unit, have, per_wave))
             waves, err = attack_scheduler.split_train(
-                counts, mode=(train.get("mode") or "front"),
-                escort=train.get("escort") or {})
+                counts, mode=(train.get("mode") or "front"), escort=escort)
             if err:
                 return None, err
             # Fewer nobles at home than the train asks for is worth saying out

@@ -336,8 +336,9 @@
 				<select id="p_escort_unit" class="form-control form-control-sm"></select>
 			</div>
 			<div class="form-group col-2 mb-2">
-				<label class="small mb-1">Amount</label>
-				<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
+				<label class="small mb-1" title="Per following noble, not a total: a 4-noble train has 3 followers, so 50 here means 150 out of the stack.">Amount <span class="text-muted">/ wave</span></label>
+				<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm"
+					title="Escort for each noble after the first. The stack has to carry it: a 4-noble train with 25 each needs 75. Ask for more than is there and it is trimmed to what fits.">
 			</div>
 			<div class="form-group col-auto mb-2" id="p_template_wrap" style="display:none">
 				<label class="small mb-1">Troop template</label>
