@@ -62,6 +62,10 @@
     "research": false,
     "auto_setup": false
   },
+  "events": {
+    "auto_play": false,
+    "option": "auto"
+  },
   "units": {
     "recruit": true,
     "upgrade": true,

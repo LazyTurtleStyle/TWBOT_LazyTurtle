@@ -13,13 +13,13 @@ try:
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
                                   PlayerFarmOverview, PlanImport,
-                                  AccountManagerOverview)
+                                  AccountManagerOverview, EventOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
-                       AccountManagerOverview)
+                       AccountManagerOverview, EventOverview)
 
 import datetime
 from html import escape as html_escape
@@ -769,6 +769,18 @@ def am_refresh():
     return jsonify({"ok": DataReader.am_request("refresh")})
 
 
+@app.route('/events', methods=['GET'])
+def events_page():
+    data = sync()
+    return render_template('events.html', data=data, ev=EventOverview.build(data))
+
+
+@app.route('/app/event/refresh', methods=['GET', 'POST'])
+def event_refresh():
+    """Ask the bot to re-read the running event on its next cycle."""
+    return jsonify({"ok": DataReader.event_refresh(request.args.get("screen"))})
+
+
 @app.route('/setup', methods=['GET'])
 def setup_page():
     return render_template('setup.html', data=sync(), sections=pre_process_config(),
@@ -1153,6 +1165,9 @@ QUICK_TOGGLES = {
     "am_recruit": ("Recruiting (in game)", "account_manager.recruiting"),
     "am_research": ("Research (in game)", "account_manager.research"),
     "am_setup": ("Morning setup", "account_manager.auto_setup"),
+    # The weekly event: its energy bar refills whether or not anyone is looking,
+    # which is exactly the kind of thing worth handing over with one click.
+    "event": ("Play the event", "events.auto_play"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).

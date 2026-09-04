@@ -41,6 +41,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     accountmanager = None
 
 try:
+    from game import events as game_events
+except Exception:  # pragma: no cover - dashboard still works without it
+    game_events = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -939,6 +944,52 @@ class DataReader:
         accountmanager.update_plans(lambda plans: plans.update({kind: True}),
                                     path=DataReader.am_plans_path())
         return True
+
+    # -- rotating in-game events -------------------------------------------
+
+    @staticmethod
+    def events_dir():
+        return DataReader.data_path("cache", "events")
+
+    @staticmethod
+    def events_grab():
+        """Every event the bot has seen, newest first. Read straight off the
+        per-event files (world-aware, so the game module's own reader cannot be
+        used here)."""
+        out = []
+        directory = DataReader.events_dir()
+        if not os.path.isdir(directory):
+            return out
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(directory, name)) as handle:
+                    data = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if data:
+                out.append(data)
+        return sorted(out, key=lambda s: s.get("last_seen") or 0, reverse=True)
+
+    @staticmethod
+    def event_refresh(screen):
+        """Ask the bot to re-read the running event on its next cycle. Needed
+        because with auto-play off nothing would otherwise open the event page,
+        and a dashboard that shows a day-old energy bar is worse than useless."""
+        safe = "".join(c for c in str(screen) if c.isalpha() or c == "_")
+        path = os.path.join(DataReader.events_dir(), "%s.json" % safe)
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path) as handle:
+                state = json.load(handle) or {}
+            state["refresh"] = True
+            with open(path, "w") as handle:
+                json.dump(state, handle, indent=2)
+            return True
+        except (OSError, ValueError):
+            return False
 
     @staticmethod
     def am_state_grab():
@@ -3122,6 +3173,116 @@ class AccountManagerOverview:
             "pending_run": bool(plans.get("run_now")),
             "pending_refresh": bool(plans.get("refresh")),
             "never_read": not snapshots,
+        }
+
+
+class EventOverview:
+    """What the Events page shows: the running event, and what the bot got out
+    of past ones.
+
+    Everything here is read off the files the bot writes; the page never talks
+    to TribalWars. The energy figure is the one exception that needs arithmetic
+    rather than a lookup - the game only ever reports a value and the moment it
+    was true, so "now" is projected from the refill rate, the same way the bot
+    does it before deciding whether it can act.
+    """
+
+    @staticmethod
+    def _energy_now(snapshot):
+        """Energy at this moment, projected from the bot's last look."""
+        try:
+            value = float(snapshot["energy"])
+            top = float(snapshot["energy_max"])
+            rate = float(snapshot.get("energy_rate") or 0)
+            at = float(snapshot["at"])
+        except (KeyError, TypeError, ValueError):
+            return None, None, None
+        if rate <= 0:
+            return value, top, None
+        grown = min(value + (time.time() - at) / rate, top)
+        # Seconds until the next whole unit lands, for the countdown; None once
+        # the bar is full, because a full bar has stopped refilling.
+        nxt = None
+        if grown < top:
+            nxt = int((1 - (grown - int(grown))) * rate)
+        return grown, top, nxt
+
+    @classmethod
+    def _decorate(cls, state):
+        """One event file turned into what the page needs."""
+        snapshot = state.get("snapshot") or {}
+        totals = state.get("totals") or {}
+        energy, top, nxt = cls._energy_now(snapshot)
+        options = snapshot.get("options") or []
+        best = options[0] if options else None
+
+        # How the dice actually fell against what the choices were worth. Over a
+        # week this is the only honest answer to "is it working" - the reward
+        # alone cannot distinguish a good strategy from a lucky one.
+        expected = float(totals.get("expected") or 0)
+        earned = int(totals.get("reward") or 0)
+        luck = (earned / expected) if expected > 0 else None
+
+        # What is still to come: every hour left is one more unit of energy,
+        # plus whatever is already in the bar.
+        forecast = None
+        ends = state.get("ends_ts")
+        if ends and best and energy is not None and not state.get("finished"):
+            hours_left = max(0.0, (ends - time.time()) / 3600.0)
+            actions_left = int(hours_left + energy)
+            forecast = {"hours": round(hours_left, 1), "actions": actions_left,
+                        "reward": int(actions_left * best["value"])}
+
+        return {
+            "screen": state.get("screen"),
+            "name": state.get("name"),
+            "player_id": state.get("player_id"),
+            "label": state.get("label"),
+            "unsupported": bool(state.get("unsupported")),
+            "finished": bool(state.get("finished")),
+            "finished_at": state.get("finished_at"),
+            "first_seen": state.get("first_seen"),
+            "last_seen": state.get("last_seen"),
+            "ends_ts": ends,
+            "ends_text": state.get("ends_text"),
+            "seen_at": snapshot.get("at"),
+            "energy": None if energy is None else round(energy, 2),
+            "energy_max": top,
+            "energy_next": nxt,
+            "currency": snapshot.get("currency"),
+            "options": options,
+            "best": best,
+            "ranks_best": snapshot.get("ranks_best") or [],
+            "ranks_unluckiest": snapshot.get("ranks_unluckiest") or [],
+            "group": snapshot.get("group") or {},
+            "totals": {"actions": int(totals.get("actions") or 0),
+                       "jackpots": int(totals.get("jackpots") or 0),
+                       "reward": earned,
+                       "expected": int(expected)},
+            "luck": None if luck is None else round(luck, 2),
+            "by_option": state.get("by_option") or {},
+            "log": (state.get("log") or [])[:25],
+            "forecast": forecast,
+        }
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("events", {}) or {}
+        states = DataReader.events_grab()
+        current, history = None, []
+        for state in states:
+            view = cls._decorate(state)
+            if view["finished"] or current is not None:
+                history.append(view)
+            else:
+                current = view
+        return {
+            "auto_play": bool(settings.get("auto_play", False)),
+            "option": str(settings.get("option", "auto")),
+            "current": current,
+            "history": history,
+            "ever": bool(states),
         }
 
 

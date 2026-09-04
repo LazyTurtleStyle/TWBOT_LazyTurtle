@@ -45,6 +45,7 @@ from game import attack_scheduler
 from game import csnipe
 from game import accountmanager
 from game import dailybonus
+from game import events
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
@@ -1169,11 +1170,26 @@ class TWB:
                 # alone and the pass after the village loop can still fire.
                 self.troop_reserve = self.noble_escort_reserve(config)
 
+                # The running event goes here, right behind the noble work: it is
+                # only a few seconds per action, and its one real failure is
+                # letting the energy bar reach its cap, so it is not something to
+                # queue behind the slow parts of a cycle.
+                try:
+                    events.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config, overview_html=overview_page.result_get.text)
+                except Exception as exc:
+                    logging.getLogger("Events").warning(
+                        "Event pass failed: %s", exc)
+
                 # Re-apply the in-game Account Manager templates. The daily
                 # pass inside run() is gated on active hours for the same
                 # reason the bonus claim is - a morning setup is what a human
                 # session looks like - but an apply asked for from the
                 # dashboard is served whenever it was asked.
+                #
+                # Behind the event because it is the slower of the two: a couple
+                # of minutes of form posts, once a day.
                 try:
                     accountmanager.run(
                         self.wrapper, next(iter(config["villages"]), None),
@@ -1296,7 +1312,8 @@ class TWB:
             "cache/logs",
             "cache/managed",
             "cache/hunter",
-            "cache/incomings"
+            "cache/incomings",
+            "cache/events"
         ]
         FileManager.create_directories(directories)
 

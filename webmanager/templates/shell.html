@@ -529,7 +529,7 @@
 {% set nav = [
 	('Overview', [('/', 'Overview', '◆'), ('/logs', 'Bot logs', '≡')]),
 	('Operations', [('/villages','Villages','🏠'), ('/attacks','Attack','⚔'), ('/defense','Defense','🛡'), ('/farms','Farms & scavenging','⌖'), ('/map','World map','▣')]),
-	('Modules', [('/config#building','Building','⚒'), ('/config#units','Recruitment','⚑'), ('/config#market','Market','⇄'), ('/account_manager','Account manager','◇')]),
+	('Modules', [('/config#building','Building','⚒'), ('/config#units','Recruitment','⚑'), ('/config#market','Market','⇄'), ('/account_manager','Account manager','◇'), ('/events','Events','★')]),
 	('Templates', [('/building_templates','Building templates','▦'), ('/unit_templates','Unit templates','▥')]),
 	('Configure', [('/setup','Settings','⚙'), ('/config','All settings','≣')]),
 ] %}
@@ -606,7 +606,7 @@
 		{% for t in quick_toggles %}
 		<div class="qc-row{% if t.key in ('scavenge_night', 'scavenge_attacked', 'am_build', 'am_recruit', 'am_research', 'am_setup') %} qc-child{% elif t.key in ('scavenge', 'am') %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
 			<div><div class="qc-name">{{ t.label }}</div>
-				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run','am':'the in-game manager does these jobs, so the bot skips them','am_build':'the manager runs the build queue','am_recruit':'the manager fills barracks and stable','am_research':'the manager runs the smith','am_setup':'re-apply your group templates every morning'}.get(t.key, '') }}</div></div>
+				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run','am':'the in-game manager does these jobs, so the bot skips them','am_build':'the manager runs the build queue','am_recruit':'the manager fills barracks and stable','am_research':'the manager runs the smith','am_setup':'re-apply your group templates every morning','event':'spend the event energy so the bar never sits full'}.get(t.key, '') }}</div></div>
 			<span class="toggle {{ 'on' if t.on else '' }}"><span class="track"></span></span>
 		</div>
 		{% endfor %}
