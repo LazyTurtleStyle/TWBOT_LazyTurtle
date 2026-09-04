@@ -36,6 +36,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     noblebarb = None
 
 try:
+    from game import accountmanager
+except Exception:  # pragma: no cover - dashboard still works without it
+    accountmanager = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -871,6 +876,81 @@ class DataReader:
         data = (DataReader.cache_grab("world") or {}).get("groups") or {}
         groups = data.get("groups")
         return groups if isinstance(groups, list) else []
+
+    # -- in-game Account Manager ------------------------------------------
+    # The plan is a list of (group, template) rows per screen, kept out of
+    # config.json on purpose: the all-settings editor renders every key of a
+    # section as one control, and would flatten a list of rows into a string
+    # the moment anything on that page was saved.
+    AM_SECTIONS = ("building", "troops", "research")
+
+    @staticmethod
+    def am_plans_path():
+        """Resolved here, not in the game module: only this process knows which
+        world the browser is looking at."""
+        return DataReader.data_path("cache", "am_plans.json")
+
+    @staticmethod
+    def am_plans_grab():
+        """The saved Account Manager plan, always with all three sections
+        present: {"building": [...], "troops": [...], "research": [...],
+        "run_now": bool, "refresh": bool}."""
+        if accountmanager is None:
+            return {s: [] for s in DataReader.AM_SECTIONS}
+        return accountmanager.load_plans(path=DataReader.am_plans_path())
+
+    @staticmethod
+    def am_plans_save(section, rows):
+        """Replace one section's rows. Ids are kept as the game writes them
+        (digit strings); the names ride along so the page can still label a row
+        whose template was renamed or deleted in game.
+
+        Row order is the plan's meaning - the bot applies them top to bottom -
+        so the list is stored exactly as the page sent it.
+        """
+        if section not in DataReader.AM_SECTIONS or accountmanager is None:
+            return False
+        clean = []
+        for row in rows or []:
+            group_id = str((row or {}).get("group_id") or "").strip()
+            template_id = str((row or {}).get("template_id") or "").strip()
+            if not group_id.isdigit() or not template_id.isdigit():
+                continue
+            clean.append({
+                "group_id": group_id,
+                "template_id": template_id,
+                "group_name": str(row.get("group_name") or ""),
+                "template_name": str(row.get("template_name") or ""),
+            })
+        DataReader.ensure_data_dir("cache")
+        accountmanager.update_plans(lambda plans: plans.update({section: clean}),
+                                    path=DataReader.am_plans_path())
+        return True
+
+    @staticmethod
+    def am_request(kind):
+        """Ask the bot to apply the plan ("run_now") or to re-read the
+        manager's templates and per-village state ("refresh") on its next
+        cycle. The bot owns every game request: it is the process with the
+        session, the pacing and the captcha handling."""
+        if kind not in ("run_now", "refresh") or accountmanager is None:
+            return False
+        DataReader.ensure_data_dir("cache")
+        accountmanager.update_plans(lambda plans: plans.update({kind: True}),
+                                    path=DataReader.am_plans_path())
+        return True
+
+    @staticmethod
+    def am_state_grab():
+        """What the bot last read off the Account Manager screens."""
+        try:
+            path = DataReader.data_path("cache", "am_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
@@ -2902,6 +2982,146 @@ class PlayerFarmOverview:
             "profit_factor": getattr(playerfarm, "PROFIT_FACTOR", 2.0),
             "light_carry": carry,
             "now": now,
+        }
+
+
+class AccountManagerOverview:
+    """What the Account manager page shows: the plan, and what the game says.
+
+    The plan is (group -> template) rows per screen; the "what the game says"
+    half is whatever the bot last read off the manager's own screens
+    (cache/am_state.json). Everything here is a read - the page never talks to
+    TribalWars itself, it asks the bot to, which is the process that owns the
+    session and its pacing.
+    """
+
+    # section key -> (label, in-game screen, the tab's Dutch name in game)
+    SECTIONS = {
+        "building": ("Building", "am_village", "Bouw"),
+        "troops": ("Troops", "am_troops", "Troepen"),
+        "research": ("Research", "am_research", "Ontwikkeling"),
+    }
+
+    @staticmethod
+    def _managed(section, village):
+        """Is the manager actually doing this village?
+
+        Read off what the screen shows rather than its wording: the building and
+        research screens leave the template column empty for a village nobody
+        manages, and the troop screen leaves every target blank. Both survive a
+        game language the dashboard does not speak.
+        """
+        if section == "troops":
+            return any(str(v).strip() not in ("", "0")
+                       for v in (village.get("units") or {}).values())
+        return bool((village.get("template") or "").strip())
+
+    @staticmethod
+    def _queued(village):
+        """Build orders the manager still has queued here, from its "12 / 50"."""
+        raw = (village.get("orders") or "").split("/")[0].strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        flags = config.get("account_manager", {}) or {}
+        state = DataReader.am_state_grab()
+        plans = DataReader.am_plans_grab()
+        snapshots = state.get("sections") or {}
+        # Group membership comes from the incoming poller's group cache, which
+        # is the only place that knows which villages are in a group - the
+        # manager screens only ever show the group being looked at.
+        members = {g.get("id"): g.get("villages") or []
+                   for g in DataReader.groups_grab()}
+
+        sections = []
+        for key in DataReader.AM_SECTIONS:
+            label, screen, dutch = cls.SECTIONS[key]
+            snap = snapshots.get(key) or {}
+            templates = snap.get("templates") or []
+            # Before the first read the manager's own group menu is unknown, so
+            # fall back to the poller's group cache - same ids, same names, plus
+            # the [alle] pseudo-group the menu always starts with. That makes a
+            # plan buildable on a world the bot has not opened the manager on
+            # yet; the templates still have to come from the game.
+            groups = snap.get("groups") or (
+                [{"id": "0", "name": "alle", "type": "all"}]
+                + [{"id": g.get("id"), "name": g.get("name"),
+                    "type": g.get("type")}
+                   for g in DataReader.groups_grab()])
+            villages = snap.get("villages") or []
+            def group_size(gid):
+                """How many villages a group holds, or None when unknown.
+
+                [alle] has no membership list of its own (its size is simply
+                every village the screen listed), and a group the poller has not
+                cached yet has an unknown one - both answer None rather than a 0
+                that would read as "empty".
+                """
+                if gid == "0":
+                    return len(villages) or None
+                return len(members[gid]) if gid in members else None
+
+            # Carried on the group itself so the page can keep the count honest
+            # while a row is being edited, without a reload.
+            groups = [dict(g, villages=group_size(g.get("id"))) for g in groups]
+            by_template = {t.get("id"): t for t in templates}
+            by_group = {g.get("id"): g for g in groups}
+
+            rows = []
+            for row in plans.get(key) or []:
+                gid = row.get("group_id")
+                tid = row.get("template_id")
+                group = by_group.get(gid)
+                template = by_template.get(tid)
+                rows.append({
+                    "group_id": gid,
+                    "template_id": tid,
+                    "group_name": (group or {}).get("name")
+                                  or row.get("group_name") or gid,
+                    "template_name": (template or {}).get("name")
+                                     or row.get("template_name") or tid,
+                    "villages": group_size(gid),
+                    # Only claim something is gone once the page has actually
+                    # been read; an empty snapshot means "not read yet".
+                    "template_gone": bool(templates) and template is None,
+                    "group_gone": bool(groups) and group is None,
+                })
+
+            managed = [v for v in villages if cls._managed(key, v)]
+            idle = [v for v in managed if cls._queued(v) == 0] \
+                if key == "building" else []
+            sections.append({
+                "key": key, "label": label, "screen": screen, "dutch": dutch,
+                "templates": templates, "groups": groups, "villages": villages,
+                "rows": rows, "when": snap.get("when"),
+                "total": len(villages), "managed": len(managed),
+                "idle": len(idle),
+            })
+
+        result = state.get("last_result") or {}
+        return {
+            "flags": {
+                "enabled": bool(flags.get("enabled")),
+                "building": bool(flags.get("building")),
+                "recruiting": bool(flags.get("recruiting")),
+                "research": bool(flags.get("research")),
+                "auto_setup": bool(flags.get("auto_setup")),
+            },
+            "sections": sections,
+            "read_when": state.get("when"),
+            "last_run": state.get("last_run"),
+            "last_run_ts": state.get("last_run_ts"),
+            "last_result": result.get("rows") or [],
+            "last_result_when": result.get("when"),
+            "last_result_source": result.get("source"),
+            "pending_run": bool(plans.get("run_now")),
+            "pending_refresh": bool(plans.get("refresh")),
+            "never_read": not snapshots,
         }
 
 

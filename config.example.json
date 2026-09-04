@@ -59,7 +59,8 @@
     "enabled": false,
     "building": false,
     "recruiting": false,
-    "research": false
+    "research": false,
+    "auto_setup": false
   },
   "units": {
     "recruit": true,

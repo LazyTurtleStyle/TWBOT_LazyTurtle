@@ -43,6 +43,7 @@ from game.incomings import IncomingManager
 from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
+from game import accountmanager
 from game import dailybonus
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
@@ -1167,6 +1168,20 @@ class TWB:
                 # flight, or still short) so the rest of the cycle leaves them
                 # alone and the pass after the village loop can still fire.
                 self.troop_reserve = self.noble_escort_reserve(config)
+
+                # Re-apply the in-game Account Manager templates. The daily
+                # pass inside run() is gated on active hours for the same
+                # reason the bonus claim is - a morning setup is what a human
+                # session looks like - but an apply asked for from the
+                # dashboard is served whenever it was asked.
+                try:
+                    accountmanager.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config,
+                        active_hours=self.is_active_hours(config=config))
+                except Exception as exc:
+                    logging.getLogger("AccountManager").warning(
+                        "Account Manager setup failed: %s", exc)
 
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)

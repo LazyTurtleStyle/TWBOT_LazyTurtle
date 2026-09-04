@@ -53,6 +53,10 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 
 *Pick an origin, a target and the moment you want troops to land. The bot works out the send time from the slowest unit and fires it for you.*
 
+**Premium Account Manager**
+- Hand building, recruiting and research to the in-game Account Manager, and the bot stops doing them (and stops reading the screens it only needed for them)
+- Keep a group &rarr; sjabloon plan on the Account manager page and have it re-applied every morning, because the manager's build queue runs dry after a few days
+
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
 - Captcha auto-resume: solve it in your browser and the bot picks up where it left off, no restart

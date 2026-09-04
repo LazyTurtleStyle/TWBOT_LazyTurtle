@@ -12,12 +12,14 @@ try:
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
-                                  PlayerFarmOverview, PlanImport)
+                                  PlayerFarmOverview, PlanImport,
+                                  AccountManagerOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
-                       UnitTemplateManager, OverviewBuilder, PlanImport)
+                       UnitTemplateManager, OverviewBuilder, PlanImport,
+                       AccountManagerOverview)
 
 import datetime
 from html import escape as html_escape
@@ -736,6 +738,37 @@ def snipe_cancel():
     return jsonify({"ok": bool(state), "state": state})
 
 
+@app.route('/account_manager', methods=['GET'])
+def account_manager_page():
+    data = sync()
+    return render_template('account_manager.html', data=data,
+                           am=AccountManagerOverview.build(data))
+
+
+@app.route('/app/am/plan/save', methods=['POST'])
+def am_plan_save():
+    """Replace one screen's group -> template rows. Expects JSON:
+    {section, rows: [{group_id, template_id, group_name, template_name}]}.
+    Order matters and is kept: the bot applies the rows top to bottom, so a
+    later row deliberately overrides an earlier one where two groups overlap."""
+    body = request.get_json(silent=True) or {}
+    ok = DataReader.am_plans_save(body.get("section"), body.get("rows") or [])
+    return jsonify({"ok": bool(ok)})
+
+
+@app.route('/app/am/apply', methods=['GET', 'POST'])
+def am_apply():
+    """Ask the bot to apply the whole plan on its next cycle."""
+    return jsonify({"ok": DataReader.am_request("run_now")})
+
+
+@app.route('/app/am/refresh', methods=['GET', 'POST'])
+def am_refresh():
+    """Ask the bot to re-read the manager's templates, groups and village
+    state - after adding or renaming a template in game."""
+    return jsonify({"ok": DataReader.am_request("refresh")})
+
+
 @app.route('/setup', methods=['GET'])
 def setup_page():
     return render_template('setup.html', data=sync(), sections=pre_process_config(),
@@ -1113,9 +1146,13 @@ QUICK_TOGGLES = {
     # it is enabled per feature in game, and the master switch is separate so
     # the three can be set up before handing the work over.
     "am": ("Account manager", "account_manager.enabled"),
-    "am_build": ("Building", "account_manager.building"),
-    "am_recruit": ("Recruiting", "account_manager.recruiting"),
-    "am_research": ("Research", "account_manager.research"),
+    # Labelled "(in game)" because these sit directly under the bot's own
+    # Building / Recruiting / Research switches: three rows reading exactly
+    # "Building" in one panel is an invitation to turn off the wrong one.
+    "am_build": ("Building (in game)", "account_manager.building"),
+    "am_recruit": ("Recruiting (in game)", "account_manager.recruiting"),
+    "am_research": ("Research (in game)", "account_manager.research"),
+    "am_setup": ("Morning setup", "account_manager.auto_setup"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).

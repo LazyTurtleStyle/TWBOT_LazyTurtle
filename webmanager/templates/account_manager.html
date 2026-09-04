@@ -1,0 +1,366 @@
+{% extends "shell.html" %}
+{% block title %}Account manager{% endblock %}
+
+{% block content %}
+<style>
+	.am-plan td { padding: .35rem .5rem; vertical-align: middle; }
+	.am-plan select { min-width: 200px; }
+	.am-arrow { color: var(--ink-faint); }
+	.am-move { min-width: 26px; margin-right: 2px; }
+	.am-move:disabled { opacity: .3; }
+	.am-state-table td, .am-state-table th { padding: .3rem .55rem; }
+	.am-scroll { max-height: 460px; overflow-y: auto; }
+	#am-saved { position: fixed; bottom: 1rem; right: 1rem; z-index: 1050; display: none; }
+</style>
+
+<p class="text-muted small mt-1">
+	The in-game (premium) Account Manager builds, recruits and researches on its own,
+	but it does not stay set up: its build queue tops out at 50 orders and falls idle
+	when that runs dry. This page keeps a <strong>group &rarr; sjabloon</strong> plan and
+	re-applies it every morning. Make and edit the sjablonen in TribalWars itself
+	("Sjablonen beheren"); only the assignment lives here.
+	Storage (opslag) and delivery (leveringen) are not covered.
+</p>
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center flex-wrap">
+		<span><strong>Setup pass</strong>
+			<small class="text-muted ml-2">
+				{% if am.last_run %}last applied {{ am.last_run }}{% if am.last_run_ts %} ({{ am.last_run_ts|ago }}){% endif %}
+				{% else %}never applied by the bot{% endif %}
+				&middot;
+				{% if am.read_when %}game state read {{ am.read_when|ago }}{% else %}game state never read{% endif %}
+			</small>
+		</span>
+		<span class="ml-auto d-flex align-items-center" style="gap:.4rem">
+			<button class="btn btn-sm" id="am-refresh">Refresh from game</button>
+			<button class="btn btn-sm btn-ember" id="am-apply">Apply plan now</button>
+		</span>
+	</div>
+	<div class="card-body py-2">
+		<div class="d-flex align-items-center flex-wrap" style="gap:.6rem">
+			<button class="btn btn-sm {{ 'btn-success' if am.flags.auto_setup else 'btn-danger' }}"
+				id="am-auto" data-on="{{ '1' if am.flags.auto_setup else '0' }}">
+				{{ 'Morning setup ON' if am.flags.auto_setup else 'Morning setup OFF' }}</button>
+			<small class="text-muted">
+				While on, the bot applies the whole plan once a day, on its first cycle in
+				active hours. While off, nothing is applied unless you press Apply plan now.
+			</small>
+		</div>
+		{% if not am.flags.enabled %}
+		<div class="small text-muted mt-2">
+			The bot is still doing building/recruiting/research itself &mdash; the
+			<a href="/config#account_manager">account_manager</a> switches are off. Hand a job
+			over there once the manager is set up for it, or the two will fight over the queue.
+		</div>
+		{% else %}
+		<div class="small text-muted mt-2">Handed to the manager:
+			{% for j, on in [('building', am.flags.building), ('recruiting', am.flags.recruiting), ('research', am.flags.research)] %}
+			<span class="badge {{ 'badge-success' if on else 'badge-secondary' }}">{{ j }}</span>
+			{% endfor %}
+		</div>
+		{% endif %}
+		{% if am.pending_run or am.pending_refresh %}
+		<div class="small mt-2" style="color:var(--ember)">
+			&#9201; {{ 'Apply' if am.pending_run else 'Refresh' }} queued &mdash; it runs on the bot's next cycle.
+		</div>
+		{% endif %}
+	</div>
+</div>
+
+{% if am.last_result %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Last run</strong>
+		<small class="text-muted ml-2">{{ am.last_result_when|ago }}, started {{ am.last_result_source or 'by the bot' }}</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm table-striped mb-0 am-state-table">
+			<thead><tr><th>Screen</th><th>Group</th><th>Sjabloon</th><th class="text-right">Villages</th><th>Result</th></tr></thead>
+			<tbody>
+			{% for r in am.last_result %}
+			<tr>
+				<td>{{ r.section }}</td>
+				<td>{{ r.group_name or r.group_id }}</td>
+				<td>{{ r.template_name or r.template_id }}</td>
+				<td class="text-right">{{ r.villages }}</td>
+				<td>{% if r.ok and not r.error %}<span class="badge badge-success">applied</span>
+					{% elif r.ok %}<span class="badge badge-secondary">{{ r.error }}</span>
+					{% else %}<span class="badge badge-danger">{{ r.error }}</span>{% endif %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<ul class="nav nav-tabs mb-3" id="am-tabs">
+	{% for s in am.sections %}
+	<li class="nav-item"><a class="nav-link {{ 'active' if loop.first }}" href="#{{ s.key }}" data-pane="{{ s.key }}">
+		{{ s.label }}
+
+		{% if s.rows %}<span class="badge badge-dark">{{ s.rows|length }}</span>{% endif %}</a></li>
+	{% endfor %}
+</ul>
+
+{% for s in am.sections %}
+<div id="pane-{{ s.key }}" {% if not loop.first %}style="display:none"{% endif %}>
+
+	{% if s.key == 'troops' %}
+	<div class="alert alert-secondary py-2 small">
+		The troop screen has no mass-apply, so this works differently underneath: where
+		building and research hand a village a sjabloon to follow, applying here
+		<strong>writes the sjabloon's unit targets and resource buffers onto each village</strong>,
+		replacing whatever they were recruiting towards. Editing a sjabloon in game therefore
+		only reaches these villages on the next run.
+	</div>
+	{% endif %}
+
+	<div class="stats mb-3">
+		<div class="stat"><div class="v">{{ s.managed }}<span class="faint" style="font-size:16px">/{{ s.total or '?' }}</span></div>
+			<div class="k">Villages managed</div><div class="sub">as the {{ s.dutch }} screen last read</div></div>
+		{% if s.key == 'building' %}
+		<div class="stat"><div class="v {{ 'gold' if s.idle }}">{{ s.idle }}</div>
+			<div class="k">Queues run dry</div><div class="sub">managed, but 0 orders left</div></div>
+		{% endif %}
+		<div class="stat"><div class="v">{{ s.templates|length }}</div>
+			<div class="k">Sjablonen</div><div class="sub">read from the game</div></div>
+		<div class="stat"><div class="v" id="rows-{{ s.key }}">{{ s.rows|length }}</div>
+			<div class="k">Plan rows</div><div class="sub">applied top to bottom</div></div>
+	</div>
+
+	<div class="card mb-3">
+		<div class="card-header py-2 d-flex align-items-center">
+			<span><strong>Plan</strong>
+				<small class="text-muted ml-2">later rows win where groups overlap &mdash;
+					put [alle] first and the exceptions below it</small></span>
+			<span class="ml-auto d-flex align-items-center" style="gap:.6rem">
+				{# The button is dead until the sjablonen have been read, so say so in
+				   the open rather than only in a tooltip nobody hovers. #}
+				{% if not s.templates %}
+				<small style="color:var(--ember)">No sjablonen read for this world yet &mdash;
+					press <em>Refresh from game</em>, then reload once the bot has cycled</small>
+				{% endif %}
+				<button class="btn btn-sm am-add" data-section="{{ s.key }}"
+					{% if not s.templates %}disabled{% endif %}>Add row</button>
+			</span>
+		</div>
+		<div class="table-responsive">
+			<table class="table table-sm mb-0 am-plan" id="plan-{{ s.key }}">
+				<thead><tr><th style="width:38%">Group</th><th></th><th style="width:38%">Sjabloon</th>
+					<th class="text-right">Villages</th><th></th></tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		{% if not s.rows %}
+		<div class="card-body py-2 small text-muted" id="empty-{{ s.key }}">
+			No rows yet. {% if s.templates %}Add one: pick a group, pick the sjabloon it should get.
+			{% else %}Press <em>Refresh from game</em> first &mdash; the bot then reads your sjablonen
+			off the {{ s.dutch }} screen.{% endif %}
+		</div>
+		{% endif %}
+	</div>
+
+	{% if s.villages %}
+	<div class="card mb-3">
+		<div class="card-header py-2"><strong>What the game says</strong>
+			<small class="text-muted ml-2">{{ s.villages|length }} villages, read {{ s.when|ago }}</small></div>
+		<div class="table-responsive am-scroll">
+			<table class="table table-sm table-striped mb-0 am-state-table">
+				{% if s.key == 'troops' %}
+				<thead><tr><th>Village</th><th class="text-right">Spear</th><th class="text-right">Sword</th>
+					<th class="text-right">Axe</th><th class="text-right">Archer</th><th class="text-right">Scout</th>
+					<th class="text-right">LC</th><th class="text-right">MA</th><th class="text-right">HC</th>
+					<th class="text-right">Ram</th><th class="text-right">Cat</th></tr></thead>
+				<tbody>
+				{% for v in s.villages %}
+				<tr><td>{{ v.name }}</td>
+					{% for u in ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult'] %}
+					<td class="text-right {{ 'faint' if not v.units[u] or v.units[u] == '0' }}">{{ v.units[u] or '—' }}</td>
+					{% endfor %}
+				</tr>
+				{% endfor %}
+				</tbody>
+				{% else %}
+				<thead><tr><th>Village</th><th>Sjabloon</th>
+					{% if s.key == 'building' %}<th class="text-right">Orders</th>{% endif %}
+					<th>Status</th></tr></thead>
+				<tbody>
+				{% for v in s.villages %}
+				<tr><td>{{ v.name }}</td>
+					<td>{% if v.template %}{{ v.template }}{% else %}<span class="faint">—</span>{% endif %}</td>
+					{% if s.key == 'building' %}<td class="text-right mono">{{ v.orders }}</td>{% endif %}
+					<td class="faint">{{ v.status }}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+				{% endif %}
+			</table>
+		</div>
+	</div>
+	{% endif %}
+</div>
+{% endfor %}
+
+<div class="alert alert-success" id="am-saved">Plan saved</div>
+{% endblock %}
+
+{# The shell loads jQuery after the content block, so page scripts belong here. #}
+{% block scripts %}
+<script>
+var AM = {{ am.sections|tojson }};
+var AM_PANES = AM.map(function (s) { return s.key; });
+
+function amToast(text) {
+	var el = document.getElementById('am-saved');
+	el.textContent = text;
+	$(el).stop(true, true).fadeIn(120).delay(1100).fadeOut(400);
+}
+
+function amSection(key) {
+	for (var i = 0; i < AM.length; i++) { if (AM[i].key === key) return AM[i]; }
+	return null;
+}
+
+function amGroup(section, id) {
+	for (var i = 0; i < section.groups.length; i++) {
+		if (section.groups[i].id === id) return section.groups[i];
+	}
+	return null;
+}
+
+// The rows are rendered from AM[..].rows so add/remove/edit all go through one
+// path, and the table is always exactly what the next save would write.
+function amRender(key) {
+	var s = amSection(key);
+	var body = $('#plan-' + key + ' tbody').empty();
+	s.rows.forEach(function (row, idx) {
+		var tr = $('<tr>');
+		var gsel = $('<select class="form-control form-control-sm">');
+		s.groups.forEach(function (g) {
+			gsel.append($('<option>').val(g.id).text(g.name + (g.type === 'dynamic' ? ' (dynamic)' : ''))); });
+		if (!s.groups.some(function (g) { return g.id === row.group_id; })) {
+			gsel.append($('<option>').val(row.group_id).text(row.group_name + ' (gone?)'));
+		}
+		gsel.val(row.group_id).change(function () {
+			var picked = amGroup(s, this.value);
+			row.group_id = this.value;
+			row.group_name = (picked && picked.name) || $(this).find('option:selected').text();
+			// Re-rendered rather than patched in place, so the village count in
+			// the row follows the group that was just chosen instead of going
+			// stale until the next reload.
+			row.villages = picked ? picked.villages : null;
+			amRender(key);
+			amSave(key);
+		});
+		var tsel = $('<select class="form-control form-control-sm">');
+		s.templates.forEach(function (t) { tsel.append($('<option>').val(t.id).text(t.name)); });
+		if (!s.templates.some(function (t) { return t.id === row.template_id; })) {
+			tsel.append($('<option>').val(row.template_id).text(row.template_name + ' (gone?)'));
+		}
+		tsel.val(row.template_id).change(function () {
+			row.template_id = this.value;
+			row.template_name = $(this).find('option:selected').text();
+			amSave(key);
+		});
+		var del = $('<button class="btn btn-sm btn-outline-danger py-0">Remove</button>').click(function () {
+			s.rows.splice(idx, 1);
+			amRender(key);
+			amSave(key);
+		});
+		// Order is the plan's meaning - a row applied later overwrites the
+		// villages it shares with an earlier one - so it has to be editable
+		// without deleting and re-adding everything below it.
+		var up = $('<button class="btn btn-sm py-0 am-move" title="Apply earlier">&uarr;</button>')
+			.prop('disabled', idx === 0).click(function () { amMove(key, idx, -1); });
+		var down = $('<button class="btn btn-sm py-0 am-move" title="Apply later">&darr;</button>')
+			.prop('disabled', idx === s.rows.length - 1).click(function () { amMove(key, idx, 1); });
+		tr.append($('<td>').append(gsel))
+			.append($('<td class="am-arrow">&rarr;</td>'))
+			.append($('<td>').append(tsel))
+			.append($('<td class="text-right mono">').text(row.villages === null || row.villages === undefined ? '—' : row.villages))
+			.append($('<td class="text-right">').append(up).append(down).append(del));
+		body.append(tr);
+	});
+	$('#empty-' + key).toggle(s.rows.length === 0);
+	$('#rows-' + key).text(s.rows.length);
+}
+
+function amMove(key, idx, delta) {
+	var s = amSection(key);
+	var to = idx + delta;
+	if (to < 0 || to >= s.rows.length) return;
+	var moved = s.rows.splice(idx, 1)[0];
+	s.rows.splice(to, 0, moved);
+	amRender(key);
+	amSave(key);
+}
+
+function amSave(key) {
+	var s = amSection(key);
+	fetch('/app/am/plan/save', {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({section: key, rows: s.rows.map(function (r) {
+			return {group_id: r.group_id, template_id: r.template_id,
+				group_name: r.group_name, template_name: r.template_name}; })})
+	}).then(function (r) { return r.json(); })
+		.then(function (resp) { amToast(resp && resp.ok ? 'Plan saved' : 'Could not save the plan'); })
+		.catch(function () { amToast('Could not save the plan'); });
+}
+
+$(function () {
+	AM.forEach(function (s) { amRender(s.key); });
+
+	$('.am-add').click(function () {
+		var key = $(this).data('section');
+		var s = amSection(key);
+		if (!s.templates.length) return;
+		var g = s.groups[0], t = s.templates[0];
+		s.rows.push({group_id: g.id, group_name: g.name,
+			template_id: t.id, template_name: t.name, villages: g.villages});
+		amRender(key);
+		amSave(key);
+	});
+
+	function amShowPane(name) {
+		$('#am-tabs .nav-link').each(function () {
+			$(this).toggleClass('active', $(this).data('pane') === name); });
+		AM_PANES.forEach(function (p) { $('#pane-' + p).toggle(p === name); });
+	}
+	$('#am-tabs .nav-link').click(function (e) {
+		e.preventDefault();
+		history.replaceState(null, '', $(this).attr('href'));
+		amShowPane($(this).data('pane'));
+	});
+	if (AM_PANES.indexOf(location.hash.slice(1)) > 0) amShowPane(location.hash.slice(1));
+
+	// Both of these are requests to the bot, not actions taken here: the bot is
+	// the process holding the game session, so it does the talking on its next
+	// cycle and this page only reports that it asked.
+	function amAsk(url, btn, text) {
+		btn.disabled = true;
+		fetch(url).then(function (r) { return r.json(); }).then(function (resp) {
+			if (!resp || !resp.ok) throw 0;
+			btn.textContent = text;
+			amToast(text);
+		}).catch(function () { btn.disabled = false; amToast('Could not reach the dashboard'); });
+	}
+	document.getElementById('am-apply').onclick = function () {
+		amAsk('/app/am/apply', this, 'Queued for the next cycle'); };
+	document.getElementById('am-refresh').onclick = function () {
+		amAsk('/app/am/refresh', this, 'Refresh queued'); };
+
+	document.getElementById('am-auto').onclick = function () {
+		var next = this.getAttribute('data-on') === '1' ? '0' : '1';
+		var btn = this;
+		fetch('/app/quick/set?key=am_setup&value=' + (next === '1' ? 'true' : 'false'))
+			.then(function (r) { return r.json(); }).then(function (resp) {
+				if (!resp || !resp.ok) throw 0;
+				btn.setAttribute('data-on', next);
+				btn.textContent = next === '1' ? 'Morning setup ON' : 'Morning setup OFF';
+				btn.classList.toggle('btn-success', next === '1');
+				btn.classList.toggle('btn-danger', next !== '1');
+			}).catch(function () { amToast('Could not change the switch'); });
+	};
+});
+</script>
+{% endblock %}
