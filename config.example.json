@@ -55,6 +55,17 @@
     "max_queued_items": 2,
     "farm_priority_pop_pct": 0
   },
+  "account_manager": {
+    "enabled": false,
+    "building": false,
+    "recruiting": false,
+    "research": false,
+    "auto_setup": false
+  },
+  "events": {
+    "auto_play": false,
+    "option": "auto"
+  },
   "units": {
     "recruit": true,
     "upgrade": true,
@@ -152,7 +163,8 @@
     "max_sends_per_receiver": 1,
     "reserve_merchants": 0,
     "sender_keep": 0,
-    "min_send_amount": 250
+    "min_send_amount": 250,
+    "merchant_minutes_per_field": null
   },
   "world": {
     "knight_enabled": null,

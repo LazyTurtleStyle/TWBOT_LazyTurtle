@@ -141,8 +141,17 @@
 
 	/* ---------- App shell (centered sidebar + main) ---------- */
 	.app { display: grid; grid-template-columns: 224px minmax(0,1fr); gap: 24px; align-items: start; max-width: 1440px; margin: 0 auto; }
+	/* A sticky sidebar taller than the screen pins its own top and hides its
+	   bottom: the world switcher then only came into view after scrolling past
+	   every village row. Cap it to the viewport and scroll the links instead. */
 	.nav-demo { background: linear-gradient(180deg, #1a1712, #131009);
-		border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 0; position: sticky; top: 28px; }
+		border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 0; position: sticky; top: 28px;
+		display: flex; flex-direction: column; max-height: calc(100vh - 56px); }
+	.nav-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+		scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+	.nav-scroll::-webkit-scrollbar { width: 8px; }
+	.nav-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+	.nav-foot { flex: none; position: relative; }
 	.brand { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; }
 	.brand-mark { width: 28px; height: 28px; flex: none; border-radius: 5px;
 		background: radial-gradient(120% 120% at 30% 20%, var(--ember), var(--ember-dim) 70%, #6b350f);
@@ -322,7 +331,10 @@
 	.bot-status.world-switch:hover { border-color: var(--ink-faint); }
 	.ws-caret { color: var(--ink-faint); font-size: 11px; margin-left: auto; transition: transform .15s; }
 	.world-switch.open .ws-caret { transform: rotate(180deg); }
-	.world-menu { margin: 0 14px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); overflow: hidden; display: none; }
+	/* Opens upward as an overlay so the sidebar never grows when it unfolds. */
+	.world-menu { position: absolute; left: 14px; right: 14px; bottom: 100%; z-index: 30;
+		border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+		box-shadow: 0 10px 26px rgba(0,0,0,.55); max-height: 52vh; overflow-y: auto; display: none; }
 	.world-switch.open ~ .world-menu { display: block; }
 	.world-menu .wm-head { padding: 8px 12px 5px; border-bottom: 1px solid var(--line-soft); }
 	.world-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--line-soft); }
@@ -404,7 +416,10 @@
 		   refuses to shrink below its widest content, so one wide table would
 		   stretch the whole column past the screen edge. */
 		.app { grid-template-columns: minmax(0, 1fr); }
-		.nav-demo { position: static; }
+		.nav-demo { position: static; max-height: none; }
+		.nav-scroll { overflow: visible; }
+		/* No room to float a menu above a top-of-page sidebar: open it inline. */
+		.world-menu { position: static; margin: 0 14px 8px; max-height: none; box-shadow: none; }
 
 		/* Wide tables (villages, tracked targets, defence) are far wider than a
 		   phone. Give each one its own horizontal scroller so you can swipe
@@ -514,7 +529,7 @@
 {% set nav = [
 	('Overview', [('/', 'Overview', '◆'), ('/logs', 'Bot logs', '≡')]),
 	('Operations', [('/villages','Villages','🏠'), ('/attacks','Attack','⚔'), ('/defense','Defense','🛡'), ('/farms','Farms & scavenging','⌖'), ('/map','World map','▣')]),
-	('Modules', [('/config#building','Building','⚒'), ('/config#units','Recruitment','⚑'), ('/config#market','Market','⇄')]),
+	('Modules', [('/config#building','Building','⚒'), ('/config#units','Recruitment','⚑'), ('/config#market','Market','⇄'), ('/account_manager','Account manager','◇'), ('/events','Events','★')]),
 	('Templates', [('/building_templates','Building templates','▦'), ('/unit_templates','Unit templates','▥')]),
 	('Configure', [('/setup','Settings','⚙'), ('/config','All settings','≣')]),
 ] %}
@@ -524,6 +539,7 @@
 			<div class="brand-mark">T</div>
 			<div class="brand-name">T<span>W</span>B</div>
 		</div>
+		<div class="nav-scroll">
 		{% for group, items in nav %}
 		<div class="nav-group"><span class="eyebrow">{{ group }}</span></div>
 		{% for href, label, ico in items %}
@@ -532,6 +548,8 @@
 		</a>
 		{% endfor %}
 		{% endfor %}
+		</div>
+		<div class="nav-foot">
 		<div class="bot-status world-switch{% if session_expired %} expired{% endif %}" id="worldSwitch" onclick="this.classList.toggle('open')">
 			<span class="pulse {{ 'warn' if (bot_running and session_expired) else ('on' if bot_running else 'off') }}"></span>
 			<span class="label">Bot
@@ -558,6 +576,7 @@
 			{% endfor %}
 		</div>
 		{% endif %}
+		</div>
 	</aside>
 
 	<main class="main">
@@ -585,9 +604,9 @@
 	<div class="quick-panel">
 		<div class="qp-head"><h3>Quick controls</h3><button class="btn btn-sm" onclick="toggleQuick()">Close</button></div>
 		{% for t in quick_toggles %}
-		<div class="qc-row{% if t.key in ('scavenge_night', 'scavenge_attacked') %} qc-child{% elif t.key == 'scavenge' %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
+		<div class="qc-row{% if t.key in ('scavenge_night', 'scavenge_attacked', 'am_build', 'am_recruit', 'am_research', 'am_setup') %} qc-child{% elif t.key in ('scavenge', 'am') %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
 			<div><div class="qc-name">{{ t.label }}</div>
-				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run'}.get(t.key, '') }}</div></div>
+				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run','am':'the in-game manager does these jobs, so the bot skips them','am_build':'the manager runs the build queue','am_recruit':'the manager fills barracks and stable','am_research':'the manager runs the smith','am_setup':'re-apply your group templates every morning','event':'spend the event energy so the bar never sits full'}.get(t.key, '') }}</div></div>
 			<span class="toggle {{ 'on' if t.on else '' }}"><span class="track"></span></span>
 		</div>
 		{% endfor %}

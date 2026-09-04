@@ -10,6 +10,15 @@ Target selection is driven by how full the *receiver* is, never by what the
 sender can spare: a rim village at storage 4 holds 2.8k per resource, so an
 uncapped send would overflow and waste merchant trips. Amounts are always
 clamped to `target_fill_pct` of the receiver's own warehouse.
+
+"How full the receiver is" is read from the receiver's own snapshot, which it
+writes when it runs - up to a full bot pass ago. A delivery that has landed
+since then is invisible, and so is one still on the road, so several senders
+in a row each plan against the same pre-delivery stock and fill the same empty
+warehouse again: that is how a 62k warehouse ends up with 86k of wood on its
+way. So every send is written down together with the moment it lands, and
+`_headroom` counts anything that lands after the snapshot was taken as already
+delivered. See `_mark_sent` and `_pending`.
 """
 import logging
 import math
@@ -21,7 +30,19 @@ from core.filemanager import FileManager
 
 RESOURCES = ("wood", "stone", "iron")
 MERCHANT_CAPACITY = 1000
+# Last-resort guess at the market's speed, used only until the world has been
+# measured: the classic TW market runs at 30 minutes per field divided by the
+# world speed. Do not trust it - nl116 has speed 1.5, so this predicts 20
+# minutes per field and the game's own confirmation page says 1. Every send
+# reads the real trip time off that page and stores it (see
+# _record_merchant_speed), so this only ever decides sends made before the
+# first confirmation page has been read.
+MERCHANT_MINUTES_PER_FIELD = 30
+# Ceiling on a computed trip, so an unknown coordinate cannot block a receiver
+# for good. See ResourceBalancer.travel_seconds.
+MAX_TRAVEL_SECONDS = 24 * 3600
 STATE_FILE = "cache/balancer.json"
+WORLD_CONFIG_FILE = "cache/world/config.json"
 
 
 def _load_state():
@@ -54,6 +75,15 @@ class ResourceBalancer:
         self.reserve_merchants = 0
         self.min_send_amount = 250
         self.sender_keep = 0
+        # Minutes per field to assume until the game has told us better. None
+        # means "no idea", and falls back to the classic-TW guess.
+        self.merchant_minutes_per_field = None
+        self._world_speed_cache = None
+        # Trip time the game stated for the last send, filled in by send().
+        self.last_travel_seconds = None
+        # Per-resource hold-back for this village's own unpaid queue, filled in
+        # by run() from the resource manager. See _needed_resources().
+        self.reserve = {}
 
     # ---------------------------------------------------------------- helpers
 
@@ -61,7 +91,7 @@ class ResourceBalancer:
         last = _load_state().get(self.village_id, {}).get("last_send", 0)
         return max(0, int(last + self.send_cooldown - time.time()))
 
-    def _mark_sent(self, target_id, amounts):
+    def _mark_sent(self, target_id, amounts, arrival):
         state = _load_state()
         state[self.village_id] = {
             "last_send": int(time.time()),
@@ -77,6 +107,17 @@ class ResourceBalancer:
         # the rest go - otherwise this list grows for the life of the world.
         history = [t for t in self._delivery_times(target_id) if t >= now - 86400]
         deliveries[key] = history + [now]
+        # The same send, kept a second time with its arrival: until it lands,
+        # nobody may count the receiver's warehouse as having room for it.
+        flights = state.setdefault("_inflight", {})
+        pending = [f for f in (flights.get(key) or [])
+                   if int(f.get("arrival") or 0) >= now - 86400]
+        pending.append({
+            "sent": now,
+            "arrival": int(arrival),
+            "amounts": {r: int(v) for r, v in amounts.items() if r in RESOURCES},
+        })
+        flights[key] = pending
         _save_state(state)
 
     @staticmethod
@@ -120,6 +161,18 @@ class ResourceBalancer:
             _save_state(state)
         return int(seen[key])
 
+    def _mark_turn(self):
+        """Record that this village got its chance to send during this pass."""
+        state = _load_state()
+        turns = state.setdefault("_turns", {})
+        turns[self.village_id] = int(time.time())
+        _save_state(state)
+
+    @staticmethod
+    def _last_turn(village_id):
+        """When that village last reached the sending stage of its own run."""
+        return int((_load_state().get("_turns") or {}).get(str(village_id), 0))
+
     @staticmethod
     def _managed_villages():
         """Every managed village's last snapshot, keyed by id.
@@ -156,25 +209,140 @@ class ResourceBalancer:
             return 9999.0
         return math.hypot(a[0] - b[0], a[1] - b[1])
 
-    def _fill_ratio(self, village):
-        """How full the village is, 0..1, averaged over the three resources."""
+    def _world_speed(self):
+        if self._world_speed_cache is None:
+            config = FileManager.load_json_file(WORLD_CONFIG_FILE) or {}
+            try:
+                speed = float(config.get("speed") or 1.0)
+            except (TypeError, ValueError):
+                speed = 1.0
+            self._world_speed_cache = speed if speed > 0 else 1.0
+        return self._world_speed_cache
+
+    def minutes_per_field(self):
+        """How fast this world's merchants are.
+
+        Three sources, best first: what the game timed for one of our own
+        sends, what the config says to assume, and the classic-TW guess. The
+        measurement always wins - it comes from the confirmation page of a real
+        send, so it is not an estimate at all - which means the config setting
+        only matters on a world that has not sent anything yet.
+        """
+        measured = (_load_state().get("_merchant") or {}).get("minutes_per_field")
+        for candidate in (measured, self.merchant_minutes_per_field):
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return MERCHANT_MINUTES_PER_FIELD / self._world_speed()
+
+    def _record_merchant_speed(self, distance, seconds):
+        """Remember a trip the game itself timed for us.
+
+        One send tells us everything: the confirmation page prints the one-way
+        duration, and we know how far it was going. Storing the rate rather
+        than the trip makes it usable for every other pair of villages.
+        """
+        if distance <= 0 or seconds <= 0:
+            return
+        rate = round(seconds / 60.0 / distance, 4)
+        state = _load_state()
+        known = (state.get("_merchant") or {}).get("minutes_per_field")
+        state["_merchant"] = {
+            "minutes_per_field": rate,
+            "measured": int(time.time()),
+            "over_fields": round(distance, 3),
+            "seconds": int(seconds),
+        }
+        _save_state(state)
+        if known != rate:
+            self.logger.info(
+                "Merchants on this world travel %.3f min/field "
+                "(timed over %.1f fields by the game itself)", rate, distance)
+
+    def travel_seconds(self, sender, receiver):
+        """How long merchants need between two villages, rounded up.
+
+        Only used when the game has not told us directly - the first send on a
+        world, or a confirmation page this cannot read. Rounding up is
+        deliberate: overestimating the trip makes this village wait a little
+        longer before topping the receiver up again, while underestimating it
+        declares a convoy landed while it is still on the road, which is the
+        exact overshoot the ledger exists to prevent.
+
+        A missing coordinate makes `_distance` return its 9999 sentinel, which
+        would park the receiver behind a convoy arriving in a hundred years,
+        so the result is capped at a day - longer than any trip between two
+        villages of the same account.
+        """
+        distance = self._distance(self._location(sender), self._location(receiver))
+        return min(int(math.ceil(distance * self.minutes_per_field() * 60)),
+                   MAX_TRAVEL_SECONDS)
+
+    @staticmethod
+    def _pending(flights, since):
+        """Resources on the road that a snapshot taken at `since` cannot show.
+
+        A village's snapshot records what it held when it last ran, which
+        means it already includes every convoy that had landed by then and no
+        others. So a send still counts as outstanding exactly while its
+        arrival is later than that moment - one test that covers both a convoy
+        genuinely still travelling and one that landed after the receiver last
+        wrote down what it was holding.
+
+        A receiver that has never written a `last_run` (an older snapshot)
+        gives `since` of 0, so everything sent recently is counted. That is the
+        safe way round: it under-fills rather than overflows.
+        """
+        total = {}
+        for flight in flights or []:
+            if int(flight.get("arrival") or 0) <= since:
+                continue
+            for res, amount in (flight.get("amounts") or {}).items():
+                if res in RESOURCES:
+                    total[res] = total.get(res, 0) + int(amount)
+        return total
+
+    @staticmethod
+    def _in_flight_table():
+        """Every receiver's outstanding convoys, read once per pass."""
+        return _load_state().get("_inflight") or {}
+
+    def _fill_ratio(self, village, coming=None):
+        """How full the village is, 0..1, averaged over the three resources.
+
+        Counts inbound convoys as already delivered, so `target_order`
+        "emptiest" stops ranking a village that has three loads on the way
+        ahead of one that has none.
+        """
         cap = int(village.get("storage_max") or 0)
         if cap <= 0:
             return 1.0
         res = village.get("resources") or {}
-        total = sum(min(int(res.get(r, 0) or 0), cap) for r in RESOURCES)
+        coming = coming or {}
+        total = sum(min(int(res.get(r, 0) or 0) + coming.get(r, 0), cap)
+                    for r in RESOURCES)
         return total / float(cap * len(RESOURCES))
 
-    def _headroom(self, village):
-        """Per-resource room left below target_fill_pct of the receiver's cap."""
+    def _headroom(self, village, coming=None):
+        """Per-resource room left below target_fill_pct of the receiver's cap.
+
+        Resources still walking towards the village count as if they had
+        arrived. Without that every sender plans against the same
+        pre-delivery stock, and three of them independently fill the same
+        empty warehouse - which is how a 62k warehouse gets 86k of wood.
+        """
         cap = int(village.get("storage_max") or 0)
         if cap <= 0:
             return {}
         ceiling = int(cap * self.target_fill_pct / 100.0)
         res = village.get("resources") or {}
+        coming = coming or {}
         room = {}
         for r in RESOURCES:
-            have = int(res.get(r, 0) or 0)
+            have = int(res.get(r, 0) or 0) + coming.get(r, 0)
             if ceiling > have:
                 room[r] = ceiling - have
         return room
@@ -187,6 +355,9 @@ class ResourceBalancer:
         village only counts as a receiver if it is genuinely poorer."""
         me = villages.get(self.village_id) or {}
         my_loc = self._location(me)
+        # One read of the ledger for the whole pass; every candidate below is
+        # judged on stock plus whatever is still walking towards it.
+        flights = self._in_flight_table()
 
         candidates = []
         for vid, village in villages.items():
@@ -195,29 +366,93 @@ class ResourceBalancer:
             points = self._points(village)
             if points > self.receiver_max_points or points >= my_points:
                 continue
-            room = self._headroom(village)
+            coming = self._pending(flights.get(vid),
+                                   int(village.get("last_run") or 0))
+            room = self._headroom(village, coming)
             if not any(v >= self.min_send_amount for v in room.values()):
+                if coming:
+                    self.logger.debug(
+                        "Skipping %s: %s already on the way covers its room",
+                        vid, ", ".join("%d %s" % (v, k)
+                                       for k, v in coming.items()))
                 continue
-            candidates.append((vid, village, room))
+            candidates.append((vid, village, room, coming))
 
         if self.target_order == "emptiest":
-            candidates.sort(key=lambda c: self._fill_ratio(c[1]))
+            candidates.sort(key=lambda c: self._fill_ratio(c[1], c[3]))
         else:
             candidates.sort(
                 key=lambda c: self._distance(my_loc, self._location(c[1])))
-        return candidates
+        return [(vid, village, room) for vid, village, room, _ in candidates]
+
+    @staticmethod
+    def _needed_resources(requested):
+        """What a village still cannot pay for, per resource.
+
+        `requested` is the resource manager's {source: {resource: shortfall}}:
+        an entry appears only when the village wants something it cannot
+        currently afford, and is zeroed again as soon as it can.
+
+        Two things are deliberately dropped. `pop` is not a resource - it is
+        missing farm space, and no amount of wood fixes it, so a village that
+        wants a farm it has no room for must not be stopped from giving its
+        overflowing warehouse away. And sources are combined with max() rather
+        than sum(): each one computes its shortfall against the same stock, so
+        adding them up counts the same missing wood once per queue item.
+        """
+        need = {}
+        for wants in (requested or {}).values():
+            for res, amount in (wants or {}).items():
+                if res in RESOURCES and amount and int(amount) > 0:
+                    need[res] = max(need.get(res, 0), int(amount))
+        return need
+
+    def _spare(self, res, stock):
+        """How much of one resource this village may give away.
+
+        Held back: the flat `sender_keep`, plus whatever its own build or
+        recruit queue still cannot pay for. Reserving the shortfall alone, and
+        only of the resource that is actually short, is the whole difference
+        between a queue item costing the sender 5k wood and it costing every
+        send the village would otherwise have made.
+        """
+        have = int(stock.get(res, 0) or 0)
+        return max(0, have - self.sender_keep - int(self.reserve.get(res, 0)))
 
     def _spare_stock(self, village):
-        """Total resources this village could give away."""
+        """Total resources this village could give away.
+
+        Reads another village's snapshot, so the queue shortfall comes from the
+        `required_resources` it wrote there rather than from a live manager.
+        """
         res = village.get("resources") or {}
-        return sum(max(0, int(res.get(r, 0) or 0) - self.sender_keep)
+        need = self._needed_resources(village.get("required_resources"))
+        return sum(max(0, int(res.get(r, 0) or 0) - self.sender_keep - need.get(r, 0))
                    for r in RESOURCES)
+
+    def _spare_fill(self, village):
+        """Spare stock as a fraction of this village's own warehouse, 0..1.
+
+        Ranking on raw stock always hands the job to whoever built the biggest
+        warehouse, even when it sits half empty while a smaller village is
+        about to overflow. Measuring each sender against its own capacity picks
+        the one closest to wasting production instead.
+        """
+        cap = int(village.get("storage_max") or 0)
+        if cap <= 0:
+            return 0.0
+        return self._spare_stock(village) / float(cap * len(RESOURCES))
 
     def rank_senders(self, villages, target):
         """Qualifying senders for one target, best first.
 
         'nearest' is relative to the target, so the ranking is computed per
         target rather than once globally.
+
+        Every sender must rank a given target identically - that agreement is
+        what lets `may_serve` decide who owns it without any of them talking to
+        each other - so ties break on village id rather than on whatever order
+        the snapshots happened to be read off disk in.
         """
         target_loc = self._location(target)
         senders = [
@@ -226,38 +461,105 @@ class ResourceBalancer:
             and self._points(v) > self._points(target)
         ]
         if self.sender_order == "most_resources":
-            senders.sort(key=lambda s: -self._spare_stock(s[1]))
+            senders.sort(key=lambda s: (-self._spare_stock(s[1]), s[0]))
+        elif self.sender_order == "fullest":
+            senders.sort(key=lambda s: (-self._spare_fill(s[1]), s[0]))
         elif self.sender_order == "highest_points":
-            senders.sort(key=lambda s: -self._points(s[1]))
+            senders.sort(key=lambda s: (-self._points(s[1]), s[0]))
         else:
             senders.sort(
-                key=lambda s: self._distance(target_loc, self._location(s[1])))
+                key=lambda s: (self._distance(target_loc, self._location(s[1])),
+                               s[0]))
         return [vid for vid, _ in senders]
 
     def may_serve(self, target_id, ranked):
         """Whether this village should be the one to feed `target_id`.
 
-        The preferred sender always may. A lower-ranked one only steps in once
-        the target has gone a full cooldown without a delivery - otherwise a
+        The preferred sender always may. A lower-ranked one steps in only once
+        the preferred sender has demonstrably passed on the job - otherwise a
         target whose designated sender is out of merchants (the normal state for
         a heavy trading village) would never be fed at all.
+
+        "Passed on the job" used to mean "the target has gone a full cooldown
+        without a delivery", and that opens the door for every sender at the
+        same instant the target becomes eligible again. Whichever village the
+        bot happens to visit first that pass claims it, `max_sends_per_receiver`
+        then locks everyone else out, and the configured order never gets a
+        say: the village at the top of the run order feeds the whole rim.
+
+        Measuring against the preferred sender's own last turn removes the
+        race. It has to have actually run, and left this target unserved,
+        before anyone else may take it.
         """
         if not ranked or ranked[0] == self.village_id:
             return True
         if self.village_id not in ranked:
             return False
-        # Measure from the last delivery; only fall back to when the target was
-        # first seen as needy if it has never been served at all.
-        last = self._last_delivery(target_id)
-        since = time.time() - (last or self._first_seen(target_id))
-        if since >= self.send_cooldown:
+        preferred = ranked[0]
+        turn = self._last_turn(preferred)
+        opened = self._eligible_since(target_id)
+        # The preferred sender has run since this receiver came back up for a
+        # delivery, and still sent it nothing: no merchants, or nothing to
+        # spare. Comparing against when the *window* opened rather than
+        # against the last delivery matters - a turn taken while the receiver
+        # was still in its cooldown is not a turn it passed on.
+        if turn > opened:
             self.logger.debug(
-                "Stepping in for %s: preferred sender %s has not delivered in %ds",
-                target_id, ranked[0], int(since))
+                "Stepping in for %s: preferred sender %s had its turn and passed",
+                target_id, preferred)
+            return True
+        # Backstop for a preferred sender that is not running at all - never
+        # has, or not since before the window opened a whole cooldown ago.
+        # Without it a paused or balancer-disabled village would still rank
+        # first and quietly starve everything it was picked for.
+        idle = time.time() - max(turn, opened)
+        if idle >= self.send_cooldown:
+            self.logger.debug(
+                "Stepping in for %s: preferred sender %s has not run in %ds",
+                target_id, preferred, int(idle))
             return True
         return False
 
+    def _eligible_since(self, target_id):
+        """When this receiver last became free to accept another delivery.
+
+        `max_sends_per_receiver` deliveries inside one cooldown fill the
+        window, so it reopens when the oldest of those ages out. A receiver
+        that has never had a full window has been eligible since it was first
+        seen as needy.
+        """
+        cap = max(1, self.max_sends_per_receiver)
+        times = sorted(self._delivery_times(target_id))
+        if len(times) >= cap:
+            return times[-cap] + self.send_cooldown
+        return self._first_seen(target_id)
+
     # ------------------------------------------------------------------ market
+
+    @staticmethod
+    def parse_travel_seconds(page_text):
+        """The one-way trip time the confirmation page itself states.
+
+        The page lists the duration, then the arrival, then the return - but
+        under translated labels, so matching on the words would only work in
+        one language. The times are read as a group instead and made to prove
+        themselves: the return is exactly one duration after the arrival, so
+        the gap between the last two clock times has to appear again in the
+        list as the stated duration. Anything that fails to line up (a page
+        with an unexpected clock in it, a layout change) returns None, and the
+        caller falls back to the distance model.
+        """
+        times = [int(h) * 3600 + int(m) * 60 + int(sec)
+                 for h, m, sec in re.findall(
+                     r"\b(\d{1,3}):([0-5]\d):([0-5]\d)\b", page_text)]
+        if len(times) < 3:
+            return None
+        gap = (times[-1] - times[-2]) % 86400
+        if not 0 < gap <= MAX_TRAVEL_SECONDS:
+            return None
+        if gap not in times[:-2]:
+            return None
+        return gap
 
     def merchants_available(self, page_text):
         found = re.search(r'market_merchant_available_count">(\d+)', page_text)
@@ -289,8 +591,8 @@ class ResourceBalancer:
         for res, want in sorted(room.items(), key=lambda kv: -kv[1]):
             if left < 1:
                 break
-            spare = max(0, int(stock.get(res, 0) or 0) - self.sender_keep)
-            amount = min(int(want), spare, left * MERCHANT_CAPACITY)
+            amount = min(int(want), self._spare(res, stock),
+                         left * MERCHANT_CAPACITY)
             if amount < self.min_send_amount:
                 continue
             plan[res] = amount
@@ -318,8 +620,7 @@ class ResourceBalancer:
         # fed by a sender sitting on stone, gets its fullest resource topped up.
         cap = {}
         for res, want in room.items():
-            spare = max(0, int(stock.get(res, 0) or 0) - self.sender_keep)
-            limit = min(int(want), spare)
+            limit = min(int(want), self._spare(res, stock))
             if limit > 0:
                 cap[res] = limit
         budget = int(merchants) * MERCHANT_CAPACITY
@@ -369,7 +670,13 @@ class ResourceBalancer:
         posting them straight back keeps this working without hard-coding names
         the game may change. Worlds that set confirmation_skipping_hash still
         work - the first response is then already the result page.
+
+        The confirmation page also states how long the merchants will be on the
+        road. That is the one number the bot cannot work out for itself, so it
+        is read off into `last_travel_seconds` on the way past; run() turns it
+        into the delivery's arrival time.
         """
+        self.last_travel_seconds = None
         loc = self._location(target)
         if not loc:
             self.logger.warning("Target has no coordinates, skipping")
@@ -408,6 +715,8 @@ class ResourceBalancer:
             return False
         confirm_url = unescape(action.group(1))
 
+        self.last_travel_seconds = self.parse_travel_seconds(result.text)
+
         hidden = dict(re.findall(
             r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"',
             result.text))
@@ -428,8 +737,16 @@ class ResourceBalancer:
 
     # -------------------------------------------------------------------- main
 
-    def run(self, my_points, my_stock, has_own_needs=False):
-        """Send spare resources to poorer villages. Returns sends performed."""
+    def run(self, my_points, my_stock, my_needs=None):
+        """Send spare resources to poorer villages. Returns sends performed.
+
+        `my_needs` is the resource manager's request table. It used to be a
+        single boolean that vetoed the whole run - one unpaid queue item and a
+        village with three full warehouses sent nothing to anybody, including
+        the two resources it was drowning in. It is now a per-resource
+        hold-back instead: the queue keeps first claim on what it is short of,
+        and everything above that still goes out.
+        """
         if not self.enabled:
             return 0
         if my_points < self.sender_min_points:
@@ -437,10 +754,17 @@ class ResourceBalancer:
                 "Not a sender: %d points is under the %d threshold",
                 my_points, self.sender_min_points)
             return 0
-        if has_own_needs:
+        # From here on this village counts as having had its turn this pass,
+        # whether or not it ends up sending anything. Everything below is a
+        # reason it *cannot* send - its own cooldown, no free merchants,
+        # nothing spare - and each of those is a reason a lower-ranked sender
+        # should be allowed to cover for it.
+        self._mark_turn()
+        self.reserve = self._needed_resources(my_needs)
+        if self.reserve:
             self.logger.debug(
-                "Not sending: this village still needs resources itself")
-            return 0
+                "Holding back for this village's own queue: %s",
+                ", ".join("%d %s" % (v, k) for k, v in self.reserve.items()))
         left = self._cooldown_left()
         if left:
             self.logger.debug("Not sending for another %d seconds", left)
@@ -498,6 +822,18 @@ class ResourceBalancer:
             for res, amount in plan.items():
                 my_stock[res] = max(0, int(my_stock.get(res, 0)) - amount)
             merchants -= used
-            self._mark_sent(vid, plan)
+            me = villages.get(self.village_id)
+            here, there = self._location(me), self._location(target)
+            travel = self.last_travel_seconds
+            if travel and here and there:
+                # The game timed this trip, and both ends are known, so it also
+                # measures this world's merchants for every later send. Both
+                # coordinates have to be real: `_distance` answers 9999 for a
+                # missing one, which would bank an absurdly fast rate and make
+                # every future convoy look like it had already landed.
+                self._record_merchant_speed(self._distance(here, there), travel)
+            elif not travel:
+                travel = self.travel_seconds(me, target)
+            self._mark_sent(vid, plan, time.time() + travel)
             sent += 1
         return sent

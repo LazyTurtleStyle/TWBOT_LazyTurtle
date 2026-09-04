@@ -189,13 +189,18 @@ class IncomingManager:
         self.village_id = village_id
         self.wrapper = wrapper
         self.logger = logging.getLogger("Incomings")
+        # Whether the last scrape actually reached a logged-in page; the view
+        # reset is pointless (and unwanted during a captcha) when it did not.
+        self._session_ok = False
 
     def run(self):
         """Refresh world speeds (if needed) and the incoming-command cache."""
         FileManager.create_directories([INCOMINGS_DIR, "cache/world"])
         self.ensure_world_data()
         self.ensure_groups()
-        return self.update_incomings()
+        commands = self.update_incomings()
+        self.reset_overview_view()
+        return commands
 
     # -- world speed data ---------------------------------------------------
 
@@ -292,12 +297,31 @@ class IncomingManager:
 
     def _parse_group_menu(self, text):
         """The group-menu ajax payload -> [{id, name, type}], skipping the
-        built-in 'all villages' pseudo group. Returns None (and dumps the raw
-        payload) when the shape is not recognised."""
+        built-in 'all villages' pseudo group. Returns None when the menu could
+        not be read, and dumps the raw payload first if the shape is one this
+        code has never met."""
         try:
             payload = json.loads(text or "{}")
         except ValueError:
             payload = None
+        # An ajax request the game will not serve is answered with HTTP 200 and
+        # a bare `false` - or {"response": false} when the ajax headers are set.
+        # In practice that means bot protection is up: all 227 of these seen
+        # live between 2026-08-24 and 2026-08-27 were followed 3-8s later by the
+        # captcha being detected on the next normal page request, and none
+        # happened without one. This call just gets there first, because the
+        # captcha never reaches it as HTML for the wrapper to recognise.
+        #
+        # So it is a refusal, not an unknown payload shape. Treating it as the
+        # latter cried wolf several times an hour all night and kept
+        # overwriting the raw dump - which exists to catch a real change in the
+        # game's markup - with the useless five bytes `false`.
+        if payload is False or (isinstance(payload, dict)
+                                and payload.get("response") is False):
+            self.logger.debug(
+                "Group menu refused by the game (bot protection, most likely) "
+                "- keeping the cached groups and retrying next cycle")
+            return None
         raw = None
         if isinstance(payload, dict):
             for key in ("result", "groups"):
@@ -355,6 +379,28 @@ class IncomingManager:
                 r'village=(\d+)&(?:amp;)?screen=overview(?![_a-z])', res.text)
         return sorted(set(ids), key=int)
 
+    def reset_overview_view(self):
+        """Leave the villages overview on Gecombineerd / all villages again.
+
+        The overview screen remembers both the mode and the group that were
+        opened last, per account - so the player opens it in their own browser
+        and finds whatever the bot looked at instead of their own view.
+        `update_incomings` always leaves the mode on incomings, and
+        `ensure_groups` additionally leaves the group on whichever one it
+        walked last. One GET puts both back.
+
+        Only worth doing when the last scrape reached a logged-in page: there
+        is nothing to reset otherwise, and during bot protection this would
+        just be one more request queueing behind the captcha.
+        """
+        if not self._session_ok:
+            return
+        url = (f"game.php?village={self.village_id}"
+               "&screen=overview_villages&mode=combined&group=0")
+        if self.wrapper.get_url(url) is None:
+            # Purely cosmetic, and the next poll ends with another attempt.
+            self.logger.debug("Could not switch the overview back to combined")
+
     # -- incoming commands --------------------------------------------------
 
     def update_incomings(self):
@@ -363,6 +409,7 @@ class IncomingManager:
             f"game.php?village={self.village_id}"
             "&screen=overview_villages&mode=incomings&subtype=attacks&group=0"
         )
+        self._session_ok = False
         res = self.wrapper.get_url(url)
         if not res:
             return []
@@ -375,6 +422,7 @@ class IncomingManager:
                 self._note_logged_out()
             return []
         self._note_logged_in()
+        self._session_ok = True
 
         now = self._server_time(res)
         self._capture_label_endpoint(res, now)

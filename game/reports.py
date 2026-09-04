@@ -153,6 +153,23 @@ class ReportManager:
         groups = self.read_group("0", page=page, full_run=full_run)
         for group_id in groups:
             self.read_group(group_id, page=page, full_run=full_run)
+        if groups:
+            self.reset_group_view()
+
+    def reset_group_view(self):
+        """Leave the report screen on the main folder again.
+
+        The game remembers the folder that was opened last and re-opens it the
+        next time the report screen is loaded - in the player's own browser
+        too, since that is the same account. Reading every folder therefore
+        strands them on whichever one happened to be read last (in practice
+        Farm-assistent) instead of "Alle". One request to put the selection
+        back is cheaper than making the player re-pick it every session.
+        """
+        url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id=0"
+        if self.wrapper.get_url(url) is None:
+            # Purely cosmetic, and the next cycle ends with another attempt.
+            self.logger.debug("Could not switch the report view back to Alle")
 
     def read_group(self, group_id, page=0, full_run=False):
         """

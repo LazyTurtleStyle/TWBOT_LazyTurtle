@@ -17,6 +17,13 @@ instant to the bot than it did to the player reading the game's own clock.
 
 Anything converting a user-written wall clock into a moment should go through
 `ServerClock.now()` / `ServerClock.to_server()` rather than `datetime.now()`.
+
+`GameClock` further down answers a different question. ServerClock is about what
+the clock *reads* (timezone, drift) and is only accurate to the second, because
+that is all the page prints. GameClock is about *when to fire a request*: it
+samples the game state's own epoch-milliseconds, so a command can be launched to
+land on a chosen millisecond. Use ServerClock to interpret a wall clock a person
+wrote down; use GameClock to time a request.
 """
 
 import datetime
@@ -24,6 +31,7 @@ import logging
 import re
 import time
 
+from core.extractors import Extractor
 from core.filemanager import FileManager
 
 CACHE_PATH = "cache/server_clock.json"
@@ -124,3 +132,70 @@ class ServerClock:
         if not isinstance(moment, datetime.datetime):
             moment = datetime.datetime.fromtimestamp(moment)
         return moment + datetime.timedelta(seconds=cls.offset())
+
+
+class GameClock:
+    """Server-clock offset estimator, accurate to a fraction of a round-trip.
+
+    Samples game_state.time_generated (server epoch ms) around a page fetch; the
+    offset is measured against the request's local midpoint, so the estimate is
+    good to about half the round-trip time. `rtt` is kept so a request launch can
+    lead by the one-way latency and be *processed* at the intended moment.
+
+    This is what makes a millisecond-accurate arrival possible at all: the game
+    computes travel as a whole number of seconds, so a command's arrival carries
+    the milliseconds of its send. Firing at .250 past the second lands at .250
+    past the second.
+    """
+
+    def __init__(self):
+        self.offset_ms = None
+        self.rtt = 0.2
+
+    def observe(self, res, t0, t1):
+        """Learn offset/rtt from a response already fetched between t0 and t1.
+
+        Lets a caller that had to open a page anyway (the rally point, say) pay
+        nothing extra for the reading. Returns True when the offset was updated.
+        """
+        if res is None:
+            return False
+        try:
+            state = Extractor.game_state(res)
+        except Exception:  # a page we cannot parse is not worth failing a send
+            return False
+        if not state or not state.get("time_generated"):
+            return False
+        self.offset_ms = float(state["time_generated"]) - (t0 + t1) / 2.0 * 1000.0
+        self.rtt = max(0.0, t1 - t0)
+        return True
+
+    def sync(self, wrapper, url):
+        """GET url, refresh offset/rtt from its game state, return the response."""
+        t0 = time.time()
+        res = wrapper.get_url(url)
+        t1 = time.time()
+        self.observe(res, t0, t1)
+        return res
+
+    def server_now_ms(self):
+        return time.time() * 1000.0 + self.offset_ms
+
+    def wait_for(self, server_ms, network_lead=0.0, lead=True):
+        """Seconds to wait before firing, without sleeping. See sleep_until."""
+        target_local = (server_ms - self.offset_ms) / 1000.0 - network_lead
+        if lead:
+            target_local -= self.rtt / 2.0
+        return target_local - time.time()
+
+    def sleep_until(self, server_ms, network_lead=0.0, lead=True):
+        """Sleep so that a request fired on return is *processed* at server_ms:
+        lead by the one-way latency (rtt/2) plus any configured extra.
+
+        With lead=False the request instead FIRES at server_ms (local clock),
+        so the server processes it at least one one-way latency AFTER
+        server_ms - used for the cancel, which must never run early."""
+        wait = self.wait_for(server_ms, network_lead=network_lead, lead=lead)
+        if wait > 0:
+            time.sleep(wait)
+        return wait

@@ -70,6 +70,7 @@ from bs4 import BeautifulSoup
 from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.notification import Notification
+from core.server_clock import GameClock
 from game import attack_scheduler
 from game.incomings import WORLD_CONFIG_CACHE
 
@@ -257,47 +258,10 @@ def _finish(snipe_id, status, result, path=None, notify=True, **fields):
 
 # -- server clock ------------------------------------------------------------
 
-class _Clock:
-    """Server-clock offset estimator.
-
-    Samples game_state.time_generated (server epoch ms) around a page GET; the
-    offset is measured against the request's local midpoint, so the estimate is
-    accurate to about half the round-trip time. `rtt` is kept so request
-    launches can lead by the one-way latency."""
-
-    def __init__(self):
-        self.offset_ms = None
-        self.rtt = 0.2
-
-    def sync(self, wrapper, url):
-        """GET url, refresh offset/rtt from its game state, return the response."""
-        t0 = time.time()
-        res = wrapper.get_url(url)
-        t1 = time.time()
-        if res is not None:
-            state = Extractor.game_state(res)
-            if state and state.get("time_generated"):
-                self.offset_ms = float(state["time_generated"]) - (t0 + t1) / 2.0 * 1000.0
-                self.rtt = max(0.0, t1 - t0)
-        return res
-
-    def server_now_ms(self):
-        return time.time() * 1000.0 + self.offset_ms
-
-    def sleep_until(self, server_ms, network_lead=0.0, lead=True):
-        """Sleep so that a request fired on return is *processed* at server_ms:
-        lead by the one-way latency (rtt/2) plus any configured extra.
-
-        With lead=False the request instead FIRES at server_ms (local clock),
-        so the server processes it at least one one-way latency AFTER
-        server_ms - used for the cancel, which must never run early."""
-        target_local = (server_ms - self.offset_ms) / 1000.0 - network_lead
-        if lead:
-            target_local -= self.rtt / 2.0
-        wait = target_local - time.time()
-        if wait > 0:
-            time.sleep(wait)
-        return wait
+# The snipe engine's own clock lives in core.server_clock now: the attack
+# scheduler needs the same millisecond aiming, and one implementation of a
+# server-clock estimator is enough.
+_Clock = GameClock
 
 
 # -- page parsing ------------------------------------------------------------

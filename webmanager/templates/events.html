@@ -1,0 +1,262 @@
+{% extends "shell.html" %}
+{% block title %}Events{% endblock %}
+
+{% block content %}
+<style>
+	.ev-bar { height: 8px; border-radius: 4px; background: var(--surface-2);
+		border: 1px solid var(--line); overflow: hidden; margin-top: 6px; }
+	.ev-bar span { display: block; height: 100%; background: var(--ember); }
+	.ev-opt.best { color: var(--gold); font-weight: 600; }
+	.ev-log td, .ev-log th, .ev-rank td, .ev-rank th { padding: .3rem .55rem; }
+	.ev-scroll { max-height: 340px; overflow-y: auto; }
+	.ev-you { background: rgba(224,123,44,.10); }
+</style>
+
+<p class="text-muted small mt-1">
+	The weekly in-game event. Its energy bar refills on a timer and <strong>stops refilling
+	once it is full</strong>, so every hour it sits capped is an action thrown away — which is
+	the whole reason to hand it to the bot. The event is noticed from a page the bot already
+	loads, so a week without one costs nothing.
+</p>
+
+{% if not ev.current %}
+<div class="card mb-3">
+	<div class="card-body">
+		{% if ev.ever %}
+		<strong>No event running.</strong> The last one is below.
+		{% else %}
+		<strong>No event running</strong>, or the bot has not completed a cycle since this page
+		was added. It checks on every cycle and will pick one up by itself.
+		{% endif %}
+	</div>
+</div>
+{% else %}
+{% set c = ev.current %}
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center flex-wrap">
+		<span><strong>{{ c.name }}</strong>
+			<small class="text-muted ml-2">
+				{% if c.ends_ts %}ends {{ c.ends_ts|ts }}{% elif c.ends_text %}{{ c.ends_text }}{% endif %}
+				{% if c.seen_at %} &middot; read {{ c.seen_at|ago }}{% endif %}
+			</small></span>
+		<span class="ml-auto d-flex align-items-center" style="gap:.5rem">
+			<button class="btn btn-sm" id="ev-refresh" data-screen="{{ c.screen }}">Refresh from game</button>
+			<button class="btn btn-sm {{ 'btn-success' if ev.auto_play else 'btn-danger' }}"
+				id="ev-auto" data-on="{{ '1' if ev.auto_play else '0' }}">
+				{{ 'Playing for you' if ev.auto_play else 'Not playing' }}</button>
+		</span>
+	</div>
+	<div class="card-body py-2">
+		{% if c.unsupported %}
+		<div class="alert alert-warning py-2 small mb-2">
+			This event is running but the bot has no driver for it yet, so it is only being
+			recorded, not played. The screen is <code>{{ c.screen }}</code>.
+		</div>
+		{% endif %}
+		<div class="stats">
+			<div class="stat">
+				<div class="v" id="ev-energy">{{ c.energy|round(1) if c.energy is not none else '?' }}<span class="faint" style="font-size:16px">/{{ c.energy_max|int if c.energy_max else '?' }}</span></div>
+				<div class="k">Energy</div>
+				<div class="sub" id="ev-energy-next">
+					{% if c.energy_next %}next in {{ c.energy_next }}s{% else %}full — refill stopped{% endif %}</div>
+				<div class="ev-bar"><span id="ev-energy-bar" style="width:{{ ((c.energy or 0) / (c.energy_max or 1) * 100)|round(0) }}%"></span></div>
+			</div>
+			<div class="stat"><div class="v gold">{{ c.currency|comma if c.currency is not none else '?' }}</div>
+				<div class="k">Currency</div><div class="sub">to spend in the event shop</div></div>
+			<div class="stat"><div class="v">{{ c.totals.reward|comma }}</div>
+				<div class="k">Earned by the bot</div>
+				<div class="sub">{{ c.totals.actions }} action{{ '' if c.totals.actions == 1 else 's' }},
+					{{ c.totals.jackpots }} jackpot{{ '' if c.totals.jackpots == 1 else 's' }}</div></div>
+			{% if c.luck %}
+			<div class="stat"><div class="v {{ 'gold' if c.luck >= 1 else '' }}">{{ (c.luck * 100)|round(0)|int }}%</div>
+				<div class="k">Luck</div><div class="sub">of the {{ c.totals.expected|comma }} those choices were worth</div></div>
+			{% endif %}
+			{% if c.forecast %}
+			<div class="stat"><div class="v">{{ c.forecast.reward|comma }}</div>
+				<div class="k">Still to come</div>
+				<div class="sub">{{ c.forecast.actions }} actions in {{ c.forecast.hours }}h left</div></div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+
+{% if c.options %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>What each choice is worth right now</strong>
+		<small class="text-muted ml-2">jackpots move, so the best option moves with them —
+			on "auto" the bot re-checks this before every single action</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm mb-0 ev-log">
+			<thead><tr><th>Option</th><th class="text-right">Guaranteed</th><th class="text-right">Chance</th>
+				<th class="text-right">Jackpot</th><th class="text-right">Worth per action</th><th></th></tr></thead>
+			<tbody>
+			{% for o in c.options %}
+			<tr class="ev-opt {{ 'best' if loop.first }}">
+				<td>Option {{ o.id }}</td>
+				<td class="text-right mono">{{ o.base }}</td>
+				<td class="text-right mono">{{ o.chance }}%</td>
+				<td class="text-right mono">{{ o.jackpot|comma if o.jackpot else '—' }}</td>
+				<td class="text-right mono">{{ o.value|round(2) }}</td>
+				<td>{% if loop.first %}<span class="badge ember">the bot picks this</span>{% endif %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<div class="row">
+	<div class="col-lg-6">
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>What the bot did</strong>
+				<small class="text-muted ml-2">most recent first</small></div>
+			{% if c.log %}
+			<div class="table-responsive ev-scroll">
+				<table class="table table-sm table-striped mb-0 ev-log">
+					<thead><tr><th>When</th><th>Option</th><th class="text-right">Paid</th><th></th></tr></thead>
+					<tbody>
+					{% for a in c.log %}
+					<tr>
+						<td class="faint">{{ a.ts|ago }}</td>
+						<td>{{ a.option }}</td>
+						<td class="text-right mono">{{ a.reward|comma }}</td>
+						<td>{% if a.jackpot %}<span class="badge gold">jackpot</span>{% endif %}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">
+				Nothing yet. {% if not ev.auto_play %}Switch on <em>Playing for you</em> above and the
+				bot spends the bar on its next cycle.{% else %}The bot plays on its next cycle.{% endif %}
+			</div>
+			{% endif %}
+		</div>
+	</div>
+	<div class="col-lg-6">
+		{% if c.group and c.group.race %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>The race</strong></div>
+			<div class="card-body py-2">
+				<div class="d-flex justify-content-between"><span>Your team</span>
+					<span class="mono">{{ c.group.relative_distance|comma }}
+						<span class="faint">lap {{ c.group.laps }}</span></span></div>
+				<div class="d-flex justify-content-between"><span>Enemy team</span>
+					<span class="mono">{{ c.group.enemy.relative_distance|comma }}
+						<span class="faint">lap {{ c.group.enemy.laps }}</span></span></div>
+			</div>
+		</div>
+		{% endif %}
+		{% for title, rows, metric in [('Most valuable player', c.ranks_best, 'distance'),
+		                               ('Unluckiest player', c.ranks_unluckiest, 'missed')] %}
+		{% if rows %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>{{ title }}</strong>
+				<small class="text-muted ml-2">by {{ metric }}</small></div>
+			<div class="table-responsive">
+				<table class="table table-sm mb-0 ev-rank">
+					<thead><tr><th>#</th><th>Name</th><th class="text-right">Score</th><th class="text-right">Reward</th></tr></thead>
+					<tbody>
+					{% for r in rows %}
+					<tr class="{{ 'ev-you' if c.player_id and r.player_id|int == c.player_id }}">
+						<td class="mono">{{ r.rank }}</td><td>{{ r.player_name }}</td>
+						<td class="text-right mono">{{ r.score|comma }}</td>
+						<td class="text-right mono">{{ r.reward|comma }}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
+		{% endfor %}
+	</div>
+</div>
+{% endif %}
+
+{% if ev.history %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Past events</strong>
+		<small class="text-muted ml-2">kept after the event closes</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm table-striped mb-0 ev-log">
+			<thead><tr><th>Event</th><th>Ran</th><th class="text-right">Actions</th>
+				<th class="text-right">Jackpots</th><th class="text-right">Earned</th><th class="text-right">Luck</th></tr></thead>
+			<tbody>
+			{% for h in ev.history %}
+			<tr>
+				<td>{{ h.name }}</td>
+				<td class="faint">{{ h.first_seen|ts }}{% if h.finished_at %} &rarr; {{ h.finished_at|ts }}{% endif %}</td>
+				<td class="text-right mono">{{ h.totals.actions }}</td>
+				<td class="text-right mono">{{ h.totals.jackpots }}</td>
+				<td class="text-right mono">{{ h.totals.reward|comma }}</td>
+				<td class="text-right mono">{{ (h.luck * 100)|round(0)|int ~ '%' if h.luck else '—' }}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<div class="alert alert-success" id="ev-toast" style="position:fixed;bottom:1rem;right:1rem;z-index:1050;display:none"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var EV = {{ (ev.current or {})|tojson }};
+
+function evToast(text) {
+	var el = document.getElementById('ev-toast');
+	el.textContent = text;
+	$(el).stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
+}
+
+$(function () {
+	// The energy bar keeps filling while the page is open, and the whole point
+	// of the feature is that a full bar is wasted time - so it ticks here
+	// instead of showing whatever it was when the bot last looked.
+	if (EV && EV.energy !== null && EV.energy_rate) {
+		var base = EV.energy, top = EV.energy_max, at = EV.seen_at, rate = EV.energy_rate;
+		setInterval(function () {
+			var now = Math.min(base + (Date.now() / 1000 - at) / rate, top);
+			$('#ev-energy').html(now.toFixed(1) + '<span class="faint" style="font-size:16px">/' + top + '</span>');
+			$('#ev-energy-bar').css('width', (now / top * 100) + '%');
+			$('#ev-energy-next').text(now >= top ? 'full — refill stopped'
+				: 'next in ' + Math.ceil((1 - (now - Math.floor(now))) * rate) + 's');
+		}, 1000);
+	}
+
+	var refresh = document.getElementById('ev-refresh');
+	if (refresh) refresh.onclick = function () {
+		var btn = this;
+		btn.disabled = true;
+		fetch('/app/event/refresh?screen=' + encodeURIComponent(btn.dataset.screen))
+			.then(function (r) { return r.json(); })
+			.then(function (resp) {
+				if (!resp || !resp.ok) throw 0;
+				btn.textContent = 'Refresh queued';
+				evToast('The bot refreshes this on its next cycle');
+			}).catch(function () { btn.disabled = false; evToast('Could not ask the bot'); });
+	};
+
+	var auto = document.getElementById('ev-auto');
+	if (auto) auto.onclick = function () {
+		var next = this.getAttribute('data-on') === '1' ? '0' : '1', btn = this;
+		fetch('/app/quick/set?key=event&value=' + (next === '1' ? 'true' : 'false'))
+			.then(function (r) { return r.json(); })
+			.then(function (resp) {
+				if (!resp || !resp.ok) throw 0;
+				btn.setAttribute('data-on', next);
+				btn.textContent = next === '1' ? 'Playing for you' : 'Not playing';
+				btn.classList.toggle('btn-success', next === '1');
+				btn.classList.toggle('btn-danger', next !== '1');
+				evToast(next === '1' ? 'The bot will play from the next cycle' : 'Stopped playing');
+			}).catch(function () { evToast('Could not change the switch'); });
+	};
+});
+</script>
+{% endblock %}

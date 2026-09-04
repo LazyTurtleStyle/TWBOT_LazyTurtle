@@ -19,7 +19,6 @@ TWB - an open source Tribal Wars bot
 #
 
 import collections
-import copy
 import datetime
 import difflib
 import json
@@ -44,7 +43,9 @@ from game.incomings import IncomingManager
 from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
+from game import accountmanager
 from game import dailybonus
+from game import events
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
@@ -668,6 +669,24 @@ class TWB:
         # the start bound through the end bound inclusive.
         return now_m >= start or now_m <= end
 
+    def in_quiet_hours(self, config=None):
+        """True while the account is meant to look asleep.
+
+        One definition for the two places that need it: the main loop, which
+        decides whether to sleep the cycle away, and the captcha wait, which
+        decides how often to re-check a blocked page (core/request.py's
+        _captcha_poll_interval).
+
+        The main loop passes its cycle config. The captcha wait passes nothing
+        and gets a fresh read, because it may have been blocked for hours and an
+        active_hours edit made in the dashboard meanwhile should count.
+        """
+        if config is None:
+            config = self.config()
+        if config["bot"].get("inactive_still_active", False):
+            return False
+        return not self.is_active_hours(config=config)
+
     def _make_poller_wrapper(self, config):
         """A separate, GET-only web session for the incoming-attack poller.
 
@@ -710,12 +729,11 @@ class TWB:
                 time.sleep(random.randint(low, high))
                 if not self.should_run:
                     break
-            # Mirror the main loop's activity window so we don't poll all night
-            # on an otherwise dormant account.
-            if not self.is_active_hours(config=config) and not config["bot"].get(
-                    "inactive_still_active", False
-            ):
-                continue
+            # Deliberately NOT gated on the activity window. Attack detection
+            # is the one thing that still matters while the account is meant to
+            # look asleep: an attack landing at 04:00 is exactly the one you
+            # cannot afford to first hear about at 05:00. Set `incoming_check`
+            # to false to turn this loop off entirely.
             try:
                 session = FileManager.load_json_file("cache/session.json")
                 if session and session.get("cookies"):
@@ -910,8 +928,11 @@ class TWB:
             logging.getLogger("NobleBarb").warning(
                 "Noble-barb pass failed: %s", exc)
 
-    def heartbeat(self):
+    def heartbeat(self, sleeping=False):
         """Stamp proof that the main loop is still turning.
+
+        `sleeping` marks the deliberate overnight pause, so a watchdog can tell
+        "idle on purpose" apart from "hung".
 
         Called as the loop makes progress - not just once per cycle. A full
         cycle over several villages takes far longer than the watchdog's
@@ -920,8 +941,45 @@ class TWB:
         back half of every cycle.
         """
         FileManager.save_json_file_atomic(
-            {"ts": int(time.time()), "runs": self.runs, "started": self.started},
+            {"ts": int(time.time()), "runs": self.runs, "started": self.started,
+             "sleeping": bool(sleeping)},
             "cache/heartbeat.json")
+
+    def sleep_through_inactive_hours(self, config):
+        """Idle until the activity window reopens, doing nothing at all.
+
+        This is what `inactive_still_active: false` is supposed to mean. The
+        point is not to save requests, it is that the account should look like
+        a player who went to bed: a human does not start a scavenge run at
+        02:40 or keep a build queue topped up all night, and doing so is the
+        pattern that makes a bot a bot.
+
+        The heartbeat keeps ticking (flagged as sleeping) so the watchdog does
+        not read a deliberate pause as a hang, and the wait is chunked so a
+        stop signal is honoured within the minute rather than at dawn.
+        """
+        chunk = 60
+        announced = False
+        while self.should_run:
+            if self.is_active_hours(config=config):
+                if announced:
+                    print("Waking up - back inside active hours.")
+                return
+            if not announced:
+                logging.getLogger("twb").info(
+                    "Outside active hours (%s) and inactive_still_active is "
+                    "off - idling until the window reopens",
+                    config["bot"].get("active_hours"))
+                print("Sleeping: outside active hours, nothing but incoming "
+                      "attack checks will run.")
+                announced = True
+            self.heartbeat(sleeping=True)
+            time.sleep(chunk)
+            # Re-read now and then so an active_hours edit in the dashboard is
+            # picked up tonight instead of tomorrow.
+            self.slept_chunks = getattr(self, "slept_chunks", 0) + 1
+            if self.slept_chunks % 10 == 0:
+                config = self.config()
 
     def run(self):
         """
@@ -972,6 +1030,9 @@ class TWB:
             reporter_constr=config["reporting"]["connection_string"],
         )
 
+        # Lets the captcha wait slow its re-checks down overnight instead of
+        # polling a blocked session every 20s until someone wakes up.
+        self.wrapper.quiet_hours_check = self.in_quiet_hours
         self.wrapper.start()
         # A fresh process can't already be inside the captcha-wait loop that owns
         # this marker (core/request.py's _await_captcha_clear), so any leftover
@@ -988,8 +1049,12 @@ class TWB:
             return
         self.wrapper.headers["user-agent"] = config["bot"]["user_agent"]
         for vid in config["villages"]:
-            v = Village(wrapper=self.wrapper, village_id=vid)
-            self.villages.append(copy.deepcopy(v))
+            # Append the village as-is. It is freshly constructed each iteration,
+            # so there is nothing to copy - and deep-copying it would clone the
+            # whole WebWrapper graph (session, cookies, last_response) once per
+            # village, which is both a large allocation and wrong: the villages
+            # are meant to share one live session, not 41 snapshots of it.
+            self.villages.append(Village(wrapper=self.wrapper, village_id=vid))
         # setup additional builder
         rm = None
         defense_states = {}
@@ -1027,6 +1092,13 @@ class TWB:
             # (e.g. waiting out a captcha in WebWrapper._await_captcha_clear).
             # OverviewBuilder uses staleness here as a generic "bot stalled" signal.
             self.heartbeat()
+            # A sleeping player does nothing at all - see
+            # sleep_through_inactive_hours. Checked before the network so a
+            # bot that wakes into the dark goes straight back to sleep.
+            if self.in_quiet_hours(config):
+                self.sleep_through_inactive_hours(config)
+                config = self.config()
+                continue
             if not self.internet_online():
                 print("Internet seems to be down, waiting till its back online...")
                 sleep = 0
@@ -1074,8 +1146,8 @@ class TWB:
                 for vid in config["villages"]:
                     if vid not in known_village_ids:
                         print("Village %s was newly added, registering it for management" % vid)
-                        v = Village(wrapper=self.wrapper, village_id=vid)
-                        self.villages.append(copy.deepcopy(v))
+                        self.villages.append(
+                            Village(wrapper=self.wrapper, village_id=vid))
 
                 # Claim the daily login bonus once per day, only during active
                 # hours: a chest opened at the same minute past midnight every
@@ -1097,6 +1169,35 @@ class TWB:
                 # flight, or still short) so the rest of the cycle leaves them
                 # alone and the pass after the village loop can still fire.
                 self.troop_reserve = self.noble_escort_reserve(config)
+
+                # The running event goes here, right behind the noble work: it is
+                # only a few seconds per action, and its one real failure is
+                # letting the energy bar reach its cap, so it is not something to
+                # queue behind the slow parts of a cycle.
+                try:
+                    events.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config, overview_html=overview_page.result_get.text)
+                except Exception as exc:
+                    logging.getLogger("Events").warning(
+                        "Event pass failed: %s", exc)
+
+                # Re-apply the in-game Account Manager templates. The daily
+                # pass inside run() is gated on active hours for the same
+                # reason the bonus claim is - a morning setup is what a human
+                # session looks like - but an apply asked for from the
+                # dashboard is served whenever it was asked.
+                #
+                # Behind the event because it is the slower of the two: a couple
+                # of minutes of form posts, once a day.
+                try:
+                    accountmanager.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config,
+                        active_hours=self.is_active_hours(config=config))
+                except Exception as exc:
+                    logging.getLogger("AccountManager").warning(
+                        "Account Manager setup failed: %s", exc)
 
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
@@ -1211,7 +1312,8 @@ class TWB:
             "cache/logs",
             "cache/managed",
             "cache/hunter",
-            "cache/incomings"
+            "cache/incomings",
+            "cache/events"
         ]
         FileManager.create_directories(directories)
 

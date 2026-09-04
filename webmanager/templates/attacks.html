@@ -206,7 +206,7 @@
 								{% else %}
 								{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
 								{% endif %}</small></td>
-							<td class="text-right">{{ c.arrival_ts|ts }}</td>
+							<td class="text-right">{{ c.arrival_ts|tsms }}</td>
 							<td class="text-right">
 								{% if c.status == 'pending' %}<span class="sched-eta" data-send="{{ c.send_ts }}">…</span>
 								{% else %}—{% endif %}</td>
@@ -516,6 +516,12 @@ function fmtDur(sec) {
 	return (h>0 ? h+':'+pad(m,2) : m) + ':' + pad(s,2);
 }
 function fmtClock(d) { return pad(d.getHours(),2)+':'+pad(d.getMinutes(),2)+':'+pad(d.getSeconds(),2); }
+/* Same, plus the milliseconds when there are any - a plan that spaces commands
+   sub-second is unreadable without them. */
+function fmtClockMs(d) {
+	const ms = d.getMilliseconds();
+	return fmtClock(d) + (ms ? '.' + String(ms).padStart(3, '0') : '');
+}
 
 function optTroops(sel) {
 	const opt = sel && sel.options[sel.selectedIndex];
@@ -906,12 +912,14 @@ function renderPlan(plan) {
 			'<td><small>'+(r.kind === 'support'
 				? '<span class="badge badge-info">support</span>' : 'attack')+' · '+unitLabel(r.unit)+
 				(r.train ? ' <span class="badge badge-dark">'+r.count+'-noble train</span>' : '')+
+				(r.merged_lines ? '<div class="text-muted">lines '+r.merged_lines.join(', ')+
+					' folded into one train — the waves have to leave as one command</div>' : '')+
 				(r.ok ? '' : ' <span class="badge badge-danger">blocked</span>')+
 				(r.ok && (r.warnings||[]).length ? ' <span class="badge badge-warning">check this</span>' : '')+
 				((r.problems||[]).concat(r.warnings||[]).map(t =>
 					'<div class="'+(r.ok ? 'text-warning' : 'text-danger')+'">'+t+'</div>').join(''))+
 				'</small></td>'+
-			'<td class="text-right"><small>'+fmtClock(lands)+'</small></td>'+
+			'<td class="text-right"><small>'+fmtClockMs(lands)+'</small></td>'+
 			'<td class="text-right p-leaves" data-i="'+i+'"><small>'+(leaves ? fmtClock(leaves) : '—')+
 				(delta ? '<span class="d-block text-warning">'+(delta > 0 ? '+' : '')+delta+'s vs plan</span>' : '')+'</small></td>'+
 			'<td><input type="text" class="form-control form-control-sm p-units" data-i="'+i+'" '+
@@ -1022,7 +1030,9 @@ document.getElementById('p_queue').addEventListener('click', function() {
 		rows.push({
 			line: r.line, origin_id: r.origin_id,
 			target_x: r.target[0], target_y: r.target[1],
-			arrival: Math.floor(r.arrival_ts),
+			// The plan's milliseconds are the point of a spaced plan, so they
+			// go to the queue as they are rather than being floored away.
+			arrival: Math.round(r.arrival_ts * 1000) / 1000,
 			units: textToUnits(box ? box.value : ''),
 			train: r.train ? train : null,
 			support: r.kind === 'support',

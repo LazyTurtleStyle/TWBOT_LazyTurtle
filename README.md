@@ -53,6 +53,15 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 
 *Pick an origin, a target and the moment you want troops to land. The bot works out the send time from the slowest unit and fires it for you.*
 
+**Premium Account Manager**
+- Hand building, recruiting and research to the in-game Account Manager, and the bot stops doing them (and stops reading the screens it only needed for them)
+- Keep a group &rarr; sjabloon plan on the Account manager page and have it re-applied every morning, because the manager's build queue runs dry after a few days
+
+**Events**
+- The weekly in-game event is noticed automatically from a page the bot already loads, and can be played for you: its energy bar refills on a timer and stops once full, so every hour it sits capped is an action lost
+- Picks the choice with the best expected value *at that moment* rather than a fixed one, because the jackpots are progressive and the best option moves with them
+- Tracks every action, what it paid, and how the luck ran against what the choices were worth; finished events stay on file as history
+
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
 - Captcha auto-resume: solve it in your browser and the bot picks up where it left off, no restart

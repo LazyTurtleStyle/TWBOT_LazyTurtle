@@ -36,6 +36,16 @@ except Exception:  # pragma: no cover - dashboard still works without it
     noblebarb = None
 
 try:
+    from game import accountmanager
+except Exception:  # pragma: no cover - dashboard still works without it
+    accountmanager = None
+
+try:
+    from game import events as game_events
+except Exception:  # pragma: no cover - dashboard still works without it
+    game_events = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -553,7 +563,15 @@ class DataReader:
         except (TypeError, ValueError):
             return None, "invalid target coordinates"
         try:
-            arrival_ts = int(float(arrival_ts))
+            # Milliseconds are kept. The game computes travel as a whole number
+            # of seconds, so a command's arrival carries the milliseconds of its
+            # send - a plan that deliberately spaces commands sub-second only
+            # survives being queued if that survives here. A whole second is
+            # stored as an int, so a command written without milliseconds looks
+            # exactly as it always did.
+            arrival_ts = round(float(arrival_ts), 3)
+            if arrival_ts == int(arrival_ts):
+                arrival_ts = int(arrival_ts)
         except (TypeError, ValueError):
             return None, "invalid arrival time"
 
@@ -645,6 +663,9 @@ class DataReader:
             "target_name": target_name,
             "units": selected,
             "arrival_ts": arrival_ts,
+            # Whole seconds: this only decides when the command is claimed and
+            # pre-staged. The launch moment is worked out from the server's own
+            # travel time when it fires, and that is what carries the ms.
             "send_ts": int(arrival_ts - travel),
             "travel_seconds": int(travel),
             "distance": round(distance, 1),
@@ -860,6 +881,127 @@ class DataReader:
         data = (DataReader.cache_grab("world") or {}).get("groups") or {}
         groups = data.get("groups")
         return groups if isinstance(groups, list) else []
+
+    # -- in-game Account Manager ------------------------------------------
+    # The plan is a list of (group, template) rows per screen, kept out of
+    # config.json on purpose: the all-settings editor renders every key of a
+    # section as one control, and would flatten a list of rows into a string
+    # the moment anything on that page was saved.
+    AM_SECTIONS = ("building", "troops", "research")
+
+    @staticmethod
+    def am_plans_path():
+        """Resolved here, not in the game module: only this process knows which
+        world the browser is looking at."""
+        return DataReader.data_path("cache", "am_plans.json")
+
+    @staticmethod
+    def am_plans_grab():
+        """The saved Account Manager plan, always with all three sections
+        present: {"building": [...], "troops": [...], "research": [...],
+        "run_now": bool, "refresh": bool}."""
+        if accountmanager is None:
+            return {s: [] for s in DataReader.AM_SECTIONS}
+        return accountmanager.load_plans(path=DataReader.am_plans_path())
+
+    @staticmethod
+    def am_plans_save(section, rows):
+        """Replace one section's rows. Ids are kept as the game writes them
+        (digit strings); the names ride along so the page can still label a row
+        whose template was renamed or deleted in game.
+
+        Row order is the plan's meaning - the bot applies them top to bottom -
+        so the list is stored exactly as the page sent it.
+        """
+        if section not in DataReader.AM_SECTIONS or accountmanager is None:
+            return False
+        clean = []
+        for row in rows or []:
+            group_id = str((row or {}).get("group_id") or "").strip()
+            template_id = str((row or {}).get("template_id") or "").strip()
+            if not group_id.isdigit() or not template_id.isdigit():
+                continue
+            clean.append({
+                "group_id": group_id,
+                "template_id": template_id,
+                "group_name": str(row.get("group_name") or ""),
+                "template_name": str(row.get("template_name") or ""),
+            })
+        DataReader.ensure_data_dir("cache")
+        accountmanager.update_plans(lambda plans: plans.update({section: clean}),
+                                    path=DataReader.am_plans_path())
+        return True
+
+    @staticmethod
+    def am_request(kind):
+        """Ask the bot to apply the plan ("run_now") or to re-read the
+        manager's templates and per-village state ("refresh") on its next
+        cycle. The bot owns every game request: it is the process with the
+        session, the pacing and the captcha handling."""
+        if kind not in ("run_now", "refresh") or accountmanager is None:
+            return False
+        DataReader.ensure_data_dir("cache")
+        accountmanager.update_plans(lambda plans: plans.update({kind: True}),
+                                    path=DataReader.am_plans_path())
+        return True
+
+    # -- rotating in-game events -------------------------------------------
+
+    @staticmethod
+    def events_dir():
+        return DataReader.data_path("cache", "events")
+
+    @staticmethod
+    def events_grab():
+        """Every event the bot has seen, newest first. Read straight off the
+        per-event files (world-aware, so the game module's own reader cannot be
+        used here)."""
+        out = []
+        directory = DataReader.events_dir()
+        if not os.path.isdir(directory):
+            return out
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(directory, name)) as handle:
+                    data = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if data:
+                out.append(data)
+        return sorted(out, key=lambda s: s.get("last_seen") or 0, reverse=True)
+
+    @staticmethod
+    def event_refresh(screen):
+        """Ask the bot to re-read the running event on its next cycle. Needed
+        because with auto-play off nothing would otherwise open the event page,
+        and a dashboard that shows a day-old energy bar is worse than useless."""
+        safe = "".join(c for c in str(screen) if c.isalpha() or c == "_")
+        path = os.path.join(DataReader.events_dir(), "%s.json" % safe)
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path) as handle:
+                state = json.load(handle) or {}
+            state["refresh"] = True
+            with open(path, "w") as handle:
+                json.dump(state, handle, indent=2)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def am_state_grab():
+        """What the bot last read off the Account Manager screens."""
+        try:
+            path = DataReader.data_path("cache", "am_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
@@ -2336,16 +2478,37 @@ class PlanImport:
     the user then confirms.
     """
 
-    @staticmethod
-    def _suggest_units(row):
+    # What an attack is made of, in the order the units field reads best. A
+    # plan only ever names the unit it paced a command with, so a nuke row used
+    # to arrive here as "ram: all" and had to be typed out by hand every time.
+    # Defensive units stay home and nobles get their own row; the paladin rides
+    # along because "all" costs nothing in a village that has none - the rally
+    # point resolves it to what is standing there and drops the units that are
+    # not, so the command still goes out.
+    OFF_UNITS = ["axe", "light", "marcher", "knight", "spy", "ram", "catapult"]
+
+    @classmethod
+    def _suggest_units(cls, row, speeds=None):
         """A starting point for the troops, which no plan actually specifies.
 
         Only units at least as fast as the one the plan paced the command with,
-        so the send moment the plan calculated still holds.
+        so the send moment the plan calculated still holds. That is what makes
+        catapults free in a ram-paced nuke: they walk at exactly ram pace, so
+        they ride along without the command having to leave a second earlier.
+        An axe-paced row gets no siege for the same reason - rams and catapults
+        would double its travel time and throw the plan's send moment out.
+
+        Fakes are left alone: the plan already says what they are, and a fake
+        is a handful of units, not an army.
         """
         if row["unit"] == "snob":
             return {"snob": row["count"], "axe": "all", "light": "all"}
-        return {row["unit"]: "all"}
+        pace = (speeds or {}).get(row["unit"])
+        if (row["kind"] != "attack" or row["kind_raw"].lower() == "fake"
+                or row["unit"] not in cls.OFF_UNITS or not pace):
+            return {row["unit"]: "all"}
+        return {unit: "all" for unit in cls.OFF_UNITS
+                if speeds.get(unit) and speeds[unit] <= pace}
 
     @classmethod
     def build(cls, text):
@@ -2412,7 +2575,7 @@ class PlanImport:
                 else:
                     seen_origins[origin[0]] = row["line"]
 
-            entry["units"] = cls._suggest_units(row)
+            entry["units"] = cls._suggest_units(row, speeds)
             entry["train"] = (row["unit"] == "snob" and row["count"] > 1)
             entry["problems"] = problems
             entry["warnings"] = warnings
@@ -2870,6 +3033,256 @@ class PlayerFarmOverview:
             "profit_factor": getattr(playerfarm, "PROFIT_FACTOR", 2.0),
             "light_carry": carry,
             "now": now,
+        }
+
+
+class AccountManagerOverview:
+    """What the Account manager page shows: the plan, and what the game says.
+
+    The plan is (group -> template) rows per screen; the "what the game says"
+    half is whatever the bot last read off the manager's own screens
+    (cache/am_state.json). Everything here is a read - the page never talks to
+    TribalWars itself, it asks the bot to, which is the process that owns the
+    session and its pacing.
+    """
+
+    # section key -> (label, in-game screen, the tab's Dutch name in game)
+    SECTIONS = {
+        "building": ("Building", "am_village", "Bouw"),
+        "troops": ("Troops", "am_troops", "Troepen"),
+        "research": ("Research", "am_research", "Ontwikkeling"),
+    }
+
+    @staticmethod
+    def _managed(section, village):
+        """Is the manager actually doing this village?
+
+        Read off what the screen shows rather than its wording: the building and
+        research screens leave the template column empty for a village nobody
+        manages, and the troop screen leaves every target blank. Both survive a
+        game language the dashboard does not speak.
+        """
+        if section == "troops":
+            return any(str(v).strip() not in ("", "0")
+                       for v in (village.get("units") or {}).values())
+        return bool((village.get("template") or "").strip())
+
+    @staticmethod
+    def _queued(village):
+        """Build orders the manager still has queued here, from its "12 / 50"."""
+        raw = (village.get("orders") or "").split("/")[0].strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        flags = config.get("account_manager", {}) or {}
+        state = DataReader.am_state_grab()
+        plans = DataReader.am_plans_grab()
+        snapshots = state.get("sections") or {}
+        # Group membership comes from the incoming poller's group cache, which
+        # is the only place that knows which villages are in a group - the
+        # manager screens only ever show the group being looked at.
+        members = {g.get("id"): g.get("villages") or []
+                   for g in DataReader.groups_grab()}
+
+        sections = []
+        for key in DataReader.AM_SECTIONS:
+            label, screen, dutch = cls.SECTIONS[key]
+            snap = snapshots.get(key) or {}
+            templates = snap.get("templates") or []
+            # Before the first read the manager's own group menu is unknown, so
+            # fall back to the poller's group cache - same ids, same names, plus
+            # the [alle] pseudo-group the menu always starts with. That makes a
+            # plan buildable on a world the bot has not opened the manager on
+            # yet; the templates still have to come from the game.
+            groups = snap.get("groups") or (
+                [{"id": "0", "name": "alle", "type": "all"}]
+                + [{"id": g.get("id"), "name": g.get("name"),
+                    "type": g.get("type")}
+                   for g in DataReader.groups_grab()])
+            villages = snap.get("villages") or []
+            def group_size(gid):
+                """How many villages a group holds, or None when unknown.
+
+                [alle] has no membership list of its own (its size is simply
+                every village the screen listed), and a group the poller has not
+                cached yet has an unknown one - both answer None rather than a 0
+                that would read as "empty".
+                """
+                if gid == "0":
+                    return len(villages) or None
+                return len(members[gid]) if gid in members else None
+
+            # Carried on the group itself so the page can keep the count honest
+            # while a row is being edited, without a reload.
+            groups = [dict(g, villages=group_size(g.get("id"))) for g in groups]
+            by_template = {t.get("id"): t for t in templates}
+            by_group = {g.get("id"): g for g in groups}
+
+            rows = []
+            for row in plans.get(key) or []:
+                gid = row.get("group_id")
+                tid = row.get("template_id")
+                group = by_group.get(gid)
+                template = by_template.get(tid)
+                rows.append({
+                    "group_id": gid,
+                    "template_id": tid,
+                    "group_name": (group or {}).get("name")
+                                  or row.get("group_name") or gid,
+                    "template_name": (template or {}).get("name")
+                                     or row.get("template_name") or tid,
+                    "villages": group_size(gid),
+                    # Only claim something is gone once the page has actually
+                    # been read; an empty snapshot means "not read yet".
+                    "template_gone": bool(templates) and template is None,
+                    "group_gone": bool(groups) and group is None,
+                })
+
+            managed = [v for v in villages if cls._managed(key, v)]
+            idle = [v for v in managed if cls._queued(v) == 0] \
+                if key == "building" else []
+            sections.append({
+                "key": key, "label": label, "screen": screen, "dutch": dutch,
+                "templates": templates, "groups": groups, "villages": villages,
+                "rows": rows, "when": snap.get("when"),
+                "total": len(villages), "managed": len(managed),
+                "idle": len(idle),
+            })
+
+        result = state.get("last_result") or {}
+        return {
+            "flags": {
+                "enabled": bool(flags.get("enabled")),
+                "building": bool(flags.get("building")),
+                "recruiting": bool(flags.get("recruiting")),
+                "research": bool(flags.get("research")),
+                "auto_setup": bool(flags.get("auto_setup")),
+            },
+            "sections": sections,
+            "read_when": state.get("when"),
+            "last_run": state.get("last_run"),
+            "last_run_ts": state.get("last_run_ts"),
+            "last_result": result.get("rows") or [],
+            "last_result_when": result.get("when"),
+            "last_result_source": result.get("source"),
+            "pending_run": bool(plans.get("run_now")),
+            "pending_refresh": bool(plans.get("refresh")),
+            "never_read": not snapshots,
+        }
+
+
+class EventOverview:
+    """What the Events page shows: the running event, and what the bot got out
+    of past ones.
+
+    Everything here is read off the files the bot writes; the page never talks
+    to TribalWars. The energy figure is the one exception that needs arithmetic
+    rather than a lookup - the game only ever reports a value and the moment it
+    was true, so "now" is projected from the refill rate, the same way the bot
+    does it before deciding whether it can act.
+    """
+
+    @staticmethod
+    def _energy_now(snapshot):
+        """Energy at this moment, projected from the bot's last look."""
+        try:
+            value = float(snapshot["energy"])
+            top = float(snapshot["energy_max"])
+            rate = float(snapshot.get("energy_rate") or 0)
+            at = float(snapshot["at"])
+        except (KeyError, TypeError, ValueError):
+            return None, None, None
+        if rate <= 0:
+            return value, top, None
+        grown = min(value + (time.time() - at) / rate, top)
+        # Seconds until the next whole unit lands, for the countdown; None once
+        # the bar is full, because a full bar has stopped refilling.
+        nxt = None
+        if grown < top:
+            nxt = int((1 - (grown - int(grown))) * rate)
+        return grown, top, nxt
+
+    @classmethod
+    def _decorate(cls, state):
+        """One event file turned into what the page needs."""
+        snapshot = state.get("snapshot") or {}
+        totals = state.get("totals") or {}
+        energy, top, nxt = cls._energy_now(snapshot)
+        options = snapshot.get("options") or []
+        best = options[0] if options else None
+
+        # How the dice actually fell against what the choices were worth. Over a
+        # week this is the only honest answer to "is it working" - the reward
+        # alone cannot distinguish a good strategy from a lucky one.
+        expected = float(totals.get("expected") or 0)
+        earned = int(totals.get("reward") or 0)
+        luck = (earned / expected) if expected > 0 else None
+
+        # What is still to come: every hour left is one more unit of energy,
+        # plus whatever is already in the bar.
+        forecast = None
+        ends = state.get("ends_ts")
+        if ends and best and energy is not None and not state.get("finished"):
+            hours_left = max(0.0, (ends - time.time()) / 3600.0)
+            actions_left = int(hours_left + energy)
+            forecast = {"hours": round(hours_left, 1), "actions": actions_left,
+                        "reward": int(actions_left * best["value"])}
+
+        return {
+            "screen": state.get("screen"),
+            "name": state.get("name"),
+            "player_id": state.get("player_id"),
+            "label": state.get("label"),
+            "unsupported": bool(state.get("unsupported")),
+            "finished": bool(state.get("finished")),
+            "finished_at": state.get("finished_at"),
+            "first_seen": state.get("first_seen"),
+            "last_seen": state.get("last_seen"),
+            "ends_ts": ends,
+            "ends_text": state.get("ends_text"),
+            "seen_at": snapshot.get("at"),
+            "energy": None if energy is None else round(energy, 2),
+            "energy_max": top,
+            "energy_next": nxt,
+            "currency": snapshot.get("currency"),
+            "options": options,
+            "best": best,
+            "ranks_best": snapshot.get("ranks_best") or [],
+            "ranks_unluckiest": snapshot.get("ranks_unluckiest") or [],
+            "group": snapshot.get("group") or {},
+            "totals": {"actions": int(totals.get("actions") or 0),
+                       "jackpots": int(totals.get("jackpots") or 0),
+                       "reward": earned,
+                       "expected": int(expected)},
+            "luck": None if luck is None else round(luck, 2),
+            "by_option": state.get("by_option") or {},
+            "log": (state.get("log") or [])[:25],
+            "forecast": forecast,
+        }
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("events", {}) or {}
+        states = DataReader.events_grab()
+        current, history = None, []
+        for state in states:
+            view = cls._decorate(state)
+            if view["finished"] or current is not None:
+                history.append(view)
+            else:
+                current = view
+        return {
+            "auto_play": bool(settings.get("auto_play", False)),
+            "option": str(settings.get("option", "auto")),
+            "current": current,
+            "history": history,
+            "ever": bool(states),
         }
 
 
