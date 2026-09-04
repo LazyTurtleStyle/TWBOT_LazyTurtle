@@ -4,6 +4,15 @@
 {% block content %}
 <style>
 	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	/* The import controls do two unrelated jobs - troops for every ticked row,
+	   and the shape of the noble train - so they are fenced off from each
+	   other and each says out loud what it touches. */
+	.imp-group { border: 1px solid var(--border); border-radius: 5px;
+		padding: .1rem .6rem .5rem; margin: 0; max-width: 34rem; }
+	.imp-legend { float: none; width: auto; font-size: .72rem; text-transform: uppercase;
+		letter-spacing: .09em; color: var(--accent); padding: 0 .35rem; margin: 0 0 .2rem; }
+	.imp-hint { font-size: .78rem; color: var(--muted); margin-top: .35rem; max-width: 32rem; }
+	.imp-steps li { margin-bottom: .15rem; }
 	.coord { font-variant-numeric: tabular-nums; }
 </style>
 
@@ -312,46 +321,72 @@
 	<div class="card-header py-2"><strong>Import an attack plan,</strong>
 		<small class="text-muted">paste the export from devilicious.dev (or the same BB-code rows)</small></div>
 	<div class="card-body">
-		<p class="small text-muted mb-2">
-			One command per line:
-			<code>origin-&gt;target, distance, unit, type, arrival, travel, send, count</code>.
-			Times are read on this machine's clock. A plan never says which troops to send,
-			so pick those below — nothing is queued until you press the button.
-		</p>
+		<ol class="small text-muted mb-2 pl-3 imp-steps">
+			<li><strong>Paste</strong> the plan and press <em>Read plan</em>. One command per line:
+				<code>origin-&gt;target, distance, unit, type, arrival, travel, send, count</code>.
+				Times are read on this machine's clock.</li>
+			<li><strong>Give every row troops.</strong> A plan says when to hit, never with what.
+				Pick a troop template and <em>Apply to ticked</em>, or type into a row's box.</li>
+			<li><strong>Set up the noble rows</strong> (the ones the plan folded into a train):
+				how the stack is split, and what escorts each noble after the first.</li>
+			<li><strong>Untick</strong> anything you are not sending and press
+				<em>Queue selected commands</em>. Nothing leaves this page until then.</li>
+			<li><strong>Space the arrivals</strong> afterwards on the
+				<a href="#scheduler" onclick="location.reload()">Scheduler</a> tab — a plan lands
+				everything on the same moment, so tick the train there and nudge it a second or
+				two behind the nukes.</li>
+		</ol>
 		<textarea id="p_text" class="form-control form-control-sm" rows="5"
 			placeholder="569|444->564|454,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1"></textarea>
-		<div class="form-row align-items-end mt-2">
-			<div class="form-group col-auto mb-2">
-				<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
-			</div>
-			<div class="form-group col-auto mb-2">
-				<label class="small mb-1">Noble rows</label>
-				<select id="p_mode" class="form-control form-control-sm">
-					<option value="front">Front-loaded train</option>
-					<option value="even">Even-split train</option>
-				</select>
-			</div>
-			<div class="form-group col-auto mb-2">
-				<label class="small mb-1">Escort each</label>
-				<select id="p_escort_unit" class="form-control form-control-sm"></select>
-			</div>
-			<div class="form-group col-2 mb-2">
-				<label class="small mb-1" title="Per following noble, not a total: a 4-noble train has 3 followers, so 50 here means 150 out of the stack.">Amount <span class="text-muted">/ wave</span></label>
-				<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm"
-					title="Escort for each noble after the first. The stack has to carry it: a 4-noble train with 25 each needs 75. Ask for more than is there and it is trimmed to what fits.">
-			</div>
-			<div class="form-group col-auto mb-2" id="p_template_wrap" style="display:none">
-				<label class="small mb-1">Troop template</label>
-				<div class="input-group input-group-sm">
-					<select id="p_template" class="form-control form-control-sm"></select>
-					<div class="input-group-append">
-						<button id="p_template_fill" class="btn btn-outline-secondary btn-sm"
-							title="Put this template's units into every ticked row. Noble rows keep their noble count.">Apply to ticked</button>
-						<button id="p_template_reload" class="btn btn-outline-secondary btn-sm"
-							title="Re-read your templates from the game (after editing one in-game). The bot picks it up within a few minutes.">↻</button>
+		<div class="mt-2 mb-2">
+			<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
+			<span class="small text-muted ml-2">reads the paste above; nothing is sent</span>
+		</div>
+		<div class="d-flex align-items-start flex-wrap" style="gap:.75rem">
+			<fieldset class="imp-group" id="p_template_wrap" style="display:none">
+				<legend class="imp-legend">Troops — every <em>ticked</em> row</legend>
+				<div class="d-flex align-items-end" style="gap:.4rem">
+					<div>
+						<label class="small mb-1" for="p_template">Troop template</label>
+						<div class="input-group input-group-sm">
+							<select id="p_template" class="form-control form-control-sm"></select>
+							<div class="input-group-append">
+								<button id="p_template_fill" class="btn btn-outline-secondary btn-sm"
+									title="Fills the troop box of every ticked row, noble rows included - those keep their noble count.">Apply to ticked</button>
+								<button id="p_template_reload" class="btn btn-outline-secondary btn-sm"
+									title="Re-read your templates from the game (after editing one in-game). The bot picks it up within a few minutes.">↻</button>
+							</div>
+						</div>
 					</div>
 				</div>
-			</div>
+				<div class="imp-hint">Fills <em>every ticked row</em> at once. A single row can also be
+					set from the dropdown inside it.</div>
+			</fieldset>
+
+			<fieldset class="imp-group">
+				<legend class="imp-legend">Noble rows only</legend>
+				<div class="d-flex align-items-end flex-wrap" style="gap:.4rem">
+					<div>
+						<label class="small mb-1" for="p_mode">Split the stack</label>
+						<select id="p_mode" class="form-control form-control-sm">
+							<option value="front">Front-loaded train</option>
+							<option value="even">Even-split train</option>
+						</select>
+					</div>
+					<div>
+						<label class="small mb-1" for="p_escort_unit">Escort each</label>
+						<select id="p_escort_unit" class="form-control form-control-sm"></select>
+					</div>
+					<div style="width:6rem">
+						<label class="small mb-1" for="p_escort_n">Amount <span class="text-muted">/ wave</span></label>
+						<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
+					</div>
+				</div>
+				<div class="imp-hint">Front-loaded puts the nuke in wave 1 and gives every
+					<em>following</em> noble the escort. The escort comes out of the same stack, so a
+					4-noble train at 50 each needs 150 in the row — ask for more than it carries and
+					it is trimmed to what fits.</div>
+			</fieldset>
 		</div>
 		<div id="p_summary" class="small mb-2"></div>
 	</div>
