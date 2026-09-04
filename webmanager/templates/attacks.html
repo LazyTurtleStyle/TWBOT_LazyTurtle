@@ -989,6 +989,34 @@ function planTrainSettings() {
 	if (u && n > 0) escort[u] = n;
 	return {mode: document.getElementById('p_mode').value, escort: escort};
 }
+/* The train controls are read when Queue is pressed, so they need no Apply
+   button - but nothing on screen moved when you touched them, which is its own
+   kind of confusing. This says what the current settings would do to a noble
+   row, and follows them as they change. */
+function trainNote(r) {
+	const t = planTrainSettings();
+	const waves = r.count, followers = waves - 1;
+	if (waves < 2) return '';
+	if (t.mode === 'even') {
+		return 'even split: each of the ' + waves + ' waves takes one noble and a ' +
+			'1/' + waves + ' share of the rest — the escort setting is not used';
+	}
+	const unit = Object.keys(t.escort)[0];
+	if (!unit) {
+		return 'front-loaded: wave 1 carries the whole stack, waves 2–' + waves +
+			' go as bare nobles';
+	}
+	const per = t.escort[unit];
+	return 'front-loaded: wave 1 carries what is left, waves 2–' + waves + ' take ' +
+		'one noble + ' + per + ' ' + unitLabel(unit) + ' each — ' + (per * followers) +
+		' ' + unitLabel(unit) + ' must be in the row';
+}
+function refreshTrainNotes() {
+	document.querySelectorAll('.p-train').forEach(el => {
+		const r = PLAN_ROWS[parseInt(el.getAttribute('data-i'), 10)];
+		if (r) el.textContent = trainNote(r);
+	});
+}
 let PLAN_ROWS = [];
 function renderPlan(plan) {
 	PLAN_ROWS = plan.rows || [];
@@ -1031,6 +1059,7 @@ function renderPlan(plan) {
 				(r.train ? ' <span class="badge badge-dark">'+r.count+'-noble train</span>' : '')+
 				(r.merged_lines ? '<div class="text-muted">lines '+r.merged_lines.join(', ')+
 					' folded into one train — the waves have to leave as one command</div>' : '')+
+				(r.train ? '<div class="p-train text-info" data-i="'+i+'">'+trainNote(r)+'</div>' : '')+
 				(r.ok ? '' : ' <span class="badge badge-danger">blocked</span>')+
 				(r.ok && (r.warnings||[]).length ? ' <span class="badge badge-warning">check this</span>' : '')+
 				((r.problems||[]).concat(r.warnings||[]).map(t =>
@@ -1132,6 +1161,11 @@ document.getElementById('p_template_reload').addEventListener('click', function(
 				  '(a few minutes) — reload this page after that.</span>'
 				: '<span class="text-danger">No cached templates to refresh yet.</span>';
 		});
+});
+['p_mode', 'p_escort_unit', 'p_escort_n'].forEach(id => {
+	const el = document.getElementById(id);
+	if (el) el.addEventListener('input', refreshTrainNotes);
+	if (el) el.addEventListener('change', refreshTrainNotes);
 });
 document.getElementById('p_all').addEventListener('change', function() {
 	document.querySelectorAll('.p-pick').forEach(cb => { if (!cb.disabled) cb.checked = this.checked; });
