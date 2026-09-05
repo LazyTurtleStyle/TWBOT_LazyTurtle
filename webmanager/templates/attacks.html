@@ -209,6 +209,26 @@
 				</span>
 				{% endif %}
 			</div>
+			<div class="card-body py-2 border-bottom">
+				<div class="d-flex align-items-center flex-wrap" style="gap:.4rem">
+					<select id="q_status" class="form-control form-control-sm" style="width:auto">
+						<option value="live">Still to send</option>
+						<option value="all">Everything</option>
+						<option value="sent">Sent</option>
+						<option value="failed">Failed</option>
+						<option value="cancelled">Cancelled</option>
+					</select>
+					<select id="q_sort" class="form-control form-control-sm" style="width:auto">
+						<option value="send">Next to send first</option>
+						<option value="arrival">Earliest landing first</option>
+						<option value="target">Target, then landing</option>
+						<option value="origin">Origin, then landing</option>
+					</select>
+					<input id="q_find" class="form-control form-control-sm" style="width:14rem"
+						placeholder="filter by target or village…">
+					<span id="q_count" class="small text-muted ml-1"></span>
+				</div>
+			</div>
 			<div class="table-responsive">
 				<table class="table table-sm planner-table mb-0">
 					<thead><tr>
@@ -219,7 +239,11 @@
 					</tr></thead>
 					<tbody>
 						{% for c in scheduled %}
-						<tr data-cid="{{ c.id }}">
+						<tr data-cid="{{ c.id }}" class="q-row" data-status="{{ c.status }}"
+							data-arrival="{{ c.arrival_ts }}" data-send="{{ c.send_ts }}"
+							data-target="{{ c.target_x }}|{{ c.target_y }}"
+							data-kind="{{ 'train' if c.waves else ('nuke' if c.units.axe else 'other') }}"
+							data-search="{{ ('%s|%s %s %s' % (c.target_x, c.target_y, c.target_name or '', c.origin_name or ''))|lower }}">
 							<td>{% if c.status == 'pending' %}<input type="checkbox" class="rt-pick"
 								data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">{% endif %}</td>
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
@@ -849,6 +873,63 @@ function cancelSched(id) {
 	fetch(appUrl('/app/attack/schedule/cancel', 'id='+encodeURIComponent(id)))
 		.then(r => r.json()).then(() => location.reload());
 }
+/* ---------- the queue as a view ---------------------------------------
+   Late in a world this table holds hundreds of commands, most of them finished
+   or cancelled, and the two questions worth asking are "what goes out next" and
+   "what is hitting this village". Sorting and filtering happen here rather than
+   on the server: every row is already on the page, and a reload would cost the
+   ticks and any half-typed retime. */
+function applyQueueView() {
+	const want = document.getElementById('q_status').value;
+	const sort = document.getElementById('q_sort').value;
+	const find = (document.getElementById('q_find').value || '').trim().toLowerCase();
+	const body = document.querySelector('#pane-scheduler tbody');
+	if (!body) return;
+	const rows = Array.prototype.slice.call(body.querySelectorAll('tr.q-row'));
+	let shown = 0, live = 0;
+	rows.forEach(tr => {
+		const st = tr.getAttribute('data-status');
+		if (st === 'pending' || st === 'sending') live++;
+		const okStatus = want === 'all' ? true
+			: want === 'live' ? (st === 'pending' || st === 'sending')
+			: st === want;
+		const okFind = !find || (tr.getAttribute('data-search') || '').indexOf(find) !== -1;
+		const show = okStatus && okFind;
+		tr.style.display = show ? '' : 'none';
+		if (show) shown++;
+		// A hidden row must not stay ticked: a shift would move something the
+		// table is not showing.
+		if (!show) { const cb = tr.querySelector('.rt-pick'); if (cb) cb.checked = false; }
+	});
+	const num = a => parseFloat(a) || 0;
+	const key = {
+		send:    tr => [num(tr.getAttribute('data-send'))],
+		arrival: tr => [num(tr.getAttribute('data-arrival'))],
+		target:  tr => [tr.getAttribute('data-target'), num(tr.getAttribute('data-arrival'))],
+		origin:  tr => [(tr.getAttribute('data-search') || '').split('|').pop(),
+		                num(tr.getAttribute('data-arrival'))],
+	}[sort];
+	rows.sort((a, b) => {
+		const ka = key(a), kb = key(b);
+		for (let i = 0; i < ka.length; i++) {
+			if (ka[i] < kb[i]) return -1;
+			if (ka[i] > kb[i]) return 1;
+		}
+		return 0;
+	}).forEach(tr => body.appendChild(tr));
+	const targets = {};
+	rows.forEach(tr => { if (tr.style.display !== 'none') targets[tr.getAttribute('data-target')] = 1; });
+	const n = Object.keys(targets).length;
+	document.getElementById('q_count').textContent =
+		shown + (shown === rows.length ? ' shown' : ' of ' + rows.length + ' shown') +
+		' · ' + live + ' still to send · ' + n + ' target' + (n === 1 ? '' : 's') + ' in view';
+}
+['q_status', 'q_sort', 'q_find'].forEach(id => {
+	const el = document.getElementById(id);
+	if (el) { el.addEventListener('change', applyQueueView); el.addEventListener('input', applyQueueView); }
+});
+if (document.getElementById('q_status')) applyQueueView();
+
 /* ---------- retiming queued commands ----------------------------------
    A plan lands everything on the same moment, which is almost never what is
    wanted once it is queued: the nuke has to land before the train, a fake a
@@ -943,7 +1024,12 @@ document.addEventListener('click', function(e) {
 (function() {
 	const all = document.getElementById('rt_all');
 	if (all) all.addEventListener('change', function() {
-		document.querySelectorAll('.rt-pick').forEach(cb => { cb.checked = this.checked; });
+		// Only what the current filter shows, so "tick all" can never pick up a
+		// command that is scrolled out of the view by choice.
+		document.querySelectorAll('.rt-pick').forEach(cb => {
+			const tr = cb.closest('tr');
+			if (tr && tr.style.display !== 'none') cb.checked = this.checked;
+		});
 	});
 })();
 
