@@ -555,6 +555,7 @@ def attacks_page():
     )
     return render_template('attacks.html', data=data,
                            plan=AttackPlanner.build(data), scheduled=scheduled,
+                           ops=AttackPlanner.operations(data, scheduled),
                            noble=noble_overview(data))
 
 

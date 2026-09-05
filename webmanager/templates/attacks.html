@@ -35,20 +35,89 @@
 	<li class="nav-item"><a class="nav-link" href="#scheduler" data-pane="scheduler">Scheduler
 		{% if pending_count %}<span class="badge badge-danger">{{ pending_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#planner" data-pane="planner">Planner</a></li>
-	<li class="nav-item"><a class="nav-link" href="#import" data-pane="import">Import plan
-		<span class="badge badge-warning">alpha</span></a></li>
+	<li class="nav-item"><a class="nav-link" href="#import" data-pane="import">Import plan</a></li>
 	{% set noble_armed = noble.jobs|selectattr('status', 'equalto', 'armed')|list|length %}
 	<li class="nav-item"><a class="nav-link" href="#noble" data-pane="noble">Noble barb
-		<span class="badge badge-warning">alpha</span>
 		{% if noble_armed %}<span class="badge badge-danger">{{ noble_armed }}</span>{% endif %}</a></li>
 </ul>
 
 <!-- ---------- Overview: tracked targets ---------- -->
 <div id="pane-overview">
+
+<div class="stats mb-3">
+	<div class="stat"><div class="v {{ 'gold' if ops.in_flight }}">{{ ops.in_flight|length }}</div>
+		<div class="k">In the air</div>
+		<div class="sub">{% if ops.in_flight %}next lands <span class="ops-eta" data-at="{{ ops.in_flight[0].arrival_ts }}">…</span>{% else %}nothing launched{% endif %}</div></div>
+	<div class="stat"><div class="v">{{ ops.queued|length }}</div>
+		<div class="k">Waiting to leave</div>
+		<div class="sub">{% if ops.queued %}next goes <span class="ops-eta" data-at="{{ ops.queued[0].send_ts }}">…</span>{% else %}queue empty{% endif %}</div></div>
+	<div class="stat"><div class="v">{{ ops.nobles_home }}</div>
+		<div class="k">Nobles at home</div>
+		<div class="sub">{{ ops.nobles_away }} on the way to somewhere</div></div>
+	<div class="stat"><div class="v">{{ ops.villages_out }}<span class="faint" style="font-size:16px">/{{ ops.villages }}</span></div>
+		<div class="k">Villages with troops out</div>
+		<div class="sub">farm runs, attacks and support{% if ops.seen %}, seen {{ ops.seen|ago }}{% endif %}</div></div>
+</div>
+
+<div class="row">
+	<div class="col-lg-6 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>In the air</strong>
+				<small class="text-muted ml-2">launched, not landed — soonest first</small></div>
+			{% if ops.in_flight %}
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr><th>Target</th><th>From</th><th>What</th>
+						<th class="text-right">Lands</th><th class="text-right">In</th></tr></thead>
+					<tbody>
+					{% for r in ops.in_flight %}
+					<tr><td class="coord">{{ r.target }}{% if r.target_name %}<small class="text-muted d-block">{{ r.target_name }}</small>{% endif %}</td>
+						<td><small>{{ r.origin }}</small></td>
+						<td><small>{{ r.what }}</small></td>
+						<td class="text-right"><small>{{ r.arrival_ts|tsms }}</small></td>
+						<td class="text-right ops-eta" data-at="{{ r.arrival_ts }}">…</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing the scheduler has sent is still flying.
+				Farm runs are not listed here — they are counted in "villages with troops out".</div>
+			{% endif %}
+		</div>
+	</div>
+	<div class="col-lg-6 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>Waiting to leave</strong>
+				<small class="text-muted ml-2">queued — next to go first</small></div>
+			{% if ops.queued %}
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr><th>Target</th><th>From</th><th>What</th>
+						<th class="text-right">Lands</th><th class="text-right">Sends in</th></tr></thead>
+					<tbody>
+					{% for r in ops.queued %}
+					<tr><td class="coord">{{ r.target }}{% if r.target_name %}<small class="text-muted d-block">{{ r.target_name }}</small>{% endif %}</td>
+						<td><small>{{ r.origin }}</small></td>
+						<td><small>{{ r.what }}</small></td>
+						<td class="text-right"><small>{{ r.arrival_ts|tsms }}</small></td>
+						<td class="text-right ops-eta" data-at="{{ r.send_ts }}">…</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing queued.
+				<a href="#import" onclick="location.reload()">Import a plan</a> or use the Scheduler.</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+
 <div class="card mb-3">
 	<div class="card-header py-2 d-flex align-items-center flex-wrap">
-		<span><strong>Tracked targets ({{ plan.targets|length }}),</strong>
-		<small class="text-muted">what the bot is currently farming / scouting</small></span>
+		<span><small class="text-muted">Tracked targets ({{ plan.targets|length }}) — what the bot farms
+			and scouts. <a href="#" id="tt_toggle">show</a></small></span>
 		<span class="ml-auto d-flex align-items-center">
 			<small class="text-muted mr-1">ETA&nbsp;from</small>
 			<select id="o_origin" class="form-control form-control-sm" style="width:auto">
@@ -62,6 +131,7 @@
 			</select>
 		</span>
 	</div>
+	<div id="tt_wrap" style="display:none">
 	<div class="table-responsive">
 		<table class="table table-sm planner-table mb-0">
 			<thead><tr>
@@ -92,6 +162,7 @@
 			</tbody>
 		</table>
 	</div>
+	</div><!-- /tt_wrap -->
 </div>
 </div><!-- /pane-overview -->
 
@@ -873,6 +944,34 @@ function cancelSched(id) {
 	fetch(appUrl('/app/attack/schedule/cancel', 'id='+encodeURIComponent(id)))
 		.then(r => r.json()).then(() => location.reload());
 }
+/* The tracked-target list is hundreds of rows of slow-moving reference. It is
+   still here, just not the first thing the page says. */
+(function() {
+	const link = document.getElementById('tt_toggle'), wrap = document.getElementById('tt_wrap');
+	if (!link || !wrap) return;
+	link.addEventListener('click', function(e) {
+		e.preventDefault();
+		const open = wrap.style.display !== 'none';
+		wrap.style.display = open ? 'none' : '';
+		link.textContent = open ? 'show' : 'hide';
+	});
+})();
+/* Countdowns on the overview: "lands in 3h 12m" is the thing being looked for,
+   and a clock that only updates on reload is worse than none. */
+function opsTick() {
+	const now = Date.now() / 1000;
+	document.querySelectorAll('.ops-eta').forEach(el => {
+		const at = parseFloat(el.getAttribute('data-at'));
+		if (!at) { el.textContent = '—'; return; }
+		let d = Math.round(at - now);
+		if (d <= 0) { el.textContent = 'now'; return; }
+		const h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60), sec = d % 60;
+		el.textContent = h ? h + 'h ' + m + 'm' : (m ? m + 'm ' + sec + 's' : sec + 's');
+	});
+}
+opsTick();
+setInterval(opsTick, 1000);
+
 /* ---------- the queue as a view ---------------------------------------
    Late in a world this table holds hundreds of commands, most of them finished
    or cancelled, and the two questions worth asking are "what goes out next" and

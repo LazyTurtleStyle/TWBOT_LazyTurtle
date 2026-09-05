@@ -2685,6 +2685,16 @@ class PlanImport:
         }
 
 
+# Farm space each unit takes, for telling a fake from a real attack (and for
+# the minimum-attack-size rule some worlds enforce).
+UNIT_POP = {"spear": 1, "sword": 1, "axe": 1, "archer": 1, "spy": 2, "light": 4,
+            "marcher": 5, "heavy": 6, "ram": 5, "catapult": 8, "knight": 10,
+            "snob": 100}
+# Below this much population a command is a fake, not an attack: a real nuke is
+# thousands, a fake is a catapult and some scouts.
+FAKE_POP = 1000
+
+
 class AttackPlanner:
     """Data for the attack-planner page.
 
@@ -2744,6 +2754,88 @@ class AttackPlanner:
             "templates": DataReader.troop_templates(),
             "now": int(time.time()),
         }
+
+    @staticmethod
+    def operations(data, scheduled):
+        """What is in the air right now, which is what the page is opened for.
+
+        The tracked-target list answers "what could I hit"; it is hundreds of
+        rows long and changes slowly. Since the scheduler took over sending, the
+        question that actually needs answering on arrival is "what have I got
+        out there" - commands already launched and still flying, commands still
+        waiting to leave, and where the nobles are. None of that was anywhere.
+        """
+        now = time.time()
+        managed = data.get("bot", {}) or {}
+        moves = DataReader.troop_locations()
+        by_village = moves.get("by_village") or {}
+
+        def describe(command):
+            """A word for what this command is, from what it carries.
+
+            Size first, because it is what separates a fake from the real
+            thing: a fake is a catapult and a handful of scouts, and calling
+            that "siege" because it holds a catapult reads as a threat it is
+            not."""
+            if command.get("waves"):
+                return "%d-noble train" % len(command["waves"])
+            units = command.get("units") or {}
+            if units.get("snob"):
+                return "noble"
+            def count(unit):
+                try:
+                    return int(units.get(unit))
+                except (TypeError, ValueError):
+                    return 0
+            # "all" is only a number at send time, and it is never a fake -
+            # nobody fakes with everything the village has.
+            vague = any(str(n).strip().lower() == "all" for n in units.values())
+            pop = sum(UNIT_POP.get(u, 1) * count(u) for u in units)
+            if not vague and pop and pop < FAKE_POP:
+                return "fake"
+            if count("ram") + count("catapult") >= 50:
+                return "siege"
+            if units.get("axe") or units.get("light") or units.get("archer"):
+                return "nuke"
+            return "attack"
+
+        in_flight, queued = [], []
+        for command in scheduled:
+            row = {
+                "id": command.get("id"),
+                "target": "%s|%s" % (command.get("target_x"), command.get("target_y")),
+                "target_name": command.get("target_name"),
+                "origin": command.get("origin_name"),
+                "what": describe(command),
+                "arrival_ts": command.get("arrival_ts"),
+                "send_ts": command.get("send_ts"),
+            }
+            status = command.get("status")
+            if status == "sent" and (command.get("arrival_ts") or 0) > now:
+                in_flight.append(row)
+            elif status in ("pending", "sending"):
+                queued.append(row)
+        in_flight.sort(key=lambda r: r["arrival_ts"] or 0)
+        queued.sort(key=lambda r: r["send_ts"] or 0)
+
+        targets = {}
+        for row in in_flight:
+            targets[row["target"]] = targets.get(row["target"], 0) + 1
+
+        return {
+            "in_flight": in_flight,
+            "queued": queued,
+            "targets_hit": targets,
+            "nobles_home": sum(int((v.get("available_troops") or {}).get("snob") or 0)
+                               for v in managed.values()),
+            "nobles_away": int((moves.get("moving") or {}).get("snob") or 0),
+            "villages_out": sum(1 for v in by_village.values()
+                                if any((v.get("moving") or {}).values())),
+            "villages": len(by_village) or len(managed),
+            "moving": moves.get("moving") or {},
+            "seen": moves.get("when"),
+        }
+
 
 
 class DefenseOverview:
