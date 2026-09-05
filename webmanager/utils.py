@@ -3314,6 +3314,31 @@ class EventOverview:
         earned = int(totals.get("reward") or 0)
         luck = (earned / expected) if expected > 0 else None
 
+        # Cheering is not the only income. The horse race pays the whole team
+        # once a day for laps completed and how the race finished - 1,950 and
+        # 3,325 on the two days measured, against roughly 1,500 a day of
+        # cheering. A forecast built on actions alone is therefore wrong by more
+        # than half, which is exactly how it read.
+        #
+        # There is no endpoint for it, but the balance after every action is on
+        # file, so anything the balance gained between two actions came from
+        # somewhere else: a daily payout, or the player cheering by hand.
+        other, payouts = 0, []
+        log = sorted(state.get("log") or [], key=lambda a: a.get("ts") or 0)
+        previous = None
+        for action in log:
+            if previous and action.get("currency") is not None \
+                    and previous.get("currency") is not None:
+                gap = (action["currency"] - previous["currency"]
+                       - int(action.get("reward") or 0))
+                if gap:
+                    other += gap
+                    # Big enough to be a payout rather than a few hand-clicks.
+                    if gap >= 500:
+                        payouts.append(gap)
+            previous = action
+        per_day = (sum(payouts) / len(payouts)) if payouts else 0
+
         # What is still to come: every hour left is one more unit of energy,
         # plus whatever is already in the bar.
         forecast = None
@@ -3321,8 +3346,16 @@ class EventOverview:
         if ends and best and energy is not None and not state.get("finished"):
             hours_left = max(0.0, (ends - time.time()) / 3600.0)
             actions_left = int(hours_left + energy)
+            cheering = int(actions_left * best["value"])
+            # Nearest, not floor: the payout lands at a fixed hour each day, so
+            # 47 hours left spans two of them, and flooring lost a whole one -
+            # which on this event is a bigger error than everything the
+            # remaining cheering is worth.
+            days_left = int(round(hours_left / 24.0))
+            payout = int(days_left * per_day)
             forecast = {"hours": round(hours_left, 1), "actions": actions_left,
-                        "reward": int(actions_left * best["value"])}
+                        "cheering": cheering, "payouts": payout,
+                        "days": days_left, "reward": cheering + payout}
 
         return {
             "screen": state.get("screen"),
@@ -3351,6 +3384,8 @@ class EventOverview:
                        "reward": earned,
                        "expected": int(expected)},
             "luck": None if luck is None else round(luck, 2),
+            "other": other,
+            "per_day": int(per_day),
             "by_option": state.get("by_option") or {},
             "log": (state.get("log") or [])[:25],
             "forecast": forecast,

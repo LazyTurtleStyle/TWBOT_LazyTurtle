@@ -72,10 +72,19 @@
 			<div class="stat"><div class="v {{ 'gold' if c.luck >= 1 else '' }}">{{ (c.luck * 100)|round(0)|int }}%</div>
 				<div class="k">Luck</div><div class="sub">of the {{ c.totals.expected|comma }} those choices were worth</div></div>
 			{% endif %}
+			{% if c.other %}
+			<div class="stat"><div class="v">{{ c.other|comma }}</div>
+				<div class="k">Not from cheering</div>
+				<div class="sub">daily race payouts{% if c.per_day %}, about {{ c.per_day|comma }} a day{% endif %}
+					— plus anything you clicked by hand</div></div>
+			{% endif %}
 			{% if c.forecast %}
 			<div class="stat"><div class="v">{{ c.forecast.reward|comma }}</div>
 				<div class="k">Still to come</div>
-				<div class="sub">{{ c.forecast.actions }} actions in {{ c.forecast.hours }}h left</div></div>
+				<div class="sub">{{ c.forecast.cheering|comma }} from {{ c.forecast.actions }} actions
+					{%- if c.forecast.payouts %} + {{ c.forecast.payouts|comma }} from
+					{{ c.forecast.days }} more payout{{ '' if c.forecast.days == 1 else 's' }}{% endif %},
+					{{ c.forecast.hours }}h left</div></div>
 			{% endif %}
 		</div>
 	</div>
