@@ -626,7 +626,11 @@ class DataReader:
             #     not what anyone meant.
             escort = dict(train.get("escort") or {})
             followers = max(counts.get("snob", 0) - 1, 0)
-            if followers:
+            # Only front-loaded uses an escort at all: an even split divides the
+            # whole stack by the number of nobles and never reads it. Trimming
+            # (and saying so) in even mode would describe something that is not
+            # going to happen.
+            if followers and (train.get("mode") or "front") == "front":
                 for unit, per_wave in sorted(escort.items()):
                     have = counts.get(unit, 0)
                     if have and 0 < have // followers < per_wave:

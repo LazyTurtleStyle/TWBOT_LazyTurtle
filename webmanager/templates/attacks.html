@@ -12,6 +12,12 @@
 	.imp-legend { float: none; width: auto; font-size: .72rem; text-transform: uppercase;
 		letter-spacing: .09em; color: var(--accent); padding: 0 .35rem; margin: 0 0 .2rem; }
 	.imp-hint { font-size: .78rem; color: var(--muted); margin-top: .35rem; max-width: 32rem; }
+	/* The dark re-skin leaves disabled inputs unstyled, so the browser default
+	   renders their text near-invisible here and a switched-off control reads as
+	   a broken one. Keep the value legible and say "off" with colour instead. */
+	.imp-group select:disabled, .imp-group input:disabled {
+		color: var(--muted); background: var(--input-bg);
+		border-style: dashed; opacity: 1; cursor: not-allowed; }
 	.imp-steps li { margin-bottom: .15rem; }
 	.coord { font-variant-numeric: tabular-nums; }
 </style>
@@ -367,10 +373,10 @@
 				<legend class="imp-legend">Noble rows only</legend>
 				<div class="d-flex align-items-end flex-wrap" style="gap:.4rem">
 					<div>
-						<label class="small mb-1" for="p_mode">Split the stack</label>
+						<label class="small mb-1" for="p_mode">Troops across the waves</label>
 						<select id="p_mode" class="form-control form-control-sm">
-							<option value="front">Front-loaded train</option>
-							<option value="even">Even-split train</option>
+							<option value="front">All in wave 1 (front-loaded)</option>
+							<option value="even">Split evenly</option>
 						</select>
 					</div>
 					<div>
@@ -382,10 +388,17 @@
 						<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
 					</div>
 				</div>
-				<div class="imp-hint">Front-loaded puts the nuke in wave 1 and gives every
-					<em>following</em> noble the escort. The escort comes out of the same stack, so a
-					4-noble train at 50 each needs 150 in the row — ask for more than it carries and
-					it is trimmed to what fits.</div>
+				<div class="imp-hint">
+					<strong>How many waves?</strong> One per noble in the row's own troop box —
+					<code>snob:4</code> sends four commands, <code>snob:2</code> sends two. The plan
+					only fills that number in; change it there and the shape changes. One noble per
+					command always, because the game credits one loyalty hit per attack.<br>
+					<strong>These two settings</strong> decide where the <em>other</em> troops go.
+					Front-loaded keeps the whole stack in wave 1 apart from the escorts, so the first
+					wave hits hardest; splitting evenly divides everything by the number of nobles and
+					does not use the escort at all. An escort comes out of that same stack — 4 nobles
+					at 50 each needs 150 in the row, and asking for more than it carries trims it to
+					what fits.</div>
 			</fieldset>
 		</div>
 		<div id="p_summary" class="small mb-2"></div>
@@ -1162,11 +1175,26 @@ document.getElementById('p_template_reload').addEventListener('click', function(
 				: '<span class="text-danger">No cached templates to refresh yet.</span>';
 		});
 });
+/* An even split never reads the escort, so leaving those two boxes live invites
+   setting something that quietly does nothing. */
+function syncEscortEnabled() {
+	const even = document.getElementById('p_mode').value === 'even';
+	['p_escort_unit', 'p_escort_n'].forEach(id => {
+		const el = document.getElementById(id);
+		if (!el) return;
+		el.disabled = even;
+		el.title = even ? 'Not used when the stack is split evenly' : '';
+		if (el.parentElement) el.parentElement.style.opacity = even ? '.75' : '';
+	});
+}
 ['p_mode', 'p_escort_unit', 'p_escort_n'].forEach(id => {
 	const el = document.getElementById(id);
-	if (el) el.addEventListener('input', refreshTrainNotes);
-	if (el) el.addEventListener('change', refreshTrainNotes);
+	if (!el) return;
+	el.addEventListener('input', refreshTrainNotes);
+	el.addEventListener('change', refreshTrainNotes);
 });
+document.getElementById('p_mode').addEventListener('change', syncEscortEnabled);
+syncEscortEnabled();
 document.getElementById('p_all').addEventListener('change', function() {
 	document.querySelectorAll('.p-pick').forEach(cb => { if (!cb.disabled) cb.checked = this.checked; });
 });
