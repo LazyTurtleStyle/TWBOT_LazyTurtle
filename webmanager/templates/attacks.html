@@ -198,9 +198,10 @@
 				{% if movable %}
 				<span class="ml-auto d-flex align-items-center" style="gap:.35rem">
 					<small class="text-muted">shift ticked by</small>
-					<input id="rt_shift" type="number" step="0.1" value="1"
-						class="form-control form-control-sm" style="width:5.5rem">
-					<small class="text-muted">s</small>
+					<input id="rt_shift" type="number" step="50" min="1" value="1000"
+						class="form-control form-control-sm" style="width:6rem"
+						title="Milliseconds. 1000 is a second; 200 is about the gap a defender needs to slip a snipe in.">
+					<small class="text-muted">ms</small>
 					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(-1)"
 						title="Land earlier">&minus;</button>
 					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(1)"
@@ -869,37 +870,75 @@ function rtPost(rows, what) {
 }
 function shiftSched(sign) {
 	const box = document.getElementById('rt_shift');
-	const step = parseFloat(box ? box.value : '0');
-	if (isNaN(step) || !step) { alert('Set how many seconds to shift by.'); return; }
+	const ms = parseFloat(box ? box.value : '0');
+	if (isNaN(ms) || !ms) { alert('Set how many milliseconds to shift by.'); return; }
 	const rows = [];
 	document.querySelectorAll('.rt-pick:checked').forEach(cb => {
 		const at = parseFloat(cb.getAttribute('data-arrival'));
 		rows.push({id: cb.getAttribute('data-id'),
-			arrival: Math.round((at + sign * step) * 1000) / 1000});
+			arrival: Math.round((at * 1000 + sign * ms)) / 1000});
 	});
 	rtPost(rows, 'shifted');
 }
-/* Local wall-clock text for a timestamp, in the same shape the editor takes
-   back, so what you see is what you edit. */
+const rtPad = (n, w) => String(n).padStart(w || 2, '0');
+/* HH:MM:SS.mmm - what the editor shows and takes back, so what you read is
+   what you type. Milliseconds are always spelled out: this game is sniped in
+   100ms gaps, and a blank is not the same statement as ".000". */
+function rtClock(ts) {
+	const d = new Date(ts * 1000);
+	return rtPad(d.getHours()) + ':' + rtPad(d.getMinutes()) + ':' +
+		rtPad(d.getSeconds()) + '.' + rtPad(d.getMilliseconds(), 3);
+}
 function rtStamp(ts) {
-	const d = new Date(ts * 1000), p = (n, w) => String(n).padStart(w || 2, '0');
-	return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
-		p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' +
-		p(d.getMilliseconds(), 3);
+	const d = new Date(ts * 1000);
+	return d.getFullYear() + '-' + rtPad(d.getMonth() + 1) + '-' + rtPad(d.getDate()) +
+		' ' + rtClock(ts);
+}
+/* Accepts a bare time, which keeps the command's own date - the usual edit is
+   nudging the milliseconds of something landing tonight - or a whole date and
+   time when the day has to move too. */
+function rtParse(text, currentTs) {
+	text = (text || '').trim().replace(',', '.');
+	const t = text.match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+	if (t) {
+		const d = new Date(currentTs * 1000);
+		d.setHours(+t[1], +t[2], +t[3], t[4] ? parseInt((t[4] + '00').slice(0, 3), 10) : 0);
+		return d.getTime() / 1000;
+	}
+	const whole = new Date(text.replace(' ', 'T'));
+	return isNaN(whole.getTime()) ? NaN : whole.getTime() / 1000;
 }
 document.addEventListener('click', function(e) {
 	const link = e.target.closest ? e.target.closest('.rt-edit') : null;
 	if (!link) return;
 	e.preventDefault();
 	const cell = link.closest('td');
+	if (cell.querySelector('input')) return;                 // already editing
 	const id = link.getAttribute('data-id');
 	const current = parseFloat(cell.getAttribute('data-arrival'));
-	const typed = prompt('Land this command at (local time, milliseconds kept):',
-		rtStamp(current));
-	if (typed === null) return;
-	const when = new Date(typed.trim().replace(' ', 'T'));
-	if (isNaN(when.getTime())) { alert('Could not read "' + typed + '".'); return; }
-	rtPost([{id: id, arrival: Math.round(when.getTime()) / 1000}], 'set');
+	const original = cell.innerHTML;
+	const box = document.createElement('input');
+	box.type = 'text';
+	box.className = 'form-control form-control-sm text-right';
+	box.style.width = '9rem';
+	box.value = rtClock(current);
+	box.title = 'HH:MM:SS.mmm, or a whole date and time. Enter saves, Esc cancels.';
+	cell.innerHTML = '';
+	cell.appendChild(box);
+	box.focus();
+	box.setSelectionRange(box.value.length, box.value.length);
+	let done = false;
+	const restore = () => { if (!done) { done = true; cell.innerHTML = original; } };
+	box.addEventListener('keydown', function(ev) {
+		if (ev.key === 'Escape') { restore(); return; }
+		if (ev.key !== 'Enter') return;
+		const when = rtParse(box.value, current);
+		if (isNaN(when)) { box.classList.add('is-invalid'); return; }
+		if (Math.round(when * 1000) === Math.round(current * 1000)) { restore(); return; }
+		done = true;                                          // rtPost reloads
+		rtPost([{id: id, arrival: Math.round(when * 1000) / 1000}], 'set');
+	});
+	box.addEventListener('blur', restore);
 });
 (function() {
 	const all = document.getElementById('rt_all');

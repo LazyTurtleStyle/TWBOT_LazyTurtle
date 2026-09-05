@@ -82,10 +82,13 @@ def format_timestamp(value):
 
 @app.template_filter('tsms')
 def format_timestamp_ms(value):
-    """Like `ts`, but to the second - and to the millisecond when the timestamp
-    has them. A timed attack is queued to land on an exact moment, so the queue
-    has to show that moment: two commands 300ms apart would otherwise be
-    indistinguishable in the table."""
+    """Like `ts`, but always to the millisecond.
+
+    A timed attack is queued to land on an exact moment, and in this game that
+    moment matters to the millisecond - a defender can slip a snipe into a
+    100ms gap. So the queue shows all three digits even when they are zero:
+    ".000" says the command lands exactly on the second, where a blank said
+    only that nobody knows."""
     if not value:
         return "-"
     try:
@@ -93,7 +96,7 @@ def format_timestamp_ms(value):
     except (ValueError, OSError, TypeError):
         return "-"
     millis = moment.microsecond // 1000
-    return moment.strftime("%d %b %H:%M:%S") + (".%03d" % millis if millis else "")
+    return moment.strftime("%d %b %H:%M:%S") + ".%03d" % millis
 
 
 @app.template_filter('comma')
