@@ -243,15 +243,29 @@ class OverviewPage:
                 continue
             try:
                 cells = row.find_all("td")
-                idx_offset = 1 if len(cells[0].contents) == 0 else 0  # Compatibility with premium account
 
-                # Find data-id: try contents[1] first, then search any child element
-                cell = cells[idx_offset]
-                el_with_id = None
-                if len(cell.contents) > 1 and hasattr(cell.contents[1], "attrs") and "data-id" in cell.contents[1].attrs:
-                    el_with_id = cell.contents[1]
-                else:
-                    el_with_id = cell.find(attrs={"data-id": True})
+                # The village's own cell is the one carrying data-id, so find it
+                # rather than guessing which column it is.
+                #
+                # It used to be guessed - "first cell empty means there is a
+                # leading column" - and the guess was wrong about what that
+                # leading column is. It is the notes column: empty for most
+                # villages, holding an icon for any village that has a note. A
+                # freshly conquered village gets one automatically (the game
+                # attaches the conquest report), so its first cell was not
+                # empty, the offset came out one short, no data-id was found in
+                # the notes cell and the whole row was skipped. The village then
+                # never existed as far as the bot was concerned: never added,
+                # never named, never managed - and had it been an existing
+                # village that gained a note, prune_lost_villages would have
+                # read the absence as "conquered" and deleted its config and
+                # cache.
+                el_with_id, idx_offset = None, 0
+                for index, cell in enumerate(cells):
+                    found = cell.find(attrs={"data-id": True})
+                    if found is not None:
+                        el_with_id, idx_offset = found, index
+                        break
                 if el_with_id is None:
                     continue
                 village_id = el_with_id.attrs["data-id"]
