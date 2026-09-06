@@ -46,6 +46,7 @@ from game import csnipe
 from game import accountmanager
 from game import dailybonus
 from game import events
+from game import minter
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
@@ -1201,6 +1202,16 @@ class TWB:
 
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)
+
+                # Keep the coin village stocked. Not urgent - merchants take
+                # half an hour to walk anyway - so it sits with the other
+                # periodic work rather than in front of anything with a
+                # deadline. It runs on its own clock inside run().
+                try:
+                    minter.run(self.wrapper, config)
+                except Exception as exc:
+                    logging.getLogger("Minter").warning(
+                        "Minting pass failed: %s", exc)
 
                 village_number = int(
                     config["bot"].get("village_name_number_start", 1) or 1)

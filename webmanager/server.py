@@ -13,13 +13,14 @@ try:
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
                                   PlayerFarmOverview, PlanImport,
-                                  AccountManagerOverview, EventOverview)
+                                  AccountManagerOverview, EventOverview,
+                                  MintingOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
-                       AccountManagerOverview, EventOverview)
+                       AccountManagerOverview, EventOverview, MintingOverview)
 
 import datetime
 from html import escape as html_escape
@@ -805,6 +806,19 @@ def am_refresh():
     return jsonify({"ok": DataReader.am_request("refresh")})
 
 
+@app.route('/minting', methods=['GET'])
+def minting_page():
+    data = sync()
+    return render_template('minting.html', data=data, mint=MintingOverview.build(data))
+
+
+@app.route('/app/minting/run', methods=['GET', 'POST'])
+def minting_run_now():
+    """Ask the bot to do a resource run on its next cycle, rather than waiting
+    out the interval."""
+    return jsonify({"ok": DataReader.minting_run_now()})
+
+
 @app.route('/events', methods=['GET'])
 def events_page():
     data = sync()
@@ -1204,6 +1218,7 @@ QUICK_TOGGLES = {
     # The weekly event: its energy bar refills whether or not anyone is looking,
     # which is exactly the kind of thing worth handing over with one click.
     "event": ("Play the event", "events.auto_play"),
+    "mint": ("Feed the coin village", "minting.enabled"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).

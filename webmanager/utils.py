@@ -1046,6 +1046,23 @@ class DataReader:
     # -- rotating in-game events -------------------------------------------
 
     @staticmethod
+    def minting_run_now():
+        """Ask the bot for a resource run on its next cycle."""
+        path = DataReader.data_path("cache", "minting.json")
+        try:
+            state = {}
+            if os.path.exists(path):
+                with open(path) as handle:
+                    state = json.load(handle) or {}
+            state["run_now"] = True
+            DataReader.ensure_data_dir("cache")
+            with open(path, "w") as handle:
+                json.dump(state, handle, indent=2)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
     def events_dir():
         return DataReader.data_path("cache", "events")
 
@@ -3508,6 +3525,84 @@ class EventOverview:
             "current": current,
             "history": history,
             "ever": bool(states),
+        }
+
+
+class MintingOverview:
+    """What the Minting page shows: the coin village, and whether it is fed.
+
+    Coins buy noble limits, so the number that matters is not "how many
+    resources arrived" but "how many coins will that mint" - the ratio is the
+    whole game, since a warehouse of iron and no clay mints nothing.
+    """
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("minting", {}) or {}
+        state = {}
+        try:
+            path = DataReader.data_path("cache", "minting.json")
+            if os.path.exists(path):
+                with open(path) as handle:
+                    state = json.load(handle) or {}
+        except (OSError, ValueError):
+            state = {}
+
+        village_id = str(settings.get("village") or "")
+        managed = data.get("bot", {}) or {}
+        village = managed.get(village_id) or {}
+        academy = state.get("academy") or {}
+        cost = academy.get("cost") or {}
+
+        def coins_from(amounts):
+            """A pile of resources is worth the fewest coins any one of them
+            allows - the point of asking in coin ratio."""
+            if not cost or not amounts:
+                return None
+            return min(int((amounts.get(r) or 0) / cost[r])
+                       for r in ("wood", "stone", "iron") if cost.get(r))
+
+        held = {r: int((village.get("resources") or {}).get(r) or 0)
+                for r in ("wood", "stone", "iron")}
+        incoming = state.get("incoming") or {}
+        arriving = {r: int(held.get(r, 0)) + int(incoming.get(r, 0))
+                    for r in ("wood", "stone", "iron")}
+
+        groups = [{"id": "0", "name": "alle"}] + [
+            {"id": g.get("id"), "name": g.get("name")}
+            for g in DataReader.groups_grab()]
+
+        return {
+            "enabled": bool(settings.get("enabled")),
+            "village_id": village_id,
+            "village_name": village.get("name") or village_id,
+            "village_missing": bool(village_id) and not village,
+            "group": str(settings.get("group", "0") or "0"),
+            "groups": groups,
+            "ratio": str(settings.get("ratio", "coin") or "coin"),
+            "interval": int(settings.get("interval_minutes", 60) or 60),
+            "keep": int(settings.get("keep", 0) or 0),
+            "villages": [{"id": v, "name": (d.get("name") or v)}
+                         for v, d in sorted(managed.items(),
+                                            key=lambda kv: str(kv[1].get("name")))],
+            "coins": academy.get("coins"),
+            "cost": cost,
+            "discount": academy.get("discount"),
+            "auto_mint": academy.get("auto_mint"),
+            "auto_status": academy.get("auto_status"),
+            "read_when": academy.get("when"),
+            "held": held,
+            "incoming": incoming,
+            "coins_now": coins_from(held),
+            "coins_after": coins_from(arriving),
+            "last_run": state.get("last_run"),
+            "asked": state.get("asked_villages"),
+            "candidates": state.get("candidates"),
+            "last_total": state.get("last_total") or {},
+            "last_coins": coins_from(state.get("last_total") or {}),
+            "last_asks": state.get("last_asks") or [],
+            "pending": bool(state.get("run_now")),
         }
 
 

@@ -1,0 +1,188 @@
+{% extends "shell.html" %}
+{% block title %}Coin minting{% endblock %}
+
+{% block content %}
+<p class="text-muted small mt-1">
+	Coins buy noble limits, and minting them is a logistics job: one village holds the
+	coin-cost flag, the game mints there automatically for eight hours at a time, and the
+	only recurring work is keeping its warehouse full. That is what this does — every
+	{{ mint.interval }} minutes it opens that village's <em>grondstoffen opvragen</em>
+	screen and asks the rest of the account for what it can spare.
+	It never mints, never switches on auto-minting and never moves a flag.
+</p>
+
+{% if not mint.village_id %}
+<div class="alert alert-warning py-2">
+	<strong>No coin village set.</strong> Pick the village that holds your coin-cost flag below.
+</div>
+{% elif mint.village_missing %}
+<div class="alert alert-danger py-2">
+	<strong>Village {{ mint.village_id }} is not one the bot manages</strong> — check the setting below.
+</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center flex-wrap">
+		<span><strong>{{ mint.village_name }}</strong>
+			<small class="text-muted ml-2">
+				{% if mint.read_when %}read {{ mint.read_when|ago }}{% else %}not read yet{% endif %}
+				{% if mint.last_run %} · last run {{ mint.last_run|ago }}{% endif %}</small></span>
+		<span class="ml-auto d-flex align-items-center" style="gap:.4rem">
+			<button class="btn btn-sm" id="m_now">Request now</button>
+			<button class="btn btn-sm {{ 'btn-success' if mint.enabled else 'btn-danger' }}"
+				id="m_toggle" data-on="{{ '1' if mint.enabled else '0' }}">
+				{{ 'Feeding it' if mint.enabled else 'Not feeding it' }}</button>
+		</span>
+	</div>
+	<div class="card-body py-2">
+		{% if mint.pending %}<div class="small mb-2" style="color:var(--ember)">
+			&#9201; A run is queued — it happens on the bot's next cycle.</div>{% endif %}
+		<div class="stats">
+			<div class="stat"><div class="v gold">{{ mint.coins if mint.coins is not none else '?' }}</div>
+				<div class="k">Coins</div><div class="sub">minted so far</div></div>
+			<div class="stat"><div class="v">{{ mint.coins_now if mint.coins_now is not none else '?' }}</div>
+				<div class="k">Coins in the warehouse</div>
+				<div class="sub">{% if mint.coins_after is not none %}{{ mint.coins_after }} once the merchants land{% endif %}</div></div>
+			{% if mint.cost %}
+			<div class="stat"><div class="v" style="font-size:19px">{{ mint.cost.wood|comma }}/{{ mint.cost.stone|comma }}/{{ mint.cost.iron|comma }}</div>
+				<div class="k">Cost per coin</div>
+				<div class="sub">{% if mint.discount %}{{ (mint.discount * 100)|round(0)|int }}% off — flag and boosts{% else %}no discount{% endif %}</div></div>
+			{% endif %}
+			<div class="stat"><div class="v {{ 'gold' if mint.auto_mint else '' }}">{{ 'on' if mint.auto_mint else 'off' }}</div>
+				<div class="k">Game auto-minting</div>
+				<div class="sub">{% if mint.auto_mint %}minting by itself{% else %}resources will just pile up — switch it on in game{% endif %}</div></div>
+		</div>
+		{% if not mint.auto_mint and mint.enabled %}
+		<div class="alert alert-warning py-2 small mt-2 mb-0">
+			Auto-minting is <strong>off</strong>, so everything sent here sits in the warehouse
+			until you mint by hand. Turn it on in the village's academy (8 hours a session)
+			— otherwise the warehouse fills and further deliveries are wasted.
+		</div>
+		{% endif %}
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-lg-5 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>Settings</strong></div>
+			<div class="card-body py-2">
+				<div class="form-group mb-2">
+					<label class="small mb-1">Coin village</label>
+					<select class="form-control form-control-sm m-set" data-key="minting.village">
+						<option value="">— pick one —</option>
+						{% for v in mint.villages %}
+						<option value="{{ v.id }}" {{ 'selected' if v.id == mint.village_id }}>{{ v.name }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Take resources from</label>
+					<select class="form-control form-control-sm m-set" data-key="minting.group">
+						{% for g in mint.groups %}
+						<option value="{{ g.id }}" {{ 'selected' if g.id|string == mint.group }}>{{ g.name }}</option>
+						{% endfor %}
+					</select>
+					<small class="text-muted">A group when only the big villages should be emptied.</small>
+				</div>
+				<div class="form-row">
+					<div class="form-group col-6 mb-2">
+						<label class="small mb-1">Ask in</label>
+						<select class="form-control form-control-sm m-set" data-key="minting.ratio">
+							<option value="coin" {{ 'selected' if mint.ratio == 'coin' }}>Coin ratio</option>
+							<option value="even" {{ 'selected' if mint.ratio == 'even' }}>Equal amounts</option>
+						</select>
+					</div>
+					<div class="form-group col-6 mb-2">
+						<label class="small mb-1">Every (minutes)</label>
+						<input type="number" min="5" class="form-control form-control-sm m-set"
+							data-key="minting.interval_minutes" value="{{ mint.interval }}">
+					</div>
+				</div>
+				<div class="form-group mb-1">
+					<label class="small mb-1">Leave behind in each village</label>
+					<input type="number" min="0" step="1000" class="form-control form-control-sm m-set"
+						data-key="minting.keep" value="{{ mint.keep }}">
+					<small class="text-muted">Per resource, so the senders can still build and recruit.</small>
+				</div>
+				<div id="m_saved" class="small" style="color:var(--moss); display:none">Saved — applies on the next run.</div>
+			</div>
+		</div>
+	</div>
+	<div class="col-lg-7 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>Last run</strong>
+				<small class="text-muted ml-2">
+					{% if mint.asked %}asked {{ mint.asked }} of {{ mint.candidates }} villages{% else %}nothing asked yet{% endif %}</small></div>
+			{% if mint.last_asks %}
+			<div class="card-body py-2">
+				<div class="d-flex flex-wrap" style="gap:1.2rem">
+					<div><span class="eyebrow">Requested</span>
+						<div class="mono">{{ mint.last_total.wood|comma }} / {{ mint.last_total.stone|comma }} / {{ mint.last_total.iron|comma }}</div></div>
+					{% if mint.last_coins %}
+					<div><span class="eyebrow">Worth</span>
+						<div class="mono gold">{{ mint.last_coins }} coins</div></div>
+					{% endif %}
+					<div><span class="eyebrow">On the way now</span>
+						<div class="mono">{{ mint.incoming.wood|comma }} / {{ mint.incoming.stone|comma }} / {{ mint.incoming.iron|comma }}</div></div>
+				</div>
+			</div>
+			<div class="table-responsive" style="max-height:320px; overflow-y:auto">
+				<table class="table table-sm table-striped mb-0">
+					<thead><tr><th>From</th><th class="text-right">Wood</th><th class="text-right">Clay</th>
+						<th class="text-right">Iron</th><th class="text-right">Walks</th></tr></thead>
+					<tbody>
+					{% for a in mint.last_asks %}
+					<tr><td><small>{{ a.name }}</small></td>
+						<td class="text-right mono">{{ a.amounts.wood|comma }}</td>
+						<td class="text-right mono">{{ a.amounts.stone|comma }}</td>
+						<td class="text-right mono">{{ a.amounts.iron|comma }}</td>
+						<td class="text-right faint">{{ a.duration }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">
+				Nothing yet. {% if not mint.enabled %}Switch on <em>Feeding it</em>, or press
+				<em>Request now</em> for a single run.{% else %}The bot runs on its next cycle.{% endif %}
+			</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.m-set').forEach(el => {
+	el.addEventListener('change', function() {
+		fetch('/app/config/set?parameter=' + encodeURIComponent(this.dataset.key) +
+			'&value=' + encodeURIComponent(this.value))
+			.then(() => {
+				const note = document.getElementById('m_saved');
+				note.style.display = '';
+				setTimeout(() => { note.style.display = 'none'; }, 2500);
+			});
+	});
+});
+document.getElementById('m_now').onclick = function() {
+	const btn = this;
+	btn.disabled = true;
+	fetch('/app/minting/run').then(r => r.json()).then(d => {
+		btn.textContent = d && d.ok ? 'Queued for the next cycle' : 'Could not queue';
+	});
+};
+document.getElementById('m_toggle').onclick = function() {
+	const next = this.getAttribute('data-on') === '1' ? '0' : '1', btn = this;
+	fetch('/app/quick/set?key=mint&value=' + (next === '1' ? 'true' : 'false'))
+		.then(r => r.json()).then(d => {
+			if (!d || !d.ok) return;
+			btn.setAttribute('data-on', next);
+			btn.textContent = next === '1' ? 'Feeding it' : 'Not feeding it';
+			btn.classList.toggle('btn-success', next === '1');
+			btn.classList.toggle('btn-danger', next !== '1');
+		});
+};
+</script>
+{% endblock %}
