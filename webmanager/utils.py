@@ -834,6 +834,13 @@ class DataReader:
     def schedule_cancel(command_id):
         return attack_scheduler.cancel_command(command_id, path=DataReader.schedule_path())
 
+    @staticmethod
+    def schedule_cancel_many(command_ids):
+        """Cancel a set of queued commands at once. Returns how many were still
+        pending and therefore actually cancelled."""
+        return attack_scheduler.cancel_commands(command_ids,
+                                                path=DataReader.schedule_path())
+
     CSNIPE_REL = ("cache", "csnipes.json")
 
     @staticmethod

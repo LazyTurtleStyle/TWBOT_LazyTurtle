@@ -277,6 +277,8 @@
 						title="Land earlier">&minus;</button>
 					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(1)"
 						title="Land later">+</button>
+					<button class="btn btn-outline-danger btn-sm py-0 ml-2" onclick="cancelTicked()"
+						title="Cancel every ticked command">Cancel ticked</button>
 				</span>
 				{% endif %}
 			</div>
@@ -1047,6 +1049,25 @@ function rtPost(rows, what) {
 		}
 		location.reload();
 	}).catch(e => alert('Could not move: ' + e));
+}
+/* Cancelling one at a time is fine for one; a plan that turned out wrong is
+   twenty rows, and late in a world it is a great deal more than that. */
+function cancelTicked() {
+	const ids = [];
+	document.querySelectorAll('.rt-pick:checked').forEach(cb => ids.push(cb.getAttribute('data-id')));
+	if (!ids.length) { alert('Tick the commands to cancel first.'); return; }
+	if (!confirm('Cancel ' + ids.length + ' command' + (ids.length === 1 ? '' : 's') +
+		'?\n\nTroops already sent are not recalled - this only stops what has not left yet.')) return;
+	fetch(appUrl('/app/attack/schedule/cancel_many'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({ids: ids})
+	}).then(r => r.json()).then(d => {
+		if (d.cancelled < ids.length) {
+			alert('Cancelled ' + d.cancelled + ' of ' + ids.length +
+				'. The rest had already left or were not pending.');
+		}
+		location.reload();
+	}).catch(e => alert('Could not cancel: ' + e));
 }
 function shiftSched(sign) {
 	const box = document.getElementById('rt_shift');

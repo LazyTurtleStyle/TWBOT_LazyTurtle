@@ -675,6 +675,15 @@ def attack_schedule_cancel():
     return jsonify({"ok": DataReader.schedule_cancel(cid)})
 
 
+@app.route('/app/attack/schedule/cancel_many', methods=['POST'])
+def attack_schedule_cancel_many():
+    """Cancel several queued commands at once. Expects JSON {ids: [...]}.
+    Only pending commands change, so re-sending a stale list is harmless."""
+    body = request.get_json(silent=True) or {}
+    cancelled = DataReader.schedule_cancel_many(body.get("ids") or [])
+    return jsonify({"ok": True, "cancelled": int(cancelled or 0)})
+
+
 @app.route('/app/attack/schedule/retime', methods=['POST'])
 def attack_schedule_retime():
     """Move queued commands to new arrival times. Expects JSON:
