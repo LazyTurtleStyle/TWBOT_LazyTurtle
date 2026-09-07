@@ -279,6 +279,16 @@ def run(wrapper, config, village_ids=None):
     academy = read_academy(wrapper, village_id)
     if academy:
         state["academy"] = dict(academy, when=now)
+        # A running tally of the coin count, because the interesting number is
+        # not how many coins exist but how many arrived since you last looked -
+        # and the game does not report that anywhere. Only changes are kept, so
+        # a quiet night costs no entries.
+        coins = academy.get("coins")
+        if coins is not None:
+            history = state.setdefault("coin_history", [])
+            if not history or history[-1].get("coins") != coins:
+                history.append({"ts": now, "coins": int(coins)})
+                del history[:-400]
     call = read_call(wrapper, village_id, str(settings.get("group", "0") or "0"))
     if call is None:
         logger.warning("Could not read the request screen for village %s",
@@ -316,6 +326,13 @@ def run(wrapper, config, village_ids=None):
     total = {r: sum(a["amounts"][r] for a in asks) for r in RESOURCES}
     logger.info("Minting: asked %d village(s) for %s wood, %s stone, %s iron",
                 sent, total["wood"], total["stone"], total["iron"])
+    # What this module has actually delivered, as opposed to what is walking at
+    # any one moment: the running total is the honest measure of its work.
+    lifetime = state.setdefault("requested_total", {r: 0 for r in RESOURCES})
+    for kind in RESOURCES:
+        lifetime[kind] = int(lifetime.get(kind, 0)) + total[kind]
+    if sent:
+        state["runs_with_requests"] = int(state.get("runs_with_requests") or 0) + 1
     state.update({
         "last_run": now,
         "village": village_id,

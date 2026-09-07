@@ -44,14 +44,20 @@
 		<div class="stats">
 			<div class="stat"><div class="v gold">{{ mint.coins if mint.coins is not none else '?' }}</div>
 				<div class="k">Coins</div><div class="sub">minted so far</div></div>
-			<div class="stat"><div class="v">{{ mint.coins_now if mint.coins_now is not none else '?' }}</div>
-				<div class="k">Coins in the warehouse</div>
-				<div class="sub">{% if mint.coins_after is not none %}{{ mint.coins_after }} once the merchants land{% endif %}</div></div>
+			<div class="stat"><div class="v {{ 'gold' if mint.minted.today }}">{% if mint.minted.today is not none %}+{{ mint.minted.today }}{% else %}—{% endif %}</div>
+				<div class="k">Minted today</div>
+				<div class="sub">{% if mint.minted.coins is not none %}+{{ mint.minted.coins }} since {{ mint.minted.since|ago }}{% if mint.minted.per_hour %}, {{ mint.minted.per_hour }}/hour{% endif %}{% else %}watching from now on{% endif %}</div></div>
+			<div class="stat"><div class="v">{{ mint.requested_coins if mint.requested_coins else 0 }}</div>
+				<div class="k">Coins the bot has hauled</div>
+				<div class="sub">{% if mint.requested_total.wood %}{{ mint.requested_total.wood|kshort }} / {{ mint.requested_total.stone|kshort }} / {{ mint.requested_total.iron|kshort }} over {{ mint.runs_with_requests }} run{{ '' if mint.runs_with_requests == 1 else 's' }}{% else %}nothing requested yet{% endif %}</div></div>
 			{% if mint.cost %}
 			<div class="stat"><div class="v" style="font-size:15px; white-space:nowrap">{{ mint.cost.wood|comma }} / {{ mint.cost.stone|comma }} / {{ mint.cost.iron|comma }}</div>
 				<div class="k">Cost per coin</div>
 				<div class="sub">{% if mint.discount %}{{ (mint.discount * 100)|round(0)|int }}% off — flag and boosts{% else %}no discount{% endif %}</div></div>
 			{% endif %}
+			<div class="stat"><div class="v" style="font-size:15px; white-space:nowrap">{{ mint.held.wood|kshort }} / {{ mint.held.stone|kshort }} / {{ mint.held.iron|kshort }}</div>
+				<div class="k">In the warehouse</div>
+				<div class="sub">{% if mint.incoming.wood %}{{ mint.incoming.wood|kshort }} / {{ mint.incoming.stone|kshort }} / {{ mint.incoming.iron|kshort }} still walking{% else %}nothing on the way{% endif %}</div></div>
 			<div class="stat"><div class="v {{ 'gold' if mint.auto_mint else '' }}">{{ 'on' if mint.auto_mint else 'off' }}</div>
 				<div class="k">Game auto-minting</div>
 				<div class="sub">{% if mint.auto_mint %}minting by itself{% else %}resources will just pile up — switch it on in game{% endif %}</div></div>

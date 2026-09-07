@@ -3575,6 +3575,27 @@ class MintingOverview:
 
         held = {r: int((village.get("resources") or {}).get(r) or 0)
                 for r in ("wood", "stone", "iron")}
+
+        # How many coins have appeared since the bot started watching, and since
+        # midnight. The game reports a running total only, so the interesting
+        # number - what arrived recently - has to be differenced out of samples.
+        history = state.get("coin_history") or []
+        minted = {"since": None, "coins": None, "today": None, "per_hour": None}
+        if len(history) >= 2 and history[-1].get("coins") is not None:
+            first, last = history[0], history[-1]
+            minted["since"] = first.get("ts")
+            minted["coins"] = last["coins"] - first["coins"]
+            hours = max((last["ts"] - first["ts"]) / 3600.0, 1 / 60.0)
+            minted["per_hour"] = round(minted["coins"] / hours, 1)
+            midnight = datetime.datetime.combine(
+                datetime.date.today(), datetime.time()).timestamp()
+            todays = [h for h in history if h.get("ts", 0) >= midnight]
+            if todays:
+                # The last sample before midnight is the day's true starting
+                # point; without it a day's first sample looks like zero growth.
+                before = [h for h in history if h.get("ts", 0) < midnight]
+                base = before[-1]["coins"] if before else todays[0]["coins"]
+                minted["today"] = last["coins"] - base
         incoming = state.get("incoming") or {}
         arriving = {r: int(held.get(r, 0)) + int(incoming.get(r, 0))
                     for r in ("wood", "stone", "iron")}
@@ -3606,6 +3627,10 @@ class MintingOverview:
             "incoming": incoming,
             "coins_now": coins_from(held),
             "coins_after": coins_from(arriving),
+            "minted": minted,
+            "requested_total": state.get("requested_total") or {},
+            "requested_coins": coins_from(state.get("requested_total") or {}),
+            "runs_with_requests": state.get("runs_with_requests") or 0,
             "last_run": state.get("last_run"),
             "next_run": (int(state.get("last_run") or 0)
                          + int(settings.get("interval_minutes", 60) or 60) * 60
