@@ -242,18 +242,23 @@ def run(wrapper, config, village_ids=None):
     switches on auto-minting, or touches a flag.
     """
     settings = (config or {}).get("minting", {}) or {}
-    if not settings.get("enabled", False):
+    state = load_state()
+    # "Request now" is a one-off the user asked for, so it is served whether or
+    # not the recurring run is switched on - the button existing at all is the
+    # promise that pressing it does something.
+    asked = bool(state.get("run_now"))
+    if not settings.get("enabled", False) and not asked:
         return
     village_id = str(settings.get("village") or "").strip()
     if not village_id:
         logger.warning("Minting is on but no coin village is set")
         return
 
-    state = load_state()
     interval = max(5, int(settings.get("interval_minutes", 60) or 60)) * 60
     now = int(time.time())
-    due = now - int(state.get("last_run") or 0) >= interval
-    if not due and not state.get("run_now"):
+    due = (settings.get("enabled", False)
+           and now - int(state.get("last_run") or 0) >= interval)
+    if not due and not asked:
         return
     state["run_now"] = False
 
@@ -269,13 +274,22 @@ def run(wrapper, config, village_ids=None):
         return
 
     # What the target can still hold. Anything beyond this is thrown away on
-    # arrival, so it is the number the whole plan is built around.
-    storage = int(settings.get("storage", 0) or 0)
+    # arrival, so it is the number the whole plan is built around - and it is
+    # the TARGET's warehouse that matters. It used to take the largest warehouse
+    # among the sending villages as a stand-in, which is a different village's
+    # number and wrong in both directions.
+    target = FileManager.load_json_file(
+        "cache/managed/%s.json" % village_id) or {}
+    storage = int(settings.get("storage", 0) or 0) or int(target.get("storage_max") or 0)
     if not storage:
+        # No snapshot of the coin village yet: fall back to the biggest
+        # warehouse on the screen rather than planning against nothing.
         for village in call["villages"]:
             storage = max(storage, village.get("storage") or 0)
-    held = sum((state.get("held") or {}).values())
-    headroom = max(0, storage * len(RESOURCES) - sum(call["incoming"].values()) - held)
+    held = {r: int((target.get("resources") or {}).get(r) or 0) for r in RESOURCES}
+    state["held"] = held
+    headroom = max(0, storage * len(RESOURCES)
+                   - sum(call["incoming"].values()) - sum(held.values()))
 
     asks = plan_request(
         call["villages"], headroom,

@@ -3353,8 +3353,18 @@ class AccountManagerOverview:
             managed = [v for v in villages if cls._managed(key, v)]
             idle = [v for v in managed if cls._queued(v) == 0] \
                 if key == "building" else []
+            # A section whose switch is off is not applied - the switches say
+            # which jobs the manager is doing, and setting up one it is not
+            # doing is not what anyone means. Say so where the rows are, rather
+            # than letting the run quietly skip them.
+            handled = True
+            if flags.get("enabled"):
+                handled = bool(flags.get(
+                    {"building": "building", "troops": "recruiting",
+                     "research": "research"}[key], False))
             sections.append({
                 "key": key, "label": label, "screen": screen, "dutch": dutch,
+                "handled": handled,
                 "templates": templates, "groups": groups, "villages": villages,
                 "rows": rows, "when": snap.get("when"),
                 "total": len(villages), "managed": len(managed),

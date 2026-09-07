@@ -60,6 +60,12 @@ SCREENS = {
     "research": "am_research",
 }
 SECTION_ORDER = ("building", "troops", "research")
+# Which account_manager switch owns each screen. The switches say which jobs the
+# in-game manager is doing; the plan says what it should do for them. Setting up
+# a job you have just said the manager is not doing is not a thing anyone means,
+# so a section whose switch is off is left alone.
+SECTION_SWITCH = {"building": "building", "troops": "recruiting",
+                  "research": "research"}
 
 # The unit columns of the troop-manager form, in the order the game renders
 # them. Also the exact set of field names its save accepts.
@@ -471,15 +477,34 @@ def refresh(wrapper, village_id, sections=SECTION_ORDER):
     return state
 
 
-def apply_plans(wrapper, village_id, plans=None, source="bot"):
+def section_handled(settings, section):
+    """Is the manager doing this job at all?
+
+    While the master switch is off nothing has been handed over yet, and the
+    per-job switches are documented as ignored - that is the state for setting a
+    plan up before the hand-over, so the plan still applies. Once it is on, the
+    per-job switches mean what they say.
+    """
+    if not (settings or {}).get("enabled", False):
+        return True
+    return bool((settings or {}).get(SECTION_SWITCH[section], False))
+
+
+def apply_plans(wrapper, village_id, plans=None, source="bot", settings=None):
     """Walk the whole plan, in order, and record the outcome.
 
     Order is the point: rows are applied top to bottom so a later row can
     deliberately overwrite an earlier one for the villages the two groups share.
     """
     plans = plans or load_plans()
-    rows = []
+    rows, skipped = [], []
     for section in SECTION_ORDER:
+        if not section_handled(settings, section):
+            if plans.get(section):
+                skipped.append(section)
+                logger.info("Account Manager %s: switched off, so its %d row(s) "
+                            "were not applied", section, len(plans[section]))
+            continue
         for row in plans.get(section) or []:
             group_id = str(row.get("group_id") or "")
             template_id = str(row.get("template_id") or "")
@@ -495,13 +520,14 @@ def apply_plans(wrapper, village_id, plans=None, source="bot"):
                 "" if outcome["ok"] else " FAILED: %s" % outcome["error"])
     state = load_state()
     state["last_result"] = {"when": int(time.time()), "source": source,
-                            "rows": rows}
+                            "rows": rows, "skipped": skipped}
     save_state(state)
     if rows:
         # The state the plan just produced is the state worth showing, so read
         # it back while the pages are certain to be fresh.
         refresh(wrapper, village_id,
-                sections=[s for s in SECTION_ORDER if plans.get(s)])
+                sections=[s for s in SECTION_ORDER
+                          if plans.get(s) and section_handled(settings, s)])
     return rows
 
 
@@ -531,7 +557,8 @@ def run(wrapper, village_id, config, active_hours=True):
         update_plans(lambda p: p.update({"run_now": False}))
         logger.info("Applying the Account Manager plan (asked from the "
                     "dashboard)")
-        apply_plans(wrapper, village_id, plans, source="dashboard")
+        apply_plans(wrapper, village_id, plans, source="dashboard",
+                    settings=settings)
         return
 
     if not active_hours or not settings.get("auto_setup", False) or not has_rows:
@@ -541,7 +568,7 @@ def run(wrapper, village_id, config, active_hours=True):
     if state.get("last_run") == today:
         return
     logger.info("Applying the Account Manager plan for %s", today)
-    apply_plans(wrapper, village_id, plans, source="bot")
+    apply_plans(wrapper, village_id, plans, source="bot", settings=settings)
     # Written after the pass, so a crash midway retries next cycle rather than
     # skipping the day.
     state = load_state()

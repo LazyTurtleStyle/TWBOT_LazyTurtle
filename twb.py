@@ -1200,18 +1200,20 @@ class TWB:
                     logging.getLogger("AccountManager").warning(
                         "Account Manager setup failed: %s", exc)
 
-                if config.get("farms", {}).get("player_farm_priority", True):
-                    self.run_player_farms(config)
-
-                # Keep the coin village stocked. Not urgent - merchants take
-                # half an hour to walk anyway - so it sits with the other
-                # periodic work rather than in front of anything with a
-                # deadline. It runs on its own clock inside run().
+                # Keep the coin village stocked, before the farm runs and the
+                # village loop. Those two spend the resources this is trying to
+                # collect - and the village loop is most of the cycle, so asking
+                # after it would mean the merchants leave an hour later than
+                # they needed to.
                 try:
                     minter.run(self.wrapper, config)
                 except Exception as exc:
                     logging.getLogger("Minter").warning(
                         "Minting pass failed: %s", exc)
+
+                if config.get("farms", {}).get("player_farm_priority", True):
+                    self.run_player_farms(config)
+
 
                 village_number = int(
                     config["bot"].get("village_name_number_start", 1) or 1)
