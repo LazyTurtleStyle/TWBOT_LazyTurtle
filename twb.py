@@ -46,6 +46,7 @@ from game import csnipe
 from game import accountmanager
 from game import dailybonus
 from game import events
+from game import markings
 from game import minter
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
@@ -1199,6 +1200,15 @@ class TWB:
                 except Exception as exc:
                     logging.getLogger("AccountManager").warning(
                         "Account Manager setup failed: %s", exc)
+
+                # The player's own map markings, so the dashboard's map is
+                # coloured the way theirs is. Self-limiting to once a day.
+                try:
+                    markings.run(self.wrapper,
+                                 next(iter(config["villages"]), None))
+                except Exception as exc:
+                    logging.getLogger("Markings").debug(
+                        "Marking refresh failed: %s", exc)
 
                 # Keep the coin village stocked, before the farm runs and the
                 # village loop. Those two spend the resources this is trying to

@@ -49,6 +49,7 @@
 				<span><i style="background:#D24B3E"></i>other players</span>
 				<span><i style="background:#6b6255"></i>barbarian</span>
 				<span id="m_count"></span>
+				<span id="m_marks" class="ml-auto"></span>
 			</div>
 		</div>
 	</div>
@@ -79,11 +80,14 @@ const MAP = {{ map | safe }};
 	const index = {};
 	MAP.villages.forEach(v => { index[v.x + '|' + v.y] = v; });
 
-	function kind(v) {
-		if (v.mine) return 'mine';
-		if (v.owner === '0') return 'barb';
-		if (MAP.tribe !== '0' && v.tribe === MAP.tribe) return 'tribe';
-		return 'enemy';
+	/* Your own in-game marking wins wherever you set one - that colouring is
+	   how you already read this world. The four defaults only fill the gaps. */
+	function colourOf(v) {
+		if (v.mine) return COL.mine;
+		if (v.color) return v.color;
+		if (v.owner === '0') return COL.barb;
+		if (MAP.tribe !== '0' && v.tribe === MAP.tribe) return COL.tribe;
+		return COL.enemy;
 	}
 	function fit() {
 		const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -134,7 +138,7 @@ const MAP = {{ map | safe }};
 				const [sx, sy] = toScreen(x, y, v);
 				const weight = Math.min(1, (village.points || 0) / 11000);
 				const pad = Math.max(1, size * (0.30 - 0.16 * weight));
-				ctx.fillStyle = COL[kind(village)];
+				ctx.fillStyle = colourOf(village);
 				ctx.fillRect(sx + pad, sy + pad, size - pad * 2, size - pad * 2);
 				if (village.mine) {
 					ctx.strokeStyle = '#F1EAD9'; ctx.lineWidth = 1;
@@ -250,6 +254,21 @@ const MAP = {{ map | safe }};
 	document.getElementById('m_goto').addEventListener('keydown', e => {
 		if (e.key === 'Enter') goto_();
 	});
+
+	// Your markings, listed the way the game lists them.
+	(function () {
+		const marks = (MAP.marks || {}), out = [];
+		for (const id in (marks.tribes || {})) {
+			out.push([marks.labels[id] || 'tribe ' + id, marks.tribes[id]]);
+		}
+		for (const id in (marks.players || {})) {
+			out.push([marks.labels['p' + id] || 'player ' + id, marks.players[id]]);
+		}
+		const el = document.getElementById('m_marks');
+		if (!out.length) { el.textContent = 'no in-game markings read yet'; return; }
+		el.innerHTML = 'your markings: ' + out.map(
+			m => '<i style="background:' + m[1] + '"></i>' + m[0]).join('&nbsp; ');
+	})();
 
 	window.addEventListener('resize', fit);
 	fit();

@@ -1990,6 +1990,12 @@ class MapBuilder:
     @staticmethod
     def build(villages, mine=None, current_village=None):
         mine = mine or {}
+        # The player's own in-game map markings, if the bot has read them.
+        # Colouring the dashboard's map differently from the game's would mean
+        # learning the same world twice.
+        marks = (DataReader.cache_grab("world") or {}).get("markings") or {}
+        by_tribe = marks.get("tribes") or {}
+        by_player = marks.get("players") or {}
         owner = tribe = None
         centre = None
 
@@ -2007,9 +2013,12 @@ class MapBuilder:
                 tribe = tribe or village.get("tribe")
             if current_village and str(vid) == str(current_village):
                 centre = [int(location[0]), int(location[1])]
+            marked = (by_player.get(str(village.get("owner")))
+                      or by_tribe.get(str(village.get("tribe"))))
             out.append({
                 "id": str(vid),
                 "name": village.get("name") or str(vid),
+                "color": marked,
                 "x": int(location[0]),
                 "y": int(location[1]),
                 "points": village.get("points") or 0,
@@ -2026,6 +2035,8 @@ class MapBuilder:
                       round(sum(y for _, y in ours) / len(ours))]
         return {
             "villages": out,
+            "marks": {"labels": marks.get("labels") or {},
+                      "tribes": by_tribe, "players": by_player},
             "centre": centre or [500, 500],
             "owner": str(owner or "0"),
             "tribe": str(tribe or "0"),
