@@ -10,6 +10,11 @@
 	.ev-log td, .ev-log th, .ev-rank td, .ev-rank th { padding: .3rem .55rem; }
 	.ev-scroll { max-height: 340px; overflow-y: auto; }
 	.ev-you { background: rgba(224,123,44,.10); }
+	.ev-hist { cursor: pointer; }
+	.ev-hist:hover > td { background: rgba(255,255,255,.03); }
+	.ev-caret { display: inline-block; transition: transform .12s; color: var(--ink-faint); }
+	.ev-hist.open .ev-caret { transform: rotate(90deg); color: var(--ember); }
+	.ev-hist-detail > td { background: rgba(0,0,0,.18); }
 </style>
 
 <p class="text-muted small mt-1">
@@ -76,7 +81,8 @@
 			<div class="stat"><div class="v">{{ c.other|comma }}</div>
 				<div class="k">Not from cheering</div>
 				<div class="sub">daily race payouts{% if c.per_day %}, about {{ c.per_day|comma }} a day{% endif %}
-					— plus anything you clicked by hand</div></div>
+					— plus anything you clicked by hand{% if c.spent %};
+					{{ c.spent|comma }} spent in the shop{% endif %}</div></div>
 			{% endif %}
 			{% if c.forecast %}
 			<div class="stat"><div class="v">{{ c.forecast.reward|comma }}</div>
@@ -196,13 +202,99 @@
 				<th class="text-right">Jackpots</th><th class="text-right">Earned</th><th class="text-right">Luck</th></tr></thead>
 			<tbody>
 			{% for h in ev.history %}
-			<tr>
-				<td>{{ h.name }}</td>
+			<tr class="ev-hist" data-i="{{ loop.index0 }}" title="click for the detail">
+				<td><span class="ev-caret">&#9656;</span> {{ h.name }}</td>
 				<td class="faint">{{ h.first_seen|ts }}{% if h.finished_at %} &rarr; {{ h.finished_at|ts }}{% endif %}</td>
 				<td class="text-right mono">{{ h.totals.actions }}</td>
 				<td class="text-right mono">{{ h.totals.jackpots }}</td>
 				<td class="text-right mono">{{ h.totals.reward|comma }}</td>
 				<td class="text-right mono">{{ (h.luck * 100)|round(0)|int ~ '%' if h.luck else '—' }}</td>
+			</tr>
+			<tr class="ev-hist-detail" data-i="{{ loop.index0 }}" style="display:none">
+				<td colspan="6">
+					<div class="d-flex flex-wrap" style="gap:1.6rem">
+						<div><span class="eyebrow">Earned</span>
+							<div class="mono gold">{{ h.totals.reward|comma }}</div>
+							<div class="faint" style="font-size:11px">against {{ h.totals.expected|comma }} the choices were worth</div></div>
+						{% if h.other %}
+						<div><span class="eyebrow">Payouts &amp; hand-played</span>
+							<div class="mono">+{{ h.other|comma }}</div>
+							<div class="faint" style="font-size:11px">daily race rewards, plus any cheers you made yourself</div></div>
+						{% endif %}
+						{% if h.spent %}
+						<div><span class="eyebrow">Spent in the shop</span>
+							<div class="mono">&minus;{{ h.spent|comma }}</div>
+							<div class="faint" style="font-size:11px">what came back out as items</div></div>
+						{% endif %}
+						<div><span class="eyebrow">Actions</span>
+							<div class="mono">{{ h.totals.actions }}</div>
+							<div class="faint" style="font-size:11px">{{ h.totals.jackpots }} jackpot{{ '' if h.totals.jackpots == 1 else 's' }}</div></div>
+						{% if h.ends_ts %}
+						<div><span class="eyebrow">Ended</span>
+							<div class="mono">{{ h.ends_ts|ts }}</div></div>
+						{% endif %}
+					</div>
+
+					{% if h.by_option %}
+					<div class="mt-3"><span class="eyebrow">How each choice did</span></div>
+					<table class="table table-sm mb-0 ev-log" style="max-width:34rem">
+						<thead><tr><th>Option</th><th class="text-right">Times</th>
+							<th class="text-right">Jackpots</th><th class="text-right">Hit rate</th>
+							<th class="text-right">Earned</th><th class="text-right">Per action</th></tr></thead>
+						<tbody>
+						{% for oid, o in h.by_option|dictsort %}
+						<tr>
+							<td>Option {{ oid }}</td>
+							<td class="text-right mono">{{ o.actions }}</td>
+							<td class="text-right mono">{{ o.jackpots }}</td>
+							<td class="text-right mono">{{ (o.jackpots / o.actions * 100)|round(0)|int }}%</td>
+							<td class="text-right mono">{{ o.reward|comma }}</td>
+							<td class="text-right mono">{{ (o.reward / o.actions)|round(1) }}</td>
+						</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% endif %}
+
+					{% if h.ranks_best or h.ranks_unluckiest %}
+					<div class="row mt-3">
+					{% for title, rows in [('Most valuable player', h.ranks_best), ('Unluckiest player', h.ranks_unluckiest)] %}
+					{% if rows %}
+					<div class="col-md-6">
+						<span class="eyebrow">{{ title }}</span>
+						<div class="faint" style="font-size:11px">as it stood when the bot last looked</div>
+						<table class="table table-sm mb-0 ev-rank">
+							<tbody>
+							{% for r in rows %}
+							<tr class="{{ 'ev-you' if h.player_id and r.player_id|int == h.player_id }}">
+								<td class="mono">{{ r.rank }}</td><td>{{ r.player_name }}</td>
+								<td class="text-right mono">{{ r.score|comma }}</td>
+								<td class="text-right mono faint">{{ r.reward }}</td>
+							</tr>
+							{% endfor %}
+							</tbody>
+						</table>
+					</div>
+					{% endif %}
+					{% endfor %}
+					</div>
+					{% endif %}
+
+					{% if h.log %}
+					<div class="mt-3"><span class="eyebrow">Last {{ h.log|length }} actions</span></div>
+					<div class="ev-scroll" style="max-height:220px">
+						<table class="table table-sm mb-0 ev-log">
+							<tbody>
+							{% for a in h.log %}
+							<tr><td class="faint">{{ a.ts|ts }}</td><td>option {{ a.option }}</td>
+								<td class="text-right mono">{{ a.reward|comma }}</td>
+								<td>{% if a.jackpot %}<span class="badge gold">jackpot</span>{% endif %}</td></tr>
+							{% endfor %}
+							</tbody>
+						</table>
+					</div>
+					{% endif %}
+				</td>
 			</tr>
 			{% endfor %}
 			</tbody>
@@ -224,6 +316,18 @@ function evToast(text) {
 	$(el).stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
 }
 
+/* A finished event keeps everything worth looking at - what each option paid,
+   how the luck ran, where it left you on the boards - so the row opens rather
+   than the page throwing it away. */
+document.addEventListener('click', function (e) {
+	const row = e.target.closest && e.target.closest('.ev-hist');
+	if (!row) return;
+	const detail = document.querySelector('.ev-hist-detail[data-i="' + row.dataset.i + '"]');
+	if (!detail) return;
+	const open = detail.style.display !== 'none';
+	detail.style.display = open ? 'none' : '';
+	row.classList.toggle('open', !open);
+});
 $(function () {
 	// The energy bar keeps filling while the page is open, and the whole point
 	// of the feature is that a full bar is wasted time - so it ticks here

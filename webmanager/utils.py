@@ -3455,7 +3455,11 @@ class EventOverview:
         # There is no endpoint for it, but the balance after every action is on
         # file, so anything the balance gained between two actions came from
         # somewhere else: a daily payout, or the player cheering by hand.
-        other, payouts = 0, []
+        # Gaps in the balance run both ways: a daily payout or a hand-played
+        # cheer pushes it up, spending in the event shop pulls it down. Summing
+        # them together produced a single "not from playing" figure that went
+        # negative once the shop was used, which reads as nonsense. Kept apart.
+        other, spent, payouts = 0, 0, []
         log = sorted(state.get("log") or [], key=lambda a: a.get("ts") or 0)
         previous = None
         for action in log:
@@ -3463,11 +3467,13 @@ class EventOverview:
                     and previous.get("currency") is not None:
                 gap = (action["currency"] - previous["currency"]
                        - int(action.get("reward") or 0))
-                if gap:
+                if gap > 0:
                     other += gap
                     # Big enough to be a payout rather than a few hand-clicks.
                     if gap >= 500:
                         payouts.append(gap)
+                elif gap < 0:
+                    spent -= gap
             previous = action
         per_day = (sum(payouts) / len(payouts)) if payouts else 0
 
@@ -3517,6 +3523,7 @@ class EventOverview:
                        "expected": int(expected)},
             "luck": None if luck is None else round(luck, 2),
             "other": other,
+            "spent": spent,
             "per_day": int(per_day),
             "by_option": state.get("by_option") or {},
             "log": (state.get("log") or [])[:25],
