@@ -13,13 +13,14 @@ try:
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
                                   PlayerFarmOverview, PlanImport,
-                                  AccountManagerOverview, EventOverview)
+                                  AccountManagerOverview, EventOverview,
+                                  MintingOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
-                       AccountManagerOverview, EventOverview)
+                       AccountManagerOverview, EventOverview, MintingOverview)
 
 import datetime
 from html import escape as html_escape
@@ -82,10 +83,13 @@ def format_timestamp(value):
 
 @app.template_filter('tsms')
 def format_timestamp_ms(value):
-    """Like `ts`, but to the second - and to the millisecond when the timestamp
-    has them. A timed attack is queued to land on an exact moment, so the queue
-    has to show that moment: two commands 300ms apart would otherwise be
-    indistinguishable in the table."""
+    """Like `ts`, but always to the millisecond.
+
+    A timed attack is queued to land on an exact moment, and in this game that
+    moment matters to the millisecond - a defender can slip a snipe into a
+    100ms gap. So the queue shows all three digits even when they are zero:
+    ".000" says the command lands exactly on the second, where a blank said
+    only that nobody knows."""
     if not value:
         return "-"
     try:
@@ -93,7 +97,7 @@ def format_timestamp_ms(value):
     except (ValueError, OSError, TypeError):
         return "-"
     millis = moment.microsecond // 1000
-    return moment.strftime("%d %b %H:%M:%S") + (".%03d" % millis if millis else "")
+    return moment.strftime("%d %b %H:%M:%S") + ".%03d" % millis
 
 
 @app.template_filter('comma')
@@ -552,6 +556,7 @@ def attacks_page():
     )
     return render_template('attacks.html', data=data,
                            plan=AttackPlanner.build(data), scheduled=scheduled,
+                           ops=AttackPlanner.operations(data, scheduled),
                            noble=noble_overview(data))
 
 
@@ -671,6 +676,38 @@ def attack_schedule_cancel():
     return jsonify({"ok": DataReader.schedule_cancel(cid)})
 
 
+@app.route('/app/attack/schedule/cancel_many', methods=['POST'])
+def attack_schedule_cancel_many():
+    """Cancel several queued commands at once. Expects JSON {ids: [...]}.
+    Only pending commands change, so re-sending a stale list is harmless."""
+    body = request.get_json(silent=True) or {}
+    cancelled = DataReader.schedule_cancel_many(body.get("ids") or [])
+    return jsonify({"ok": True, "cancelled": int(cancelled or 0)})
+
+
+@app.route('/app/attack/schedule/retime', methods=['POST'])
+def attack_schedule_retime():
+    """Move queued commands to new arrival times. Expects JSON:
+    {rows: [{id, arrival}]}, arrival in unix seconds (milliseconds kept).
+
+    Takes a list because the useful edits are relative ones across several
+    commands at once - pushing a noble train a second behind the nukes it is
+    following in. Each row reports its own result, so one command that has run
+    out of lead time does not stop the rest.
+    """
+    body = request.get_json(silent=True) or {}
+    results = []
+    for row in body.get("rows") or []:
+        entry, error = DataReader.schedule_retime(
+            (row or {}).get("id"), (row or {}).get("arrival"))
+        results.append({"id": (row or {}).get("id"), "ok": bool(entry),
+                        "error": error,
+                        "arrival": entry.get("arrival_ts") if entry else None,
+                        "send_ts": entry.get("send_ts") if entry else None})
+    return jsonify({"ok": True, "moved": sum(1 for r in results if r["ok"]),
+                    "results": results})
+
+
 @app.route('/defense', methods=['GET'])
 def defense_page():
     data = sync()
@@ -767,6 +804,19 @@ def am_refresh():
     """Ask the bot to re-read the manager's templates, groups and village
     state - after adding or renaming a template in game."""
     return jsonify({"ok": DataReader.am_request("refresh")})
+
+
+@app.route('/minting', methods=['GET'])
+def minting_page():
+    data = sync()
+    return render_template('minting.html', data=data, mint=MintingOverview.build(data))
+
+
+@app.route('/app/minting/run', methods=['GET', 'POST'])
+def minting_run_now():
+    """Ask the bot to do a resource run on its next cycle, rather than waiting
+    out the interval."""
+    return jsonify({"ok": DataReader.minting_run_now()})
 
 
 @app.route('/events', methods=['GET'])
@@ -1168,6 +1218,7 @@ QUICK_TOGGLES = {
     # The weekly event: its energy bar refills whether or not anyone is looking,
     # which is exactly the kind of thing worth handing over with one click.
     "event": ("Play the event", "events.auto_play"),
+    "mint": ("Feed the coin village", "minting.enabled"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global section).

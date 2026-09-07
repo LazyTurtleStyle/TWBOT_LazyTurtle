@@ -62,6 +62,15 @@
     "research": false,
     "auto_setup": false
   },
+  "minting": {
+    "enabled": false,
+    "village": "",
+    "group": "0",
+    "interval_minutes": 60,
+    "ratio": "coin",
+    "keep": 0,
+    "min_send": 1000
+  },
   "events": {
     "auto_play": false,
     "option": "auto"

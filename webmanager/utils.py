@@ -612,9 +612,35 @@ class DataReader:
                 return None, ("no troop snapshot for this village yet - "
                               "type the counts instead of 'all'")
             counts = attack_scheduler.resolve_all_units(selected, home)
+            # A front-loaded train takes the escort out of the stack it is
+            # sending, so "25 heavy each" needs 25 x every following noble. Ask
+            # for more than the stack carries and there are two different
+            # situations, worth treating differently:
+            #
+            #   the stack has some, just not that many - a shortage. Trim to
+            #     what fits, which is exactly what the send-time re-split would
+            #     do anyway (fit_escort), and say so.
+            #   the stack has none at all, or not even one per wave - a mistake,
+            #     usually an escort unit this village does not train. Left for
+            #     split_train to refuse, because silently sending bare nobles is
+            #     not what anyone meant.
+            escort = dict(train.get("escort") or {})
+            followers = max(counts.get("snob", 0) - 1, 0)
+            # Only front-loaded uses an escort at all: an even split divides the
+            # whole stack by the number of nobles and never reads it. Trimming
+            # (and saying so) in even mode would describe something that is not
+            # going to happen.
+            if followers and (train.get("mode") or "front") == "front":
+                for unit, per_wave in sorted(escort.items()):
+                    have = counts.get(unit, 0)
+                    if have and 0 < have // followers < per_wave:
+                        escort[unit] = have // followers
+                        notes.append(
+                            "escort trimmed to %d %s per wave - the stack "
+                            "carries %d, and you asked for %d each"
+                            % (escort[unit], unit, have, per_wave))
             waves, err = attack_scheduler.split_train(
-                counts, mode=(train.get("mode") or "front"),
-                escort=train.get("escort") or {})
+                counts, mode=(train.get("mode") or "front"), escort=escort)
             if err:
                 return None, err
             # Fewer nobles at home than the train asks for is worth saying out
@@ -740,8 +766,80 @@ class DataReader:
         return commands
 
     @staticmethod
+    def schedule_retime(command_id, arrival_ts):
+        """Move a queued command's arrival, re-deriving when it has to leave.
+
+        A planner solves for "these commands land together", which is rarely
+        what you want once they are queued - the nuke has to land before the
+        train, a fake has to arrive a moment earlier than the real one. Rather
+        than making the import guess at that, the queue itself is editable.
+
+        The travel time is not recalculated: it belongs to the units this
+        command is already carrying, and those have not changed. So the send is
+        simply the new arrival minus that, and it has to stay far enough ahead
+        for the scheduler to still claim and pre-stage the command - which for a
+        train is several waves' worth of round trips, hence command_prestage
+        rather than a flat margin.
+
+        Returns (entry, error). Runs inside the queue's own lock, so a command
+        the bot is claiming in the same moment cannot be moved out from under it.
+        """
+        try:
+            arrival_ts = round(float(arrival_ts), 3)
+            if arrival_ts == int(arrival_ts):
+                arrival_ts = int(arrival_ts)
+        except (TypeError, ValueError):
+            return None, "invalid arrival time"
+        if DataReader._forced_peace_conflict(arrival_ts):
+            return None, "arrival falls inside a forced-peace window"
+
+        outcome = {}
+
+        def mutate(commands):
+            for command in commands:
+                if command.get("id") != command_id:
+                    continue
+                if command.get("status") != "pending":
+                    outcome["error"] = ("this command is %s, so it can no longer "
+                                        "be moved" % command.get("status"))
+                    return
+                travel = int(command.get("travel_seconds") or 0)
+                if travel <= 0:
+                    outcome["error"] = "no travel time on file for this command"
+                    return
+                send_ts = int(arrival_ts - travel)
+                lead = attack_scheduler.command_prestage(command)
+                now = time.time()
+                if send_ts <= now:
+                    outcome["error"] = ("too late - it would have had to leave "
+                                        "%s ago" % _short_duration(now - send_ts))
+                    return
+                if send_ts <= now + lead:
+                    outcome["error"] = (
+                        "too close - it would leave in %s, and this command needs "
+                        "%ds of lead time to be claimed and pre-staged"
+                        % (_short_duration(send_ts - now), lead))
+                    return
+                command["arrival_ts"] = arrival_ts
+                command["send_ts"] = send_ts
+                command["retimed"] = int(time.time())
+                outcome["entry"] = command
+                return
+            outcome["error"] = "no such command in the queue"
+
+        attack_scheduler.update(mutate, path=DataReader.schedule_path())
+        return outcome.get("entry"), outcome.get("error")
+
+    @staticmethod
     def schedule_cancel(command_id):
         return attack_scheduler.cancel_command(command_id, path=DataReader.schedule_path())
+
+    @staticmethod
+    def schedule_cancel_many(command_ids):
+        """Cancel a set of queued commands at once. Returns how many were still
+        pending and therefore actually cancelled."""
+        return attack_scheduler.cancel_commands(command_ids,
+                                                path=DataReader.schedule_path())
 
     CSNIPE_REL = ("cache", "csnipes.json")
 
@@ -946,6 +1044,23 @@ class DataReader:
         return True
 
     # -- rotating in-game events -------------------------------------------
+
+    @staticmethod
+    def minting_run_now():
+        """Ask the bot for a resource run on its next cycle."""
+        path = DataReader.data_path("cache", "minting.json")
+        try:
+            state = {}
+            if os.path.exists(path):
+                with open(path) as handle:
+                    state = json.load(handle) or {}
+            state["run_now"] = True
+            DataReader.ensure_data_dir("cache")
+            with open(path, "w") as handle:
+                json.dump(state, handle, indent=2)
+            return True
+        except (OSError, ValueError):
+            return False
 
     @staticmethod
     def events_dir():
@@ -2594,6 +2709,16 @@ class PlanImport:
         }
 
 
+# Farm space each unit takes, for telling a fake from a real attack (and for
+# the minimum-attack-size rule some worlds enforce).
+UNIT_POP = {"spear": 1, "sword": 1, "axe": 1, "archer": 1, "spy": 2, "light": 4,
+            "marcher": 5, "heavy": 6, "ram": 5, "catapult": 8, "knight": 10,
+            "snob": 100}
+# Below this much population a command is a fake, not an attack: a real nuke is
+# thousands, a fake is a catapult and some scouts.
+FAKE_POP = 1000
+
+
 class AttackPlanner:
     """Data for the attack-planner page.
 
@@ -2653,6 +2778,88 @@ class AttackPlanner:
             "templates": DataReader.troop_templates(),
             "now": int(time.time()),
         }
+
+    @staticmethod
+    def operations(data, scheduled):
+        """What is in the air right now, which is what the page is opened for.
+
+        The tracked-target list answers "what could I hit"; it is hundreds of
+        rows long and changes slowly. Since the scheduler took over sending, the
+        question that actually needs answering on arrival is "what have I got
+        out there" - commands already launched and still flying, commands still
+        waiting to leave, and where the nobles are. None of that was anywhere.
+        """
+        now = time.time()
+        managed = data.get("bot", {}) or {}
+        moves = DataReader.troop_locations()
+        by_village = moves.get("by_village") or {}
+
+        def describe(command):
+            """A word for what this command is, from what it carries.
+
+            Size first, because it is what separates a fake from the real
+            thing: a fake is a catapult and a handful of scouts, and calling
+            that "siege" because it holds a catapult reads as a threat it is
+            not."""
+            if command.get("waves"):
+                return "%d-noble train" % len(command["waves"])
+            units = command.get("units") or {}
+            if units.get("snob"):
+                return "noble"
+            def count(unit):
+                try:
+                    return int(units.get(unit))
+                except (TypeError, ValueError):
+                    return 0
+            # "all" is only a number at send time, and it is never a fake -
+            # nobody fakes with everything the village has.
+            vague = any(str(n).strip().lower() == "all" for n in units.values())
+            pop = sum(UNIT_POP.get(u, 1) * count(u) for u in units)
+            if not vague and pop and pop < FAKE_POP:
+                return "fake"
+            if count("ram") + count("catapult") >= 50:
+                return "siege"
+            if units.get("axe") or units.get("light") or units.get("archer"):
+                return "nuke"
+            return "attack"
+
+        in_flight, queued = [], []
+        for command in scheduled:
+            row = {
+                "id": command.get("id"),
+                "target": "%s|%s" % (command.get("target_x"), command.get("target_y")),
+                "target_name": command.get("target_name"),
+                "origin": command.get("origin_name"),
+                "what": describe(command),
+                "arrival_ts": command.get("arrival_ts"),
+                "send_ts": command.get("send_ts"),
+            }
+            status = command.get("status")
+            if status == "sent" and (command.get("arrival_ts") or 0) > now:
+                in_flight.append(row)
+            elif status in ("pending", "sending"):
+                queued.append(row)
+        in_flight.sort(key=lambda r: r["arrival_ts"] or 0)
+        queued.sort(key=lambda r: r["send_ts"] or 0)
+
+        targets = {}
+        for row in in_flight:
+            targets[row["target"]] = targets.get(row["target"], 0) + 1
+
+        return {
+            "in_flight": in_flight,
+            "queued": queued,
+            "targets_hit": targets,
+            "nobles_home": sum(int((v.get("available_troops") or {}).get("snob") or 0)
+                               for v in managed.values()),
+            "nobles_away": int((moves.get("moving") or {}).get("snob") or 0),
+            "villages_out": sum(1 for v in by_village.values()
+                                if any((v.get("moving") or {}).values())),
+            "villages": len(by_village) or len(managed),
+            "moving": moves.get("moving") or {},
+            "seen": moves.get("when"),
+        }
+
 
 
 class DefenseOverview:
@@ -3146,8 +3353,18 @@ class AccountManagerOverview:
             managed = [v for v in villages if cls._managed(key, v)]
             idle = [v for v in managed if cls._queued(v) == 0] \
                 if key == "building" else []
+            # A section whose switch is off is not applied - the switches say
+            # which jobs the manager is doing, and setting up one it is not
+            # doing is not what anyone means. Say so where the rows are, rather
+            # than letting the run quietly skip them.
+            handled = True
+            if flags.get("enabled"):
+                handled = bool(flags.get(
+                    {"building": "building", "troops": "recruiting",
+                     "research": "research"}[key], False))
             sections.append({
                 "key": key, "label": label, "screen": screen, "dutch": dutch,
+                "handled": handled,
                 "templates": templates, "groups": groups, "villages": villages,
                 "rows": rows, "when": snap.get("when"),
                 "total": len(villages), "managed": len(managed),
@@ -3223,6 +3440,31 @@ class EventOverview:
         earned = int(totals.get("reward") or 0)
         luck = (earned / expected) if expected > 0 else None
 
+        # Cheering is not the only income. The horse race pays the whole team
+        # once a day for laps completed and how the race finished - 1,950 and
+        # 3,325 on the two days measured, against roughly 1,500 a day of
+        # cheering. A forecast built on actions alone is therefore wrong by more
+        # than half, which is exactly how it read.
+        #
+        # There is no endpoint for it, but the balance after every action is on
+        # file, so anything the balance gained between two actions came from
+        # somewhere else: a daily payout, or the player cheering by hand.
+        other, payouts = 0, []
+        log = sorted(state.get("log") or [], key=lambda a: a.get("ts") or 0)
+        previous = None
+        for action in log:
+            if previous and action.get("currency") is not None \
+                    and previous.get("currency") is not None:
+                gap = (action["currency"] - previous["currency"]
+                       - int(action.get("reward") or 0))
+                if gap:
+                    other += gap
+                    # Big enough to be a payout rather than a few hand-clicks.
+                    if gap >= 500:
+                        payouts.append(gap)
+            previous = action
+        per_day = (sum(payouts) / len(payouts)) if payouts else 0
+
         # What is still to come: every hour left is one more unit of energy,
         # plus whatever is already in the bar.
         forecast = None
@@ -3230,8 +3472,16 @@ class EventOverview:
         if ends and best and energy is not None and not state.get("finished"):
             hours_left = max(0.0, (ends - time.time()) / 3600.0)
             actions_left = int(hours_left + energy)
+            cheering = int(actions_left * best["value"])
+            # Nearest, not floor: the payout lands at a fixed hour each day, so
+            # 47 hours left spans two of them, and flooring lost a whole one -
+            # which on this event is a bigger error than everything the
+            # remaining cheering is worth.
+            days_left = int(round(hours_left / 24.0))
+            payout = int(days_left * per_day)
             forecast = {"hours": round(hours_left, 1), "actions": actions_left,
-                        "reward": int(actions_left * best["value"])}
+                        "cheering": cheering, "payouts": payout,
+                        "days": days_left, "reward": cheering + payout}
 
         return {
             "screen": state.get("screen"),
@@ -3260,6 +3510,8 @@ class EventOverview:
                        "reward": earned,
                        "expected": int(expected)},
             "luck": None if luck is None else round(luck, 2),
+            "other": other,
+            "per_day": int(per_day),
             "by_option": state.get("by_option") or {},
             "log": (state.get("log") or [])[:25],
             "forecast": forecast,
@@ -3283,6 +3535,112 @@ class EventOverview:
             "current": current,
             "history": history,
             "ever": bool(states),
+        }
+
+
+class MintingOverview:
+    """What the Minting page shows: the coin village, and whether it is fed.
+
+    Coins buy noble limits, so the number that matters is not "how many
+    resources arrived" but "how many coins will that mint" - the ratio is the
+    whole game, since a warehouse of iron and no clay mints nothing.
+    """
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("minting", {}) or {}
+        state = {}
+        try:
+            path = DataReader.data_path("cache", "minting.json")
+            if os.path.exists(path):
+                with open(path) as handle:
+                    state = json.load(handle) or {}
+        except (OSError, ValueError):
+            state = {}
+
+        village_id = str(settings.get("village") or "")
+        managed = data.get("bot", {}) or {}
+        village = managed.get(village_id) or {}
+        academy = state.get("academy") or {}
+        cost = academy.get("cost") or {}
+
+        def coins_from(amounts):
+            """A pile of resources is worth the fewest coins any one of them
+            allows - the point of asking in coin ratio."""
+            if not cost or not amounts:
+                return None
+            return min(int((amounts.get(r) or 0) / cost[r])
+                       for r in ("wood", "stone", "iron") if cost.get(r))
+
+        held = {r: int((village.get("resources") or {}).get(r) or 0)
+                for r in ("wood", "stone", "iron")}
+
+        # How many coins have appeared since the bot started watching, and since
+        # midnight. The game reports a running total only, so the interesting
+        # number - what arrived recently - has to be differenced out of samples.
+        history = state.get("coin_history") or []
+        minted = {"since": None, "coins": None, "today": None, "per_hour": None}
+        if len(history) >= 2 and history[-1].get("coins") is not None:
+            first, last = history[0], history[-1]
+            minted["since"] = first.get("ts")
+            minted["coins"] = last["coins"] - first["coins"]
+            hours = max((last["ts"] - first["ts"]) / 3600.0, 1 / 60.0)
+            minted["per_hour"] = round(minted["coins"] / hours, 1)
+            midnight = datetime.datetime.combine(
+                datetime.date.today(), datetime.time()).timestamp()
+            todays = [h for h in history if h.get("ts", 0) >= midnight]
+            if todays:
+                # The last sample before midnight is the day's true starting
+                # point; without it a day's first sample looks like zero growth.
+                before = [h for h in history if h.get("ts", 0) < midnight]
+                base = before[-1]["coins"] if before else todays[0]["coins"]
+                minted["today"] = last["coins"] - base
+        incoming = state.get("incoming") or {}
+        arriving = {r: int(held.get(r, 0)) + int(incoming.get(r, 0))
+                    for r in ("wood", "stone", "iron")}
+
+        groups = [{"id": "0", "name": "alle"}] + [
+            {"id": g.get("id"), "name": g.get("name")}
+            for g in DataReader.groups_grab()]
+
+        return {
+            "enabled": bool(settings.get("enabled")),
+            "village_id": village_id,
+            "village_name": village.get("name") or village_id,
+            "village_missing": bool(village_id) and not village,
+            "group": str(settings.get("group", "0") or "0"),
+            "groups": groups,
+            "ratio": str(settings.get("ratio", "coin") or "coin"),
+            "interval": int(settings.get("interval_minutes", 60) or 60),
+            "keep": int(settings.get("keep", 0) or 0),
+            "villages": [{"id": v, "name": (d.get("name") or v)}
+                         for v, d in sorted(managed.items(),
+                                            key=lambda kv: str(kv[1].get("name")))],
+            "coins": academy.get("coins"),
+            "cost": cost,
+            "discount": academy.get("discount"),
+            "auto_mint": academy.get("auto_mint"),
+            "auto_status": academy.get("auto_status"),
+            "read_when": academy.get("when"),
+            "held": held,
+            "incoming": incoming,
+            "coins_now": coins_from(held),
+            "coins_after": coins_from(arriving),
+            "minted": minted,
+            "requested_total": state.get("requested_total") or {},
+            "requested_coins": coins_from(state.get("requested_total") or {}),
+            "runs_with_requests": state.get("runs_with_requests") or 0,
+            "last_run": state.get("last_run"),
+            "next_run": (int(state.get("last_run") or 0)
+                         + int(settings.get("interval_minutes", 60) or 60) * 60
+                         if state.get("last_run") and settings.get("enabled") else None),
+            "asked": state.get("asked_villages"),
+            "candidates": state.get("candidates"),
+            "last_total": state.get("last_total") or {},
+            "last_coins": coins_from(state.get("last_total") or {}),
+            "last_asks": state.get("last_asks") or [],
+            "pending": bool(state.get("run_now")),
         }
 
 

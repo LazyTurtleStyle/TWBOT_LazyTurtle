@@ -194,6 +194,28 @@ def cancel_command(command_id, path=None):
     return update(mut, path)
 
 
+def cancel_commands(command_ids, path=None):
+    """Mark every named pending command cancelled. Returns how many changed.
+
+    One locked read-modify-write for the whole set: calling cancel_command in a
+    loop would take the queue's lock once per command, and the point of a bulk
+    cancel is that there are a lot of them.
+    """
+    wanted = {str(i) for i in (command_ids or [])}
+    if not wanted:
+        return 0
+
+    def mut(commands):
+        changed = 0
+        for c in commands:
+            if str(c.get("id")) in wanted and c.get("status") == "pending":
+                c["status"] = "cancelled"
+                c["finished"] = int(time.time())
+                changed += 1
+        return changed
+    return update(mut, path)
+
+
 def prune(max_age_done=86400, path=None):
     """Drop finished commands older than max_age_done so the file stays small."""
     now = int(time.time())

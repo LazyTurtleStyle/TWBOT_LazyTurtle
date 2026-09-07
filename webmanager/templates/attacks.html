@@ -4,6 +4,21 @@
 {% block content %}
 <style>
 	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	/* The import controls do two unrelated jobs - troops for every ticked row,
+	   and the shape of the noble train - so they are fenced off from each
+	   other and each says out loud what it touches. */
+	.imp-group { border: 1px solid var(--border); border-radius: 5px;
+		padding: .1rem .6rem .5rem; margin: 0; max-width: 34rem; }
+	.imp-legend { float: none; width: auto; font-size: .72rem; text-transform: uppercase;
+		letter-spacing: .09em; color: var(--accent); padding: 0 .35rem; margin: 0 0 .2rem; }
+	.imp-hint { font-size: .78rem; color: var(--muted); margin-top: .35rem; max-width: 32rem; }
+	/* The dark re-skin leaves disabled inputs unstyled, so the browser default
+	   renders their text near-invisible here and a switched-off control reads as
+	   a broken one. Keep the value legible and say "off" with colour instead. */
+	.imp-group select:disabled, .imp-group input:disabled {
+		color: var(--muted); background: var(--input-bg);
+		border-style: dashed; opacity: 1; cursor: not-allowed; }
+	.imp-steps li { margin-bottom: .15rem; }
 	.coord { font-variant-numeric: tabular-nums; }
 </style>
 
@@ -20,20 +35,89 @@
 	<li class="nav-item"><a class="nav-link" href="#scheduler" data-pane="scheduler">Scheduler
 		{% if pending_count %}<span class="badge badge-danger">{{ pending_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#planner" data-pane="planner">Planner</a></li>
-	<li class="nav-item"><a class="nav-link" href="#import" data-pane="import">Import plan
-		<span class="badge badge-warning">alpha</span></a></li>
+	<li class="nav-item"><a class="nav-link" href="#import" data-pane="import">Import plan</a></li>
 	{% set noble_armed = noble.jobs|selectattr('status', 'equalto', 'armed')|list|length %}
 	<li class="nav-item"><a class="nav-link" href="#noble" data-pane="noble">Noble barb
-		<span class="badge badge-warning">alpha</span>
 		{% if noble_armed %}<span class="badge badge-danger">{{ noble_armed }}</span>{% endif %}</a></li>
 </ul>
 
 <!-- ---------- Overview: tracked targets ---------- -->
 <div id="pane-overview">
+
+<div class="stats mb-3">
+	<div class="stat"><div class="v {{ 'gold' if ops.in_flight }}">{{ ops.in_flight|length }}</div>
+		<div class="k">In the air</div>
+		<div class="sub">{% if ops.in_flight %}next lands <span class="ops-eta" data-at="{{ ops.in_flight[0].arrival_ts }}">…</span>{% else %}nothing launched{% endif %}</div></div>
+	<div class="stat"><div class="v">{{ ops.queued|length }}</div>
+		<div class="k">Waiting to leave</div>
+		<div class="sub">{% if ops.queued %}next goes <span class="ops-eta" data-at="{{ ops.queued[0].send_ts }}">…</span>{% else %}queue empty{% endif %}</div></div>
+	<div class="stat"><div class="v">{{ ops.nobles_home }}</div>
+		<div class="k">Nobles at home</div>
+		<div class="sub">{{ ops.nobles_away }} on the way to somewhere</div></div>
+	<div class="stat"><div class="v">{{ ops.villages_out }}<span class="faint" style="font-size:16px">/{{ ops.villages }}</span></div>
+		<div class="k">Villages with troops out</div>
+		<div class="sub">farm runs, attacks and support{% if ops.seen %}, seen {{ ops.seen|ago }}{% endif %}</div></div>
+</div>
+
+<div class="row">
+	<div class="col-lg-6 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>In the air</strong>
+				<small class="text-muted ml-2">launched, not landed — soonest first</small></div>
+			{% if ops.in_flight %}
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr><th>Target</th><th>From</th><th>What</th>
+						<th class="text-right">Lands</th><th class="text-right">In</th></tr></thead>
+					<tbody>
+					{% for r in ops.in_flight %}
+					<tr><td class="coord">{{ r.target }}{% if r.target_name %}<small class="text-muted d-block">{{ r.target_name }}</small>{% endif %}</td>
+						<td><small>{{ r.origin }}</small></td>
+						<td><small>{{ r.what }}</small></td>
+						<td class="text-right"><small>{{ r.arrival_ts|tsms }}</small></td>
+						<td class="text-right ops-eta" data-at="{{ r.arrival_ts }}">…</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing the scheduler has sent is still flying.
+				Farm runs are not listed here — they are counted in "villages with troops out".</div>
+			{% endif %}
+		</div>
+	</div>
+	<div class="col-lg-6 mb-3">
+		<div class="card h-100">
+			<div class="card-header py-2"><strong>Waiting to leave</strong>
+				<small class="text-muted ml-2">queued — next to go first</small></div>
+			{% if ops.queued %}
+			<div class="table-responsive">
+				<table class="table table-sm planner-table mb-0">
+					<thead><tr><th>Target</th><th>From</th><th>What</th>
+						<th class="text-right">Lands</th><th class="text-right">Sends in</th></tr></thead>
+					<tbody>
+					{% for r in ops.queued %}
+					<tr><td class="coord">{{ r.target }}{% if r.target_name %}<small class="text-muted d-block">{{ r.target_name }}</small>{% endif %}</td>
+						<td><small>{{ r.origin }}</small></td>
+						<td><small>{{ r.what }}</small></td>
+						<td class="text-right"><small>{{ r.arrival_ts|tsms }}</small></td>
+						<td class="text-right ops-eta" data-at="{{ r.send_ts }}">…</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing queued.
+				<a href="#import" onclick="location.reload()">Import a plan</a> or use the Scheduler.</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+
 <div class="card mb-3">
 	<div class="card-header py-2 d-flex align-items-center flex-wrap">
-		<span><strong>Tracked targets ({{ plan.targets|length }}),</strong>
-		<small class="text-muted">what the bot is currently farming / scouting</small></span>
+		<span><small class="text-muted">Tracked targets ({{ plan.targets|length }}) — what the bot farms
+			and scouts. <a href="#" id="tt_toggle">show</a></small></span>
 		<span class="ml-auto d-flex align-items-center">
 			<small class="text-muted mr-1">ETA&nbsp;from</small>
 			<select id="o_origin" class="form-control form-control-sm" style="width:auto">
@@ -47,6 +131,7 @@
 			</select>
 		</span>
 	</div>
+	<div id="tt_wrap" style="display:none">
 	<div class="table-responsive">
 		<table class="table table-sm planner-table mb-0">
 			<thead><tr>
@@ -77,6 +162,7 @@
 			</tbody>
 		</table>
 	</div>
+	</div><!-- /tt_wrap -->
 </div>
 </div><!-- /pane-overview -->
 
@@ -177,17 +263,62 @@
 
 	<div class="col-lg-7 mb-3">
 		<div class="card">
-			<div class="card-header py-2"><strong>Scheduled commands ({{ scheduled|length }})</strong></div>
+			<div class="card-header py-2 d-flex align-items-center flex-wrap">
+				<strong>Scheduled commands ({{ scheduled|length }})</strong>
+				{% set movable = scheduled|selectattr('status', 'equalto', 'pending')|list|length %}
+				{% if movable %}
+				<span class="ml-auto d-flex align-items-center" style="gap:.35rem">
+					<small class="text-muted">shift ticked by</small>
+					<input id="rt_shift" type="number" step="50" min="1" value="1000"
+						class="form-control form-control-sm" style="width:6rem"
+						title="Milliseconds. 1000 is a second; 200 is about the gap a defender needs to slip a snipe in.">
+					<small class="text-muted">ms</small>
+					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(-1)"
+						title="Land earlier">&minus;</button>
+					<button class="btn btn-outline-secondary btn-sm py-0" onclick="shiftSched(1)"
+						title="Land later">+</button>
+					<button class="btn btn-outline-danger btn-sm py-0 ml-2" onclick="cancelTicked()"
+						title="Cancel every ticked command">Cancel ticked</button>
+				</span>
+				{% endif %}
+			</div>
+			<div class="card-body py-2 border-bottom">
+				<div class="d-flex align-items-center flex-wrap" style="gap:.4rem">
+					<select id="q_status" class="form-control form-control-sm" style="width:auto">
+						<option value="live">Still to send</option>
+						<option value="all">Everything</option>
+						<option value="sent">Sent</option>
+						<option value="failed">Failed</option>
+						<option value="cancelled">Cancelled</option>
+					</select>
+					<select id="q_sort" class="form-control form-control-sm" style="width:auto">
+						<option value="send">Next to send first</option>
+						<option value="arrival">Earliest landing first</option>
+						<option value="target">Target, then landing</option>
+						<option value="origin">Origin, then landing</option>
+					</select>
+					<input id="q_find" class="form-control form-control-sm" style="width:14rem"
+						placeholder="filter by target or village…">
+					<span id="q_count" class="small text-muted ml-1"></span>
+				</div>
+			</div>
 			<div class="table-responsive">
 				<table class="table table-sm planner-table mb-0">
 					<thead><tr>
+						<th><input type="checkbox" id="rt_all" title="tick every movable command"></th>
 						<th>Target</th><th>Origin</th><th>Units</th>
 						<th class="text-right">Lands</th><th class="text-right">Sends in</th>
 						<th>Status</th><th></th>
 					</tr></thead>
 					<tbody>
 						{% for c in scheduled %}
-						<tr>
+						<tr data-cid="{{ c.id }}" class="q-row" data-status="{{ c.status }}"
+							data-arrival="{{ c.arrival_ts }}" data-send="{{ c.send_ts }}"
+							data-target="{{ c.target_x }}|{{ c.target_y }}"
+							data-kind="{{ 'train' if c.waves else ('nuke' if c.units.axe else 'other') }}"
+							data-search="{{ ('%s|%s %s %s' % (c.target_x, c.target_y, c.target_name or '', c.origin_name or ''))|lower }}">
+							<td>{% if c.status == 'pending' %}<input type="checkbox" class="rt-pick"
+								data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">{% endif %}</td>
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
 								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
 							<td><small>{{ c.origin_name }}</small></td>
@@ -206,7 +337,10 @@
 								{% else %}
 								{% for u, n in c.units.items() %}{{ u }}&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}
 								{% endif %}</small></td>
-							<td class="text-right">{{ c.arrival_ts|tsms }}</td>
+							<td class="text-right rt-lands" data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">
+								{% if c.status == 'pending' %}<a href="#" class="rt-edit" data-id="{{ c.id }}"
+									title="Click to set this command's arrival exactly">{{ c.arrival_ts|tsms }}</a>
+								{% else %}{{ c.arrival_ts|tsms }}{% endif %}</td>
 							<td class="text-right">
 								{% if c.status == 'pending' %}<span class="sched-eta" data-send="{{ c.send_ts }}">…</span>
 								{% else %}—{% endif %}</td>
@@ -220,7 +354,7 @@
 								onclick="cancelSched('{{ c.id }}')">Cancel</button>{% endif %}</td>
 						</tr>
 						{% else %}
-						<tr><td colspan="7" class="text-muted">No scheduled commands.</td></tr>
+						<tr><td colspan="8" class="text-muted">No scheduled commands.</td></tr>
 						{% endfor %}
 					</tbody>
 				</table>
@@ -291,45 +425,79 @@
 	<div class="card-header py-2"><strong>Import an attack plan,</strong>
 		<small class="text-muted">paste the export from devilicious.dev (or the same BB-code rows)</small></div>
 	<div class="card-body">
-		<p class="small text-muted mb-2">
-			One command per line:
-			<code>origin-&gt;target, distance, unit, type, arrival, travel, send, count</code>.
-			Times are read on this machine's clock. A plan never says which troops to send,
-			so pick those below — nothing is queued until you press the button.
-		</p>
+		<ol class="small text-muted mb-2 pl-3 imp-steps">
+			<li><strong>Paste</strong> the plan and press <em>Read plan</em>. One command per line:
+				<code>origin-&gt;target, distance, unit, type, arrival, travel, send, count</code>.
+				Times are read on this machine's clock.</li>
+			<li><strong>Give every row troops.</strong> A plan says when to hit, never with what.
+				Pick a troop template and <em>Apply to ticked</em>, or type into a row's box.</li>
+			<li><strong>Set up the noble rows</strong> (the ones the plan folded into a train):
+				how the stack is split, and what escorts each noble after the first.</li>
+			<li><strong>Untick</strong> anything you are not sending and press
+				<em>Queue selected commands</em>. Nothing leaves this page until then.</li>
+			<li><strong>Space the arrivals</strong> afterwards on the
+				<a href="#scheduler" onclick="location.reload()">Scheduler</a> tab — a plan lands
+				everything on the same moment, so tick the train there and nudge it a second or
+				two behind the nukes.</li>
+		</ol>
 		<textarea id="p_text" class="form-control form-control-sm" rows="5"
 			placeholder="569|444->564|454,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1"></textarea>
-		<div class="form-row align-items-end mt-2">
-			<div class="form-group col-auto mb-2">
-				<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
-			</div>
-			<div class="form-group col-auto mb-2">
-				<label class="small mb-1">Noble rows</label>
-				<select id="p_mode" class="form-control form-control-sm">
-					<option value="front">Front-loaded train</option>
-					<option value="even">Even-split train</option>
-				</select>
-			</div>
-			<div class="form-group col-auto mb-2">
-				<label class="small mb-1">Escort each</label>
-				<select id="p_escort_unit" class="form-control form-control-sm"></select>
-			</div>
-			<div class="form-group col-2 mb-2">
-				<label class="small mb-1">Amount</label>
-				<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
-			</div>
-			<div class="form-group col-auto mb-2" id="p_template_wrap" style="display:none">
-				<label class="small mb-1">Troop template</label>
-				<div class="input-group input-group-sm">
-					<select id="p_template" class="form-control form-control-sm"></select>
-					<div class="input-group-append">
-						<button id="p_template_fill" class="btn btn-outline-secondary btn-sm"
-							title="Put this template's units into every ticked row. Noble rows keep their noble count.">Apply to ticked</button>
-						<button id="p_template_reload" class="btn btn-outline-secondary btn-sm"
-							title="Re-read your templates from the game (after editing one in-game). The bot picks it up within a few minutes.">↻</button>
+		<div class="mt-2 mb-2">
+			<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
+			<span class="small text-muted ml-2">reads the paste above; nothing is sent</span>
+		</div>
+		<div class="d-flex align-items-start flex-wrap" style="gap:.75rem">
+			<fieldset class="imp-group" id="p_template_wrap" style="display:none">
+				<legend class="imp-legend">Troops — every <em>ticked</em> row</legend>
+				<div class="d-flex align-items-end" style="gap:.4rem">
+					<div>
+						<label class="small mb-1" for="p_template">Troop template</label>
+						<div class="input-group input-group-sm">
+							<select id="p_template" class="form-control form-control-sm"></select>
+							<div class="input-group-append">
+								<button id="p_template_fill" class="btn btn-outline-secondary btn-sm"
+									title="Fills the troop box of every ticked row, noble rows included - those keep their noble count.">Apply to ticked</button>
+								<button id="p_template_reload" class="btn btn-outline-secondary btn-sm"
+									title="Re-read your templates from the game (after editing one in-game). The bot picks it up within a few minutes.">↻</button>
+							</div>
+						</div>
 					</div>
 				</div>
-			</div>
+				<div class="imp-hint">Fills <em>every ticked row</em> at once. A single row can also be
+					set from the dropdown inside it.</div>
+			</fieldset>
+
+			<fieldset class="imp-group">
+				<legend class="imp-legend">Noble rows only</legend>
+				<div class="d-flex align-items-end flex-wrap" style="gap:.4rem">
+					<div>
+						<label class="small mb-1" for="p_mode">Troops across the waves</label>
+						<select id="p_mode" class="form-control form-control-sm">
+							<option value="front">All in wave 1 (front-loaded)</option>
+							<option value="even">Split evenly</option>
+						</select>
+					</div>
+					<div>
+						<label class="small mb-1" for="p_escort_unit">Escort each</label>
+						<select id="p_escort_unit" class="form-control form-control-sm"></select>
+					</div>
+					<div style="width:6rem">
+						<label class="small mb-1" for="p_escort_n">Amount <span class="text-muted">/ wave</span></label>
+						<input id="p_escort_n" type="number" min="0" value="50" class="form-control form-control-sm">
+					</div>
+				</div>
+				<div class="imp-hint">
+					<strong>How many waves?</strong> One per noble in the row's own troop box —
+					<code>snob:4</code> sends four commands, <code>snob:2</code> sends two. The plan
+					only fills that number in; change it there and the shape changes. One noble per
+					command always, because the game credits one loyalty hit per attack.<br>
+					<strong>These two settings</strong> decide where the <em>other</em> troops go.
+					Front-loaded keeps the whole stack in wave 1 apart from the escorts, so the first
+					wave hits hardest; splitting evenly divides everything by the number of nobles and
+					does not use the escort at all. An escort comes out of that same stack — 4 nobles
+					at 50 each needs 150 in the row, and asking for more than it carries trims it to
+					what fits.</div>
+			</fieldset>
 		</div>
 		<div id="p_summary" class="small mb-2"></div>
 	</div>
@@ -778,6 +946,213 @@ function cancelSched(id) {
 	fetch(appUrl('/app/attack/schedule/cancel', 'id='+encodeURIComponent(id)))
 		.then(r => r.json()).then(() => location.reload());
 }
+/* The tracked-target list is hundreds of rows of slow-moving reference. It is
+   still here, just not the first thing the page says. */
+(function() {
+	const link = document.getElementById('tt_toggle'), wrap = document.getElementById('tt_wrap');
+	if (!link || !wrap) return;
+	link.addEventListener('click', function(e) {
+		e.preventDefault();
+		const open = wrap.style.display !== 'none';
+		wrap.style.display = open ? 'none' : '';
+		link.textContent = open ? 'show' : 'hide';
+	});
+})();
+/* Countdowns on the overview: "lands in 3h 12m" is the thing being looked for,
+   and a clock that only updates on reload is worse than none. */
+function opsTick() {
+	const now = Date.now() / 1000;
+	document.querySelectorAll('.ops-eta').forEach(el => {
+		const at = parseFloat(el.getAttribute('data-at'));
+		if (!at) { el.textContent = '—'; return; }
+		let d = Math.round(at - now);
+		if (d <= 0) { el.textContent = 'now'; return; }
+		const h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60), sec = d % 60;
+		el.textContent = h ? h + 'h ' + m + 'm' : (m ? m + 'm ' + sec + 's' : sec + 's');
+	});
+}
+opsTick();
+setInterval(opsTick, 1000);
+
+/* ---------- the queue as a view ---------------------------------------
+   Late in a world this table holds hundreds of commands, most of them finished
+   or cancelled, and the two questions worth asking are "what goes out next" and
+   "what is hitting this village". Sorting and filtering happen here rather than
+   on the server: every row is already on the page, and a reload would cost the
+   ticks and any half-typed retime. */
+function applyQueueView() {
+	const want = document.getElementById('q_status').value;
+	const sort = document.getElementById('q_sort').value;
+	const find = (document.getElementById('q_find').value || '').trim().toLowerCase();
+	const body = document.querySelector('#pane-scheduler tbody');
+	if (!body) return;
+	const rows = Array.prototype.slice.call(body.querySelectorAll('tr.q-row'));
+	let shown = 0, live = 0;
+	rows.forEach(tr => {
+		const st = tr.getAttribute('data-status');
+		if (st === 'pending' || st === 'sending') live++;
+		const okStatus = want === 'all' ? true
+			: want === 'live' ? (st === 'pending' || st === 'sending')
+			: st === want;
+		const okFind = !find || (tr.getAttribute('data-search') || '').indexOf(find) !== -1;
+		const show = okStatus && okFind;
+		tr.style.display = show ? '' : 'none';
+		if (show) shown++;
+		// A hidden row must not stay ticked: a shift would move something the
+		// table is not showing.
+		if (!show) { const cb = tr.querySelector('.rt-pick'); if (cb) cb.checked = false; }
+	});
+	const num = a => parseFloat(a) || 0;
+	const key = {
+		send:    tr => [num(tr.getAttribute('data-send'))],
+		arrival: tr => [num(tr.getAttribute('data-arrival'))],
+		target:  tr => [tr.getAttribute('data-target'), num(tr.getAttribute('data-arrival'))],
+		origin:  tr => [(tr.getAttribute('data-search') || '').split('|').pop(),
+		                num(tr.getAttribute('data-arrival'))],
+	}[sort];
+	rows.sort((a, b) => {
+		const ka = key(a), kb = key(b);
+		for (let i = 0; i < ka.length; i++) {
+			if (ka[i] < kb[i]) return -1;
+			if (ka[i] > kb[i]) return 1;
+		}
+		return 0;
+	}).forEach(tr => body.appendChild(tr));
+	const targets = {};
+	rows.forEach(tr => { if (tr.style.display !== 'none') targets[tr.getAttribute('data-target')] = 1; });
+	const n = Object.keys(targets).length;
+	document.getElementById('q_count').textContent =
+		shown + (shown === rows.length ? ' shown' : ' of ' + rows.length + ' shown') +
+		' · ' + live + ' still to send · ' + n + ' target' + (n === 1 ? '' : 's') + ' in view';
+}
+['q_status', 'q_sort', 'q_find'].forEach(id => {
+	const el = document.getElementById(id);
+	if (el) { el.addEventListener('change', applyQueueView); el.addEventListener('input', applyQueueView); }
+});
+if (document.getElementById('q_status')) applyQueueView();
+
+/* ---------- retiming queued commands ----------------------------------
+   A plan lands everything on the same moment, which is almost never what is
+   wanted once it is queued: the nuke has to land before the train, a fake a
+   moment before the real one. Rather than making the import guess, the queue
+   is editable - tick the commands and nudge them, or set one exactly. */
+function rtPost(rows, what) {
+	if (!rows.length) { alert('Tick the commands to move first.'); return; }
+	fetch(appUrl('/app/attack/schedule/retime'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({rows: rows})
+	}).then(r => r.json()).then(d => {
+		const bad = (d.results || []).filter(r => !r.ok);
+		if (bad.length) {
+			alert('Moved ' + d.moved + ' of ' + rows.length + '.\n\n' +
+				bad.map(b => b.error).join('\n'));
+		}
+		location.reload();
+	}).catch(e => alert('Could not move: ' + e));
+}
+/* Cancelling one at a time is fine for one; a plan that turned out wrong is
+   twenty rows, and late in a world it is a great deal more than that. */
+function cancelTicked() {
+	const ids = [];
+	document.querySelectorAll('.rt-pick:checked').forEach(cb => ids.push(cb.getAttribute('data-id')));
+	if (!ids.length) { alert('Tick the commands to cancel first.'); return; }
+	if (!confirm('Cancel ' + ids.length + ' command' + (ids.length === 1 ? '' : 's') +
+		'?\n\nTroops already sent are not recalled - this only stops what has not left yet.')) return;
+	fetch(appUrl('/app/attack/schedule/cancel_many'), {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({ids: ids})
+	}).then(r => r.json()).then(d => {
+		if (d.cancelled < ids.length) {
+			alert('Cancelled ' + d.cancelled + ' of ' + ids.length +
+				'. The rest had already left or were not pending.');
+		}
+		location.reload();
+	}).catch(e => alert('Could not cancel: ' + e));
+}
+function shiftSched(sign) {
+	const box = document.getElementById('rt_shift');
+	const ms = parseFloat(box ? box.value : '0');
+	if (isNaN(ms) || !ms) { alert('Set how many milliseconds to shift by.'); return; }
+	const rows = [];
+	document.querySelectorAll('.rt-pick:checked').forEach(cb => {
+		const at = parseFloat(cb.getAttribute('data-arrival'));
+		rows.push({id: cb.getAttribute('data-id'),
+			arrival: Math.round((at * 1000 + sign * ms)) / 1000});
+	});
+	rtPost(rows, 'shifted');
+}
+const rtPad = (n, w) => String(n).padStart(w || 2, '0');
+/* HH:MM:SS.mmm - what the editor shows and takes back, so what you read is
+   what you type. Milliseconds are always spelled out: this game is sniped in
+   100ms gaps, and a blank is not the same statement as ".000". */
+function rtClock(ts) {
+	const d = new Date(ts * 1000);
+	return rtPad(d.getHours()) + ':' + rtPad(d.getMinutes()) + ':' +
+		rtPad(d.getSeconds()) + '.' + rtPad(d.getMilliseconds(), 3);
+}
+function rtStamp(ts) {
+	const d = new Date(ts * 1000);
+	return d.getFullYear() + '-' + rtPad(d.getMonth() + 1) + '-' + rtPad(d.getDate()) +
+		' ' + rtClock(ts);
+}
+/* Accepts a bare time, which keeps the command's own date - the usual edit is
+   nudging the milliseconds of something landing tonight - or a whole date and
+   time when the day has to move too. */
+function rtParse(text, currentTs) {
+	text = (text || '').trim().replace(',', '.');
+	const t = text.match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+	if (t) {
+		const d = new Date(currentTs * 1000);
+		d.setHours(+t[1], +t[2], +t[3], t[4] ? parseInt((t[4] + '00').slice(0, 3), 10) : 0);
+		return d.getTime() / 1000;
+	}
+	const whole = new Date(text.replace(' ', 'T'));
+	return isNaN(whole.getTime()) ? NaN : whole.getTime() / 1000;
+}
+document.addEventListener('click', function(e) {
+	const link = e.target.closest ? e.target.closest('.rt-edit') : null;
+	if (!link) return;
+	e.preventDefault();
+	const cell = link.closest('td');
+	if (cell.querySelector('input')) return;                 // already editing
+	const id = link.getAttribute('data-id');
+	const current = parseFloat(cell.getAttribute('data-arrival'));
+	const original = cell.innerHTML;
+	const box = document.createElement('input');
+	box.type = 'text';
+	box.className = 'form-control form-control-sm text-right';
+	box.style.width = '9rem';
+	box.value = rtClock(current);
+	box.title = 'HH:MM:SS.mmm, or a whole date and time. Enter saves, Esc cancels.';
+	cell.innerHTML = '';
+	cell.appendChild(box);
+	box.focus();
+	box.setSelectionRange(box.value.length, box.value.length);
+	let done = false;
+	const restore = () => { if (!done) { done = true; cell.innerHTML = original; } };
+	box.addEventListener('keydown', function(ev) {
+		if (ev.key === 'Escape') { restore(); return; }
+		if (ev.key !== 'Enter') return;
+		const when = rtParse(box.value, current);
+		if (isNaN(when)) { box.classList.add('is-invalid'); return; }
+		if (Math.round(when * 1000) === Math.round(current * 1000)) { restore(); return; }
+		done = true;                                          // rtPost reloads
+		rtPost([{id: id, arrival: Math.round(when * 1000) / 1000}], 'set');
+	});
+	box.addEventListener('blur', restore);
+});
+(function() {
+	const all = document.getElementById('rt_all');
+	if (all) all.addEventListener('change', function() {
+		// Only what the current filter shows, so "tick all" can never pick up a
+		// command that is scrolled out of the view by choice.
+		document.querySelectorAll('.rt-pick').forEach(cb => {
+			const tr = cb.closest('tr');
+			if (tr && tr.style.display !== 'none') cb.checked = this.checked;
+		});
+	});
+})();
+
 document.getElementById('s_submit').addEventListener('click', function() {
 	const opt = originOpt();
 	const av = document.getElementById('s_arrival').value;
@@ -872,6 +1247,34 @@ function planTrainSettings() {
 	if (u && n > 0) escort[u] = n;
 	return {mode: document.getElementById('p_mode').value, escort: escort};
 }
+/* The train controls are read when Queue is pressed, so they need no Apply
+   button - but nothing on screen moved when you touched them, which is its own
+   kind of confusing. This says what the current settings would do to a noble
+   row, and follows them as they change. */
+function trainNote(r) {
+	const t = planTrainSettings();
+	const waves = r.count, followers = waves - 1;
+	if (waves < 2) return '';
+	if (t.mode === 'even') {
+		return 'even split: each of the ' + waves + ' waves takes one noble and a ' +
+			'1/' + waves + ' share of the rest — the escort setting is not used';
+	}
+	const unit = Object.keys(t.escort)[0];
+	if (!unit) {
+		return 'front-loaded: wave 1 carries the whole stack, waves 2–' + waves +
+			' go as bare nobles';
+	}
+	const per = t.escort[unit];
+	return 'front-loaded: wave 1 carries what is left, waves 2–' + waves + ' take ' +
+		'one noble + ' + per + ' ' + unitLabel(unit) + ' each — ' + (per * followers) +
+		' ' + unitLabel(unit) + ' must be in the row';
+}
+function refreshTrainNotes() {
+	document.querySelectorAll('.p-train').forEach(el => {
+		const r = PLAN_ROWS[parseInt(el.getAttribute('data-i'), 10)];
+		if (r) el.textContent = trainNote(r);
+	});
+}
 let PLAN_ROWS = [];
 function renderPlan(plan) {
 	PLAN_ROWS = plan.rows || [];
@@ -914,6 +1317,7 @@ function renderPlan(plan) {
 				(r.train ? ' <span class="badge badge-dark">'+r.count+'-noble train</span>' : '')+
 				(r.merged_lines ? '<div class="text-muted">lines '+r.merged_lines.join(', ')+
 					' folded into one train — the waves have to leave as one command</div>' : '')+
+				(r.train ? '<div class="p-train text-info" data-i="'+i+'">'+trainNote(r)+'</div>' : '')+
 				(r.ok ? '' : ' <span class="badge badge-danger">blocked</span>')+
 				(r.ok && (r.warnings||[]).length ? ' <span class="badge badge-warning">check this</span>' : '')+
 				((r.problems||[]).concat(r.warnings||[]).map(t =>
@@ -1016,6 +1420,26 @@ document.getElementById('p_template_reload').addEventListener('click', function(
 				: '<span class="text-danger">No cached templates to refresh yet.</span>';
 		});
 });
+/* An even split never reads the escort, so leaving those two boxes live invites
+   setting something that quietly does nothing. */
+function syncEscortEnabled() {
+	const even = document.getElementById('p_mode').value === 'even';
+	['p_escort_unit', 'p_escort_n'].forEach(id => {
+		const el = document.getElementById(id);
+		if (!el) return;
+		el.disabled = even;
+		el.title = even ? 'Not used when the stack is split evenly' : '';
+		if (el.parentElement) el.parentElement.style.opacity = even ? '.75' : '';
+	});
+}
+['p_mode', 'p_escort_unit', 'p_escort_n'].forEach(id => {
+	const el = document.getElementById(id);
+	if (!el) return;
+	el.addEventListener('input', refreshTrainNotes);
+	el.addEventListener('change', refreshTrainNotes);
+});
+document.getElementById('p_mode').addEventListener('change', syncEscortEnabled);
+syncEscortEnabled();
 document.getElementById('p_all').addEventListener('change', function() {
 	document.querySelectorAll('.p-pick').forEach(cb => { if (!cb.disabled) cb.checked = this.checked; });
 });

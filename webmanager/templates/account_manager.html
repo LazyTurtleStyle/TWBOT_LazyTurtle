@@ -97,7 +97,7 @@
 	{% for s in am.sections %}
 	<li class="nav-item"><a class="nav-link {{ 'active' if loop.first }}" href="#{{ s.key }}" data-pane="{{ s.key }}">
 		{{ s.label }}
-
+		{% if not s.handled %}<span class="badge badge-secondary" title="the manager is not doing this job, so these rows are not applied">off</span>{% endif %}
 		{% if s.rows %}<span class="badge badge-dark">{{ s.rows|length }}</span>{% endif %}</a></li>
 	{% endfor %}
 </ul>
@@ -105,6 +105,15 @@
 {% for s in am.sections %}
 <div id="pane-{{ s.key }}" {% if not loop.first %}style="display:none"{% endif %}>
 
+	{% if not s.handled %}
+	<div class="alert alert-secondary py-2 small">
+		The manager is <strong>not doing {{ s.label|lower }}</strong> — that switch is off under
+		<a href="/config#account_manager">account_manager</a> (or in the quick-controls dock).
+		These rows are kept but <strong>not applied</strong>: setting up a job you have said the
+		manager is not doing is not what that switch means. Villages already carrying a sjabloon
+		keep it until you remove it in game.
+	</div>
+	{% endif %}
 	{% if s.key == 'troops' %}
 	<div class="alert alert-secondary py-2 small">
 		The troop screen has no mass-apply, so this works differently underneath: where
