@@ -233,6 +233,12 @@ class IncomingManager:
                     root.findtext("commands/command_cancel_time") or 600)),
                 "millis_arrival": int(float(
                     root.findtext("commands/millis_arrival") or 0)),
+                # Minimum size of an attack, as a percentage of the sending
+                # village's points. Worlds enforce it to stop one-scout fakes,
+                # and a command under it is refused by the rally point at the
+                # moment it should be launching - which is far too late to find
+                # out. 0 on a world that does not have the rule.
+                "fake_limit": float(root.findtext("game/fake_limit") or 0),
                 "_fetched": int(time.time()),
             }
             FileManager.save_json_file(data, WORLD_CONFIG_CACHE)

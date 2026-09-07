@@ -2773,6 +2773,12 @@ class AttackPlanner:
             "speeds": {u: speeds[u] for u in units},
             "world_speed": world_speed,
             "unit_speed": unit_speed,
+            # Minimum attack size this world enforces, as a percentage of the
+            # sending village's points. The rally point refuses anything under
+            # it at the moment of launch, so the page warns while there is still
+            # time to fix it. 0 when the world has no such rule.
+            "fake_limit": float((DataReader.cache_grab("world") or {})
+                                .get("config", {}).get("fake_limit") or 0),
             # The player's own rally-point templates ("OFF", "Fake", ...), for
             # filling the unit fields without retyping them here.
             "templates": DataReader.troop_templates(),
