@@ -1977,56 +1977,60 @@ class UnitTemplateManager:
 
 
 class MapBuilder:
+    """Everything the map page needs to draw the world itself.
+
+    It used to hand over a fixed grid of cells centred on one village, which is
+    why the map could not be moved: there was nothing outside the window to move
+    to. The whole village database is a few hundred kilobytes, so it goes across
+    as a flat list and the page draws whatever part of the world it is looking
+    at - which is what makes panning, zooming and jumping to a coordinate
+    possible at all.
+    """
 
     @staticmethod
-    def build(villages, current_village=None, size=None):
-        out_map = {}
-        min_x = 999
-        max_x = 0
-        min_y = 999
-        max_y = 0
+    def build(villages, mine=None, current_village=None):
+        mine = mine or {}
+        owner = tribe = None
+        centre = None
 
-        current_location = None
-        grid_vils = {}
-        extra_data = {}
+        out = []
+        for vid, village in (villages or {}).items():
+            location = village.get("location")
+            if not location or len(location) != 2:
+                continue
+            is_mine = str(vid) in mine
+            if is_mine:
+                # Ownership is read off our own villages rather than assumed, so
+                # a village of ours identifies the player and the tribe even
+                # when the map was opened without a village to centre on.
+                owner = owner or village.get("owner")
+                tribe = tribe or village.get("tribe")
+            if current_village and str(vid) == str(current_village):
+                centre = [int(location[0]), int(location[1])]
+            out.append({
+                "id": str(vid),
+                "name": village.get("name") or str(vid),
+                "x": int(location[0]),
+                "y": int(location[1]),
+                "points": village.get("points") or 0,
+                "tribe": str(village.get("tribe") or "0"),
+                "owner": str(village.get("owner") or "0"),
+                "mine": is_mine,
+            })
 
-        for v in villages:
-            vdata = villages[v]
-            x, y = vdata['location']
-            if x < min_x:
-                min_x = x
-            if x > max_x:
-                max_x = x
-
-            if y < min_y:
-                min_y = y
-            if y > max_y:
-                max_y = y
-            if current_village and vdata['id'] == current_village:
-                current_location = vdata['location']
-                extra_data['owner'] = vdata['owner']
-                extra_data['tribe'] = vdata['tribe']
-            grid_vils["%d:%d" % (x, y)] = vdata
-
-        if current_location and size:
-            min_x = current_location[0] - size
-            min_y = current_location[1] - size
-            max_x = current_location[0] + size
-            max_y = current_location[1] + size
-
-        for location_x in range(min_x, max_x):
-            if location_x not in out_map:
-                out_map[location_x - min_x] = {}
-            ylocs = {}
-            for location_y in range(min_y, max_y):
-                location = "%d:%d" % (location_x, location_y)
-                if location in grid_vils:
-                    ylocs[location_y - min_y] = grid_vils[location]
-                else:
-                    ylocs[location_y - min_y] = None
-            out_map[location_x - min_x] = ylocs
-
-        return {"grid": out_map, "extra": extra_data}
+        ours = [(v["x"], v["y"]) for v in out if v["mine"]]
+        if centre is None and ours:
+            # The middle of our own villages is the only sensible opening view:
+            # it is where the account actually is.
+            centre = [round(sum(x for x, _ in ours) / len(ours)),
+                      round(sum(y for _, y in ours) / len(ours))]
+        return {
+            "villages": out,
+            "centre": centre or [500, 500],
+            "owner": str(owner or "0"),
+            "tribe": str(tribe or "0"),
+            "mine_count": len(ours),
+        }
 
 
 class OverviewBuilder:

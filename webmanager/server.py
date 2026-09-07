@@ -948,11 +948,11 @@ def get_village_config():
 @app.route('/map', methods=['GET'])
 def get_map():
     sync_data = sync()
-    center_id = request.args.get("center", None)
-    # No managed villages (e.g. no world cookie -> empty default world): there
-    # is nothing to center on, don't crash the whole page.
-    center = center_id or next(iter(sync_data['bot']), None)
-    map_data = json.dumps(MapBuilder.build(sync_data['villages'], current_village=center, size=15))
+    # An explicit ?center=<village id> wins; otherwise the page opens on the
+    # middle of our own villages, which the builder works out.
+    map_data = json.dumps(MapBuilder.build(
+        sync_data['villages'], mine=sync_data.get('bot') or {},
+        current_village=request.args.get("center")))
     return render_template('map.html', data=sync_data, map=map_data)
 
 
