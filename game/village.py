@@ -1086,7 +1086,17 @@ class Village:
         self.units_get_template()
         self.set_unit_wanted_levels()
 
-        self.units.update_totals()
+        if not self.units.update_totals():
+            # No readable overview for this village: a dead session, a captcha,
+            # a request that came back empty. Everything below reasons from
+            # those troop counts, so leave the village for the next cycle
+            # rather than acting on a page that is not there. This used to be an
+            # AttributeError that took the whole bot down while nobody was
+            # watching, which is the worst possible moment for it.
+            self.logger.warning(
+                "Village %s: skipping the rest of this pass, no game state",
+                self.village_id)
+            return
         # Dodge the fragile units now that the troop counts are fresh. This is
         # deliberately independent of the global units.manage_defence switch:
         # the per-village toggle alone decides.

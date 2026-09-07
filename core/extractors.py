@@ -86,7 +86,7 @@ class Extractor:
         Detects village data on a page
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         grabber = _RE_VILLAGE_DATA.search(res)
         if grabber:
             data = grabber.group(1)
@@ -96,9 +96,17 @@ class Extractor:
     def game_state(res):
         """
         Detects the game state that is available on most pages
+
+        A request that came back with nothing - a dead session, a captcha, a
+        socket that gave up - arrives here as None, and reading .text off it
+        used to raise straight through the caller and take the bot down. It is
+        read as an empty page instead, so this returns None the same way it does
+        for a page that simply has no game state in it, and the caller deals
+        with "no data" rather than an exception. Every extractor in this file
+        does the same, for the same reason.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         grabber = _RE_GAME_STATE.search(res)
         if grabber:
             data = grabber.group(1)
@@ -110,7 +118,7 @@ class Extractor:
         Fetches building data from the main building
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         dre = _RE_BUILDING_DATA.search(res)
         if dre:
             return json.loads(dre.group(1), strict=False)
@@ -127,7 +135,7 @@ class Extractor:
         if res is None:
             return None
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         get_quests = _RE_QUESTS.search(res)
         if get_quests:
             result = json.loads(get_quests.group(1), strict=False)
@@ -145,7 +153,7 @@ class Extractor:
         Detects if there are rewards available for quests
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         get_rewards = _RE_QUEST_REWARDS.search(res)
         rewards = []
         if get_rewards:
@@ -162,7 +170,7 @@ class Extractor:
         Detects other villages on the map page
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_MAP_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
@@ -174,7 +182,7 @@ class Extractor:
         Gets smith data
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_SMITH_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
@@ -187,7 +195,7 @@ class Extractor:
         Detects data on the premium exchange page
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_PREMIUM_DATA.search(res)
         if data:
             result = json.loads(data.group(1), strict=False)
@@ -200,7 +208,7 @@ class Extractor:
         Fetches recruit data for the current building
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_RECRUIT_DATA.search(res)
         if data:
             raw = data.group(1)
@@ -214,7 +222,7 @@ class Extractor:
         Detects all units in the village
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         matches = _RE_UNITS_HOME.search(res)
         # We get the start of the table and grab the 2nd row (Where "From this village" troops are located)
         if matches:
@@ -235,7 +243,7 @@ class Extractor:
         "select all" links next to each unit input. Returns {unit: int}.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         return {
             unit: int(count.replace(".", "").replace(",", ""))
             for unit, count in _RE_PLACE_ENTRY_ALL.findall(res)
@@ -247,7 +255,7 @@ class Extractor:
         Detects queued building entries
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         builder = _RE_BUILD_QUEUE.search(res)
         if not builder:
             return 0
@@ -263,7 +271,7 @@ class Extractor:
         table header so worlds without archers/paladins parse correctly.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         m = _RE_UNITS_TABLE.search(res)
         if not m:
             return {}
@@ -300,7 +308,7 @@ class Extractor:
         not per village, so one read covers the whole account.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         anchor = res.find("TroopTemplates.current")
         if anchor == -1:
             return {}
@@ -353,7 +361,7 @@ class Extractor:
         on the world's language.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         table = _RE_BUILD_QUEUE.search(res)
         if not table:
             return []
@@ -409,7 +417,7 @@ class Extractor:
         up in both, once at its host and once at its owner.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         m = _RE_UNITS_TABLE.search(res)
         if not m:
             return {}
@@ -469,7 +477,7 @@ class Extractor:
         or this only ever sees the soonest arrivals.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         on_page = bool(_RE_COMMANDS_PAGE.search(res))
         m = _RE_COMMANDS_TABLE.search(res)
         if not m:
@@ -514,7 +522,7 @@ class Extractor:
         Detects active recruitment entries
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         builder = _RE_RECRUIT_QUEUE.findall(res)
         return builder
 
@@ -524,7 +532,7 @@ class Extractor:
         Fetches villages from the overview page
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         villages = _RE_VILLAGE_IDS.findall(res)
         return list(set(villages))
 
@@ -534,7 +542,7 @@ class Extractor:
         Gets total amount of units in a village
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         # hide units from other villages
         res = _RE_VILLAGE_ANCHOR.sub('', res)
         data = _RE_UNITS_TOTAL.findall(res)
@@ -547,7 +555,7 @@ class Extractor:
         ... because there are many :)
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_ATTACK_FORM.findall(res)
         return data
 
@@ -557,7 +565,7 @@ class Extractor:
         Detects the duration of an attack
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_ATTACK_DURATION.search(res)
         if data:
             return int(data.group(1))
@@ -569,7 +577,7 @@ class Extractor:
         Fetches information from a report
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         data = _RE_REPORT_TABLE.findall(res)
         return data
 
@@ -580,7 +588,7 @@ class Extractor:
         The main folder (group 0) is implicit and not listed as an option.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         select = _RE_REPORT_GROUP_SELECT.search(res)
         if not select:
             return []
@@ -597,7 +605,7 @@ class Extractor:
         Returns {village_id: {"a": {...}, "b": {...}, "c": {...}}}, only for icons present.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         result = {}
         for match in _RE_FARM_ICON.finditer(res):
             attrs, vid, kind = match.group(1), match.group(2), match.group(3)
@@ -623,7 +631,7 @@ class Extractor:
         parsed with raw_decode instead of a regex.
         """
         if type(res) != str:
-            res = res.text
+            res = getattr(res, "text", "") or ""
         marker = res.find("DailyBonus.init(")
         if marker == -1:
             return None

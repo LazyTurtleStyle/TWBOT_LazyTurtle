@@ -143,11 +143,21 @@ class TroopManager:
     def update_totals(self):
         """
         Updates the total amount of recruited units
+
+        Returns False when the village's overview could not be read - a dead
+        session, a captcha, a request that came back empty. That is a normal
+        thing to happen mid-cycle and the answer is to leave this village for
+        the next pass, not to reason from a page that is not there.
         """
         main_data = self.wrapper.get_action(
             action="overview", village_id=self.village_id
         )
         self.game_data = Extractor.game_state(main_data)
+        if not self.game_data:
+            (self.logger or logging.getLogger("Recruitment")).warning(
+                "Village %s: the overview came back empty - skipping this "
+                "village for now", self.village_id)
+            return False
 
         if self.resman:
             if "research" in self.resman.requested:
@@ -202,6 +212,7 @@ class TroopManager:
                 for unit in units
             }
         self.logger.debug("Village units total: %s", str(self.total_troops))
+        return True
 
     def troops_elsewhere(self):
         """This village's own units that are not at home: stationed in another
