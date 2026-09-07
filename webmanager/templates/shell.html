@@ -102,6 +102,11 @@
 	.stat .v { font-family: var(--mono); font-size: 26px; font-weight: 500; line-height: 1; color: var(--ink); }
 	.stat .v.gold { color: var(--gold); }
 	.stat .k { margin-top: 6px; }
+	/* A tile holding three resource figures needs the width of two holding one
+	   number. Without this the value simply overflows its box - the grid gives
+	   every tile the same track, whatever is in it. */
+	.stat.wide { grid-column: span 2; }
+	@media (max-width: 700px) { .stat.wide { grid-column: span 1; } }
 	.stat .sub { color: var(--ink-faint); font-size: 11px; }
 
 	/* ---------- Tables ---------- */

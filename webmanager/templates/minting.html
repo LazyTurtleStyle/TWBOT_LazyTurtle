@@ -2,6 +2,12 @@
 {% block title %}Coin minting{% endblock %}
 
 {% block content %}
+<style>
+	/* Three resource figures where the tile design expects one number. Sized
+	   down and allowed to wrap at the separators: a tile that overflows its box
+	   is worse than one that runs to two lines. */
+	.stat .v.res-triple { font-size: 17px; line-height: 1.3; white-space: normal; }
+</style>
 <p class="text-muted small mt-1">
 	Coins buy noble limits, and minting them is a logistics job: one village holds the
 	coin-cost flag, the game mints there automatically for eight hours at a time, and the
@@ -51,11 +57,11 @@
 				<div class="k">Coins the bot has hauled</div>
 				<div class="sub">{% if mint.requested_total.wood %}{{ mint.requested_total.wood|kshort }} / {{ mint.requested_total.stone|kshort }} / {{ mint.requested_total.iron|kshort }} over {{ mint.runs_with_requests }} run{{ '' if mint.runs_with_requests == 1 else 's' }}{% else %}nothing requested yet{% endif %}</div></div>
 			{% if mint.cost %}
-			<div class="stat"><div class="v" style="font-size:15px; white-space:nowrap">{{ mint.cost.wood|comma }} / {{ mint.cost.stone|comma }} / {{ mint.cost.iron|comma }}</div>
+			<div class="stat wide"><div class="v res-triple">{{ mint.cost.wood|comma }} / {{ mint.cost.stone|comma }} / {{ mint.cost.iron|comma }}</div>
 				<div class="k">Cost per coin</div>
 				<div class="sub">{% if mint.discount %}{{ (mint.discount * 100)|round(0)|int }}% off — flag and boosts{% else %}no discount{% endif %}</div></div>
 			{% endif %}
-			<div class="stat"><div class="v" style="font-size:15px; white-space:nowrap">{{ mint.held.wood|kshort }} / {{ mint.held.stone|kshort }} / {{ mint.held.iron|kshort }}</div>
+			<div class="stat wide"><div class="v res-triple">{{ mint.held.wood|kshort }} / {{ mint.held.stone|kshort }} / {{ mint.held.iron|kshort }}</div>
 				<div class="k">In the warehouse</div>
 				<div class="sub">{% if mint.incoming.wood %}{{ mint.incoming.wood|kshort }} / {{ mint.incoming.stone|kshort }} / {{ mint.incoming.iron|kshort }} still walking{% else %}nothing on the way{% endif %}</div></div>
 			<div class="stat"><div class="v {{ 'gold' if mint.auto_mint else '' }}">{{ 'on' if mint.auto_mint else 'off' }}</div>
