@@ -3607,6 +3607,9 @@ class MintingOverview:
             "coins_now": coins_from(held),
             "coins_after": coins_from(arriving),
             "last_run": state.get("last_run"),
+            "next_run": (int(state.get("last_run") or 0)
+                         + int(settings.get("interval_minutes", 60) or 60) * 60
+                         if state.get("last_run") and settings.get("enabled") else None),
             "asked": state.get("asked_villages"),
             "candidates": state.get("candidates"),
             "last_total": state.get("last_total") or {},

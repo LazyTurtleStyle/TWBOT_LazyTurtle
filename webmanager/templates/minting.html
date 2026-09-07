@@ -29,9 +29,13 @@
 				{% if mint.last_run %} · last run {{ mint.last_run|ago }}{% endif %}</small></span>
 		<span class="ml-auto d-flex align-items-center" style="gap:.4rem">
 			<button class="btn btn-sm" id="m_now">Request now</button>
-			<button class="btn btn-sm {{ 'btn-success' if mint.enabled else 'btn-danger' }}"
-				id="m_toggle" data-on="{{ '1' if mint.enabled else '0' }}">
-				{{ 'Feeding it' if mint.enabled else 'Not feeding it' }}</button>
+			<button class="btn btn-sm {{ 'btn-live' if mint.enabled else 'btn-danger' }}"
+				id="m_toggle" data-on="{{ '1' if mint.enabled else '0' }}"
+				data-every="{{ mint.interval }}">
+				{{ 'Sending every %d min'|format(mint.interval) if mint.enabled else 'Not sending' }}</button>
+			{% if mint.next_run %}
+			<small class="text-muted" id="m_next" data-at="{{ mint.next_run }}">next run …</small>
+			{% endif %}
 		</span>
 	</div>
 	<div class="card-body py-2">
@@ -44,7 +48,7 @@
 				<div class="k">Coins in the warehouse</div>
 				<div class="sub">{% if mint.coins_after is not none %}{{ mint.coins_after }} once the merchants land{% endif %}</div></div>
 			{% if mint.cost %}
-			<div class="stat"><div class="v" style="font-size:19px">{{ mint.cost.wood|comma }}/{{ mint.cost.stone|comma }}/{{ mint.cost.iron|comma }}</div>
+			<div class="stat"><div class="v" style="font-size:15px; white-space:nowrap">{{ mint.cost.wood|comma }} / {{ mint.cost.stone|comma }} / {{ mint.cost.iron|comma }}</div>
 				<div class="k">Cost per coin</div>
 				<div class="sub">{% if mint.discount %}{{ (mint.discount * 100)|round(0)|int }}% off — flag and boosts{% else %}no discount{% endif %}</div></div>
 			{% endif %}
@@ -166,6 +170,18 @@ document.querySelectorAll('.m-set').forEach(el => {
 			});
 	});
 });
+/* A countdown says "it is running" far better than a colour does. */
+(function() {
+	const el = document.getElementById('m_next');
+	if (!el) return;
+	const at = parseFloat(el.dataset.at);
+	setInterval(function tick() {
+		let d = Math.round(at - Date.now() / 1000);
+		if (d <= 0) { el.textContent = 'next run due now'; return; }
+		const h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60);
+		el.textContent = 'next run in ' + (h ? h + 'h ' + m + 'm' : m + 'm ' + (d % 60) + 's');
+	}, 1000);
+})();
 document.getElementById('m_now').onclick = function() {
 	const btn = this;
 	btn.disabled = true;
@@ -179,8 +195,9 @@ document.getElementById('m_toggle').onclick = function() {
 		.then(r => r.json()).then(d => {
 			if (!d || !d.ok) return;
 			btn.setAttribute('data-on', next);
-			btn.textContent = next === '1' ? 'Feeding it' : 'Not feeding it';
-			btn.classList.toggle('btn-success', next === '1');
+			btn.textContent = next === '1'
+				? 'Sending every ' + btn.dataset.every + ' min' : 'Not sending';
+			btn.classList.toggle('btn-live', next === '1');
 			btn.classList.toggle('btn-danger', next !== '1');
 		});
 };
