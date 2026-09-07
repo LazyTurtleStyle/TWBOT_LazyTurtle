@@ -59,8 +59,7 @@ _RE_DURATION = re.compile(r'<td>(\d+:\d{2}:\d{2})</td>')
 _RE_TRADERS = re.compile(r'class="traders">(\d+)/(\d+)<')
 _RE_STORAGE = re.compile(r'<td>(\d+)</td>\s*<td class="traders"')
 _RE_CALL_FORM = re.compile(r'<form[^>]*action="([^"]*action=call[^"]*)"')
-_RE_INCOMING = re.compile(
-    r'Binnenkomende grondstoffen:.*?</td>\s*<td[^>]*>(.*?)</tr>', re.S)
+
 # The academy prints the live coin cost in three ids, discount already applied.
 _RE_COINS = re.compile(r'(?s)Goudmunten.*?Totaal:.*?<td[^>]*>(.*?)</td>')
 # Auto-minting is idle exactly when the page still offers to start a session;
@@ -100,6 +99,28 @@ def _coin_costs(page):
                 chunk = chunk[:cut]
         costs[kind] = _num(chunk)
     return costs
+
+
+def _totals(page):
+    """Resources already walking to this village, from its three total cells.
+
+    Read the same way as the coin costs and for the same reason: the game
+    writes a thousands separator as its own element, so anything that stops at
+    the first closing tag reports 468.090 as 468 - or, matched loosely across
+    the table, picks up unrelated numbers entirely. Under-reading this inflates
+    the headroom, which is the one number that must never be too generous:
+    resources arriving at a full warehouse are destroyed.
+    """
+    totals = {}
+    for kind in RESOURCES:
+        marker = 'id="total_%s"' % kind
+        at = page.find(marker)
+        if at < 0:
+            continue
+        chunk = page[at:at + 220]
+        cut = chunk.find("</td>")
+        totals[kind] = _num(chunk[:cut] if cut > 0 else chunk)
+    return {r: totals.get(r, 0) for r in RESOURCES}
 
 
 def load_state():
@@ -167,14 +188,7 @@ def read_call(wrapper, village_id, group="0"):
             "storage": int(storage.group(1)) if storage else 0,
             "stock": {r: stock.get(r, 0) for r in RESOURCES},
         })
-    incoming = {r: 0 for r in RESOURCES}
-    found = _RE_INCOMING.search(page)
-    if found:
-        numbers = re.findall(r'data-res="(\d+)"|>([\d.]+)<', found.group(1))
-        flat = [_num(a or b) for a, b in numbers if (a or b)]
-        for index, kind in enumerate(RESOURCES):
-            if index < len(flat):
-                incoming[kind] = flat[index]
+    incoming = _totals(page)
     return {"villages": villages, "incoming": incoming,
             "form": html_module.unescape(form.group(1)).lstrip("/") if form else None}
 
