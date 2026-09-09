@@ -597,7 +597,21 @@ class DataReader:
         notes = []
         if train and support:
             return None, "a support command cannot be a noble train"
-        if train:
+        if train and str(train.get("mode")) == "copies":
+            # A fake train: the same small stack sent several times from one
+            # village, landing back-to-back the way a noble train does. The
+            # runner already fires a list of waves without caring what is in
+            # them - only the splitting was ever about nobles - so this just
+            # hands it the same units N times.
+            count = max(2, min(int(train.get("waves") or 2), 10))
+            if attack_scheduler.has_all(selected):
+                return None, ("a fake train needs exact counts, not 'all' - "
+                              "every wave sends the same stack")
+            waves = [dict(selected) for _ in range(count)]
+            notes.append("%d identical waves, %s each"
+                         % (count, ", ".join("%s %s" % (u, n)
+                                             for u, n in selected.items())))
+        elif train:
             home = {}
             for unit, count in (origin.get("available_troops") or {}).items():
                 try:
@@ -709,6 +723,9 @@ class DataReader:
             entry["waves"] = waves
             entry["train"] = {
                 "mode": train.get("mode") or "front",
+                # A fake train is never re-split at send time: there are no
+                # nobles to count, and each wave is meant to be identical.
+                "fake": str(train.get("mode")) == "copies",
                 "nobles": len(waves),
                 "escort": train.get("escort") or {},
                 # Re-read the village and re-split at send time. Leave room for

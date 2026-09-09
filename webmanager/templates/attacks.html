@@ -472,6 +472,29 @@
 			</fieldset>
 
 			<fieldset class="imp-group">
+				<legend class="imp-legend">Fake trains &mdash; every <em>ticked</em> row</legend>
+				<div class="d-flex align-items-end" style="gap:.4rem">
+					<div style="width:7rem">
+						<label class="small mb-1" for="p_fake_waves">Send as</label>
+						<select id="p_fake_waves" class="form-control form-control-sm">
+							<option value="1">1 command</option>
+							<option value="2">2 waves</option>
+							<option value="3">3 waves</option>
+							<option value="4">4 waves</option>
+							<option value="5">5 waves</option>
+							<option value="6">6 waves</option>
+						</select>
+					</div>
+				</div>
+				<div class="imp-hint">Sends each ticked row several times from the same village,
+					back-to-back, so it reads like a noble train to anyone not checking travel
+					times. Every wave carries the row's full stack, so 4 waves of
+					<code>ram:1, spy:150</code> needs 4 rams and 600 scouts standing there.
+					Noble rows are left alone. Exact counts only &mdash; "all" cannot be sent
+					four times.</div>
+			</fieldset>
+
+			<fieldset class="imp-group">
 				<legend class="imp-legend">Noble rows only</legend>
 				<div class="d-flex align-items-end flex-wrap" style="gap:.4rem">
 					<div>
@@ -1242,6 +1265,15 @@ function checkFloor(i) {
 	if (!row || !cell || !box) return;
 	const floor = rowFloor(row);
 	const found = rowPopulation(row, textToUnits(box.value));
+	// A fake train needs its stack N times over, so the shortfall it reports
+	// has to be measured against N times what was typed.
+	const waves = (!row.train && row.unit !== 'snob')
+		? (parseInt(document.getElementById('p_fake_waves').value, 10) || 1) : 1;
+	if (found && waves > 1) {
+		const each = rowPopulation(row, textToUnits(box.value));
+		found.waves = waves;
+		found.short = each.short;
+	}
 	const under = floor && found && found.pop < floor;
 	cell.innerHTML = under
 		? '<small class="text-danger">too small: ' + found.pop + ' population, this village ' +
@@ -1500,6 +1532,10 @@ function syncEscortEnabled() {
 		if (el.parentElement) el.parentElement.style.opacity = even ? '.75' : '';
 	});
 }
+['p_fake_waves'].forEach(id => {
+	const el = document.getElementById(id);
+	if (el) el.addEventListener('change', checkAllFloors);
+});
 ['p_mode', 'p_escort_unit', 'p_escort_n'].forEach(id => {
 	const el = document.getElementById(id);
 	if (!el) return;
@@ -1519,14 +1555,20 @@ document.getElementById('p_queue').addEventListener('click', function() {
 		const i = parseInt(cb.getAttribute('data-i'), 10);
 		const r = PLAN_ROWS[i];
 		const box = document.querySelector('.p-units[data-i="'+i+'"]');
+		// A fake train is the same stack sent several times; a noble row keeps
+		// its own train settings, since that is a different thing entirely.
+		const fake = parseInt(document.getElementById('p_fake_waves').value, 10) || 1;
 		rows.push({
 			line: r.line, origin_id: r.origin_id,
 			target_x: r.target[0], target_y: r.target[1],
+			fake_waves: (!r.train && r.unit !== 'snob' && fake > 1) ? fake : null,
 			// The plan's milliseconds are the point of a spaced plan, so they
 			// go to the queue as they are rather than being floored away.
 			arrival: Math.round(r.arrival_ts * 1000) / 1000,
 			units: textToUnits(box ? box.value : ''),
-			train: r.train ? train : null,
+			train: r.train ? train
+				: ((!r.train && r.unit !== 'snob' && fake > 1)
+					? {mode: 'copies', waves: fake} : null),
 			support: r.kind === 'support',
 		});
 	});
