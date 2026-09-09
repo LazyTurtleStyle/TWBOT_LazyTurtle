@@ -53,6 +53,17 @@
 		table, then hit Save &mdash; nothing is written until you do.
 	</div>
 
+	{% if not overrides.scavenge_global or not overrides.farm_global %}
+	<div class="faint" style="font-size:12px;margin-top:6px;color:var(--ember)">
+		{% set off = [] %}
+		{% if not overrides.scavenge_global %}{% set _ = off.append('Scavenging') %}{% endif %}
+		{% if not overrides.farm_global %}{% set _ = off.append('Farming') %}{% endif %}
+		{{ off|join(' and ') }} {{ 'is' if off|length == 1 else 'are' }} switched off account-wide in
+		Quick controls, so nothing below happens until you turn {{ 'it' if off|length == 1 else 'them' }}
+		back on. The per-village settings here are kept either way.
+	</div>
+	{% endif %}
+
 	{% if overrides.groups %}
 	<div class="group-bar">
 		<label for="group_filter">Group</label>

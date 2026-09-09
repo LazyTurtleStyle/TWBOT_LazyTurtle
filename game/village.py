@@ -794,8 +794,7 @@ class Village:
             section="farms", parameter="shaper_axe_cap", default=0)
         shaper.max_travel_hours = self.get_config(
             section="farms", parameter="shaper_max_travel_hours", default=0)
-        gather_on = self.get_village_config(
-            self.village_id, parameter="gather_enabled", default=False)
+        gather_on = self.scavenging_enabled()
         excluded = list(self.disabled_units) + list(self.get_village_config(
             self.village_id, parameter="gather_exclude_units", default=[]) or [])
         shaper.scavenge_uses_axes = bool(gather_on and "axe" not in excluded)
@@ -902,6 +901,28 @@ class Village:
     # policy groups gets the safest one (never > pause_attacked > always).
     GATHER_GROUP_POLICIES = ("never", "pause_attacked", "always")
 
+    def scavenging_enabled(self):
+        """Whether this village may scavenge at all.
+
+        The account-wide switch AND the village's own flag, the same shape as
+        farming (farms.farm + farm_enabled) and building. It used to be the
+        per-village flag alone, with the dashboard's Scavenging toggle writing
+        itself into every village - which stops scavenging, but by overwriting
+        every per-village choice on the way, so turning it back on turned it on
+        everywhere including the villages deliberately left off. A switch you
+        cannot flip back without losing what it was hiding is a switch that
+        costs something to use.
+
+        farms.scavenge defaults to on, so a config written before it existed
+        behaves exactly as it did: the per-village flags still decide, and no
+        village starts scavenging that was not already.
+        """
+        return bool(
+            self.get_config(section="farms", parameter="scavenge", default=True)
+            and self.get_village_config(
+                self.village_id, parameter="gather_enabled", default=False)
+        )
+
     def _gather_group_policy(self):
         """This village's scavenging policy from in-game group membership
         (alpha), or None when no policy group contains it.
@@ -954,9 +975,7 @@ class Village:
         armed - a manual override for incomings you judged harmless (e.g. a
         lone scout run). Flip it back off when a real attack is inbound.
         """
-        self.units.can_gather = self.get_village_config(
-            self.village_id, parameter="gather_enabled", default=False
-        )
+        self.units.can_gather = self.scavenging_enabled()
         policy = self._gather_group_policy()
         if policy == "never":
             self.logger.debug("Scavenging blocked by group policy 'never'")

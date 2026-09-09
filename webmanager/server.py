@@ -1115,6 +1115,11 @@ def pre_process_overrides(data):
         'troop_templates': template_names('troops'),
         'building_default': config.get('building', {}).get('default') or 'purple_predator',
         'units_default': config.get('units', {}).get('default') or 'basic',
+        # The account-wide gates behind these columns. A village reading "on"
+        # while the switch above it is off is a true statement about the config
+        # and a false one about what the bot is doing, so the page says so.
+        'scavenge_global': bool(config.get('farms', {}).get('scavenge', True)),
+        'farm_global': bool(config.get('farms', {}).get('farm', False)),
         # Only groups that actually hold one of these villages: the list is
         # every group on the account, and offering ones that would filter the
         # table down to nothing is just a way to look broken.
@@ -1276,7 +1281,10 @@ QUICK_TOGGLES = {
     "recruit": ("Recruiting", "units.recruit"),
     "build": ("Building", "building.manage_buildings"),
     "trade": ("Trading", "market.auto_trade"),
-    "scavenge": ("Scavenging", "village_template.gather_enabled"),
+    # Account-wide gate ANDed with each village's own gather_enabled, the same
+    # shape as Farming and Building. Defaults on, so a config written before the
+    # key existed keeps behaving as it did - the per-village flags still decide.
+    "scavenge": ("Scavenging", "farms.scavenge", True),
     "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
     "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
     # The in-game (premium) Account Manager. Each job is its own switch because
@@ -1296,9 +1304,12 @@ QUICK_TOGGLES = {
     "mint": ("Feed the coin village", "minting.enabled"),
 }
 
-# Per-village quick toggles are broadcast to every village (not a global section).
-PER_VILLAGE_TOGGLES = {"scavenge": "gather_enabled",
-                       "scavenge_attacked": "gather_when_attacked",
+# Per-village quick toggles are broadcast to every village (not a global
+# section). These two are behaviour flags rather than an on/off gate - they only
+# mean anything for a village already scavenging - so setting them everywhere is
+# the useful thing. The master switch above deliberately is NOT one of them: it
+# used to be, and turning it off overwrote every per-village choice with 'off'.
+PER_VILLAGE_TOGGLES = {"scavenge_attacked": "gather_when_attacked",
                        "scavenge_night": "gather_night_consolidate"}
 
 
@@ -1306,9 +1317,13 @@ def quick_settings_state():
     """Current on/off value for each quick toggle, for rendering the side panel."""
     config = DataReader.config_grab()
     state = []
-    for key, (label, path) in QUICK_TOGGLES.items():
+    for key, spec in QUICK_TOGGLES.items():
+        label, path = spec[0], spec[1]
+        # Most switches are off until turned on; one that gates behaviour which
+        # already existed has to default on, or upgrading would silently stop it.
+        default = spec[2] if len(spec) > 2 else False
         section, param = path.split('.')
-        on = bool(config.get(section, {}).get(param, False))
+        on = bool(config.get(section, {}).get(param, default))
         state.append({"key": key, "label": label, "on": on})
     return state
 
