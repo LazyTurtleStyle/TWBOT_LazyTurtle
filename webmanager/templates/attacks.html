@@ -4,6 +4,10 @@
 {% block content %}
 <style>
 	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	/* The units column is narrow because it usually holds a few words. The
+	   editor that replaces it holds a select, a stack and a wave count, so
+	   it claims the room it needs rather than wrapping one word per line. */
+	.tr-editing { min-width: 15rem; }
 	/* A row the rally point would refuse. Marked, not disabled: it is still
 	   queueable, because sending it anyway is the user's call. */
 	tr.floor-short > td { background: rgba(210,75,62,.10); }
@@ -231,6 +235,20 @@
 
 				<div class="form-group mb-2">
 					<label class="small mb-1">
+						<input id="s_fake" type="checkbox"> Send as a <strong>fake train</strong>
+						<span class="text-muted">, the same stack</span>
+						<select id="s_fake_waves" class="form-control form-control-sm d-inline-block"
+							style="width:4.2rem; padding:0 .3rem">
+							<option>2</option><option>3</option><option selected>4</option>
+							<option>5</option><option>6</option>
+						</select>
+						<span class="text-muted">times, back-to-back &mdash; reads like a noble train
+							to anyone not checking travel times. Exact counts only.</span>
+					</label>
+				</div>
+
+				<div class="form-group mb-2">
+					<label class="small mb-1">
 						<input id="s_train" type="checkbox"> Send as a <strong>noble train</strong>
 						<span class="text-muted">, one noble per wave, all fired back-to-back</span>
 					</label>
@@ -320,16 +338,28 @@
 							data-arrival="{{ c.arrival_ts }}" data-send="{{ c.send_ts }}"
 							data-target="{{ c.target_x }}|{{ c.target_y }}"
 							data-kind="{{ 'train' if c.waves else ('nuke' if c.units.axe else 'other') }}"
+							data-units='{{ c.units|tojson }}'
+							data-fake="{{ 1 if c.train and c.train.mode == 'copies' else 0 }}"
+							data-origin="{{ c.origin_id }}"
+							data-nwaves="{{ c.waves|length if c.waves else 0 }}"
 							data-search="{{ ('%s|%s %s %s' % (c.target_x, c.target_y, c.target_name or '', c.origin_name or ''))|lower }}">
 							<td>{% if c.status == 'pending' %}<input type="checkbox" class="rt-pick"
 								data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">{% endif %}</td>
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
 								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
 							<td><small>{{ c.origin_name }}</small></td>
-							<td><small>
+							<td class="tr-cell" data-id="{{ c.id }}">
+								{% if c.status == 'pending' %}<a href="#" class="tr-edit btn btn-outline-secondary btn-sm py-0 float-right ml-2"
+									data-id="{{ c.id }}" title="Change the template this command carries">edit</a>{% endif %}
+								<small>
 								{% if c.waves %}
+								{% if c.train and c.train.mode == 'copies' %}
+								<span class="badge badge-dark">{{ c.waves|length }}-wave fake train</span>
+								<span class="text-muted">identical copies</span>
+								{% else %}
 								<span class="badge badge-dark">{{ c.waves|length }}-noble train</span>
 								<span class="text-muted">{{ 'front-loaded' if c.train and c.train.mode == 'front' else 'even split' }}</span>
+								{% endif %}
 								{% if c.train and c.train.dynamic and c.status == 'pending' %}
 								<span class="badge badge-info"
 									title="Queued with 'all', so this is counted from the newest troop snapshot and counted again off the rally point just before sending. It can grow to {{ c.train.max_waves }} waves.">recounted at send</span>
@@ -472,6 +502,29 @@
 			</fieldset>
 
 			<fieldset class="imp-group">
+				<legend class="imp-legend">Fake trains &mdash; every <em>ticked</em> row</legend>
+				<div class="d-flex align-items-end" style="gap:.4rem">
+					<div style="width:7rem">
+						<label class="small mb-1" for="p_fake_waves">Send as</label>
+						<select id="p_fake_waves" class="form-control form-control-sm">
+							<option value="1">1 command</option>
+							<option value="2">2 waves</option>
+							<option value="3">3 waves</option>
+							<option value="4">4 waves</option>
+							<option value="5">5 waves</option>
+							<option value="6">6 waves</option>
+						</select>
+					</div>
+				</div>
+				<div class="imp-hint">Sends each ticked row several times from the same village,
+					back-to-back, so it reads like a noble train to anyone not checking travel
+					times. Every wave carries the row's full stack, so 4 waves of
+					<code>ram:1, spy:150</code> needs 4 rams and 600 scouts standing there.
+					Noble rows are left alone. Exact counts only &mdash; "all" cannot be sent
+					four times.</div>
+			</fieldset>
+
+			<fieldset class="imp-group">
 				<legend class="imp-legend">Noble rows only</legend>
 				<div class="d-flex align-items-end flex-wrap" style="gap:.4rem">
 					<div>
@@ -538,7 +591,7 @@
 <div class="row">
 	<div class="col-lg-5 mb-3">
 		<div class="card">
-			<div class="card-header py-2"><strong>New noble job</strong></div>
+			<div class="card-header py-2"><strong>New noble jobs</strong></div>
 			<div class="card-body">
 				<div class="form-group mb-2">
 					<label class="small mb-1">From village (needs the academy &amp; nobles)</label>
@@ -552,15 +605,13 @@
 					</select>
 					<div id="nb_avail" class="small text-muted mt-1"></div>
 				</div>
-				<div class="form-row">
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target X</label>
-						<input id="nb_tx" type="number" class="form-control form-control-sm" />
-					</div>
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target Y</label>
-						<input id="nb_ty" type="number" class="form-control form-control-sm" />
-					</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Target<span class="text-muted">s — paste as many as you like</span></label>
+					<textarea id="nb_targets" rows="2" class="form-control form-control-sm"
+						placeholder="582|436 580|436 586|434 585|435"></textarea>
+					<small class="text-muted">Separated by spaces, commas or new lines. Everything below
+						applies to all of them, and they are prioritised in the order pasted.</small>
+					<div id="nb_targets_note" class="small text-muted mt-1"></div>
 				</div>
 				<label class="small mb-1">Escort per noble<span class="text-muted">, sent along with every noble attack</span></label>
 				<div id="nb_units" class="form-row"></div>
@@ -570,7 +621,7 @@
 					<small class="text-muted">Send when at least this % of the escort is home (some troops may be
 						out farming); it sends what's there, capped at the configured amounts.</small>
 				</div>
-				<button id="nb_submit" class="btn btn-primary btn-sm" onclick="nbAdd()">Add job (disarmed)</button>
+				<button id="nb_submit" class="btn btn-primary btn-sm" onclick="nbAdd()">Add jobs (disarmed)</button>
 				<div id="nb_msg" class="small mt-2"></div>
 			</div>
 		</div>
@@ -882,6 +933,12 @@ function copyPlanTarget() {
 
 /* ---------- Noble train ---------- */
 function trainSettings() {
+	// A fake train is the same stack repeated; a noble train splits one army.
+	// They are different things, so only one of the two can be on.
+	if (document.getElementById('s_fake').checked) {
+		return {mode: 'copies',
+			waves: parseInt(document.getElementById('s_fake_waves').value, 10) || 2};
+	}
 	if (!document.getElementById('s_train').checked) return null;
 	const mode = document.getElementById('s_train_mode').value;
 	const escort = {};
@@ -1145,6 +1202,110 @@ document.addEventListener('click', function(e) {
 	});
 	box.addEventListener('blur', restore);
 });
+
+/* ---------- changing what a queued command carries --------------------
+   The clock is only half of an edit. A plan queued off one template is often
+   wrong about the template rather than the timing - a fake sized for a 5k
+   village leaving from an 8k one, an axe stack that should have been light -
+   and re-queueing it means re-deriving the arrival by hand. So the units are
+   editable in place too, from the same in-game templates the import uses.
+
+   Changing the stack changes the speed, so the server holds the arrival and
+   re-derives the send. A slower stack that can no longer make the landing is
+   refused there, with how late it would be. */
+function trEditor(cell, row, id) {
+	const isFake = row.getAttribute('data-fake') === '1';
+	const nWaves = parseInt(row.getAttribute('data-nwaves') || '0', 10);
+	let current = {};
+	try { current = JSON.parse(row.getAttribute('data-units') || '{}'); } catch (err) {}
+	const wrap = document.createElement('div');
+	wrap.className = 'tr-editing';
+	wrap.innerHTML =
+		'<select class="form-control form-control-sm mb-1 tr-tpl">' +
+			'<option value="">from a template…</option>' + templateOptions() + '</select>' +
+		'<input type="text" class="form-control form-control-sm mb-1 tr-units" ' +
+			'placeholder="light:65, ram:1">' +
+		(isFake ? '<div class="form-inline mb-1"><label class="small text-muted mr-1">waves</label>' +
+			'<input type="number" min="2" max="10" class="form-control form-control-sm tr-waves" ' +
+			'style="width:4.5rem"></div>' : '') +
+		'<button class="btn btn-success btn-sm py-0 tr-save">Save</button> ' +
+		'<button class="btn btn-outline-secondary btn-sm py-0 tr-cancel">Cancel</button>' +
+		'<div class="small text-muted mt-1 tr-note"></div>';
+	cell.innerHTML = '';
+	cell.appendChild(wrap);
+	const unitBox = wrap.querySelector('.tr-units');
+	const waveBox = wrap.querySelector('.tr-waves');
+	unitBox.value = unitsToText(current);
+	if (waveBox) waveBox.value = nWaves || 2;
+	const note = wrap.querySelector('.tr-note');
+	/* A fake train sends its stack once per wave, so the cost of an edit is not
+	   what is typed - it is that times the wave count. Said here rather than
+	   found out at the rally point. */
+	function retotal() {
+		const units = textToUnits(unitBox.value);
+		let pop = 0;
+		Object.keys(units).forEach(u => { pop += (UNIT_POP[u] || 1) * (parseInt(units[u], 10) || 0); });
+		const n = waveBox ? (parseInt(waveBox.value, 10) || 0) : 1;
+		let msg = pop ? pop + ' population per wave' : '';
+		if (waveBox && n > 1 && pop) {
+			msg += ' — ' + Object.keys(units).map(u => u + ' ' + (units[u] * n)).join(', ') + ' in total';
+		}
+		note.textContent = msg;
+		// The same floor the import rows are checked against, checked here too:
+		// a template that fits one village is under the minimum for a bigger
+		// one, and that is exactly the edit people come to this box to make.
+		const o = ORIGIN_BY_ID[row.getAttribute('data-origin')];
+		const need = (o && FAKE_LIMIT) ? Math.round(o.points * FAKE_LIMIT / 100) : 0;
+		note.classList.toggle('text-warning', !!(need && pop && pop < need));
+		note.classList.toggle('text-muted', !(need && pop && pop < need));
+		if (need && pop && pop < need) {
+			note.textContent = msg + ' — under this world\'s minimum of ' + need +
+				', the rally point will refuse it';
+		}
+	}
+	wrap.querySelector('.tr-tpl').addEventListener('change', function() {
+		const tpl = TEMPLATES[this.value];
+		if (tpl) { unitBox.value = unitsToText(tpl.units); retotal(); }
+	});
+	unitBox.addEventListener('input', retotal);
+	if (waveBox) waveBox.addEventListener('input', retotal);
+	retotal();
+	unitBox.focus();
+	wrap.querySelector('.tr-cancel').addEventListener('click', function(e) {
+		e.preventDefault(); location.reload();
+	});
+	function save() {
+		const units = textToUnits(unitBox.value);
+		if (!Object.keys(units).length) { unitBox.classList.add('is-invalid'); return; }
+		const body = {id: id, units: units};
+		if (waveBox) body.waves = parseInt(waveBox.value, 10) || nWaves;
+		fetch(appUrl('/app/attack/schedule/retroop'), {
+			method: 'POST', headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify(body)
+		}).then(r => r.json()).then(d => {
+			if (!d.ok) { alert('Could not change it:\n\n' + (d.error || 'unknown error')); return; }
+			// Warnings the server attached (under the minimum attack size, a
+			// trimmed escort) matter more than the reload, so they are shown
+			// before the page goes.
+			const warn = (d.notes || []).filter(n => /minimum attack size|trimmed/.test(n));
+			if (warn.length) alert(warn.join('\n'));
+			location.reload();
+		}).catch(e => alert('Could not change it: ' + e));
+	}
+	wrap.querySelector('.tr-save').addEventListener('click', function(e) { e.preventDefault(); save(); });
+	unitBox.addEventListener('keydown', function(ev) {
+		if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+		if (ev.key === 'Escape') location.reload();
+	});
+}
+document.addEventListener('click', function(e) {
+	const link = e.target.closest ? e.target.closest('.tr-edit') : null;
+	if (!link) return;
+	e.preventDefault();
+	const cell = link.closest('td');
+	if (cell.querySelector('.tr-editing')) return;             // already editing
+	trEditor(cell, link.closest('tr'), link.getAttribute('data-id'));
+});
 (function() {
 	const all = document.getElementById('rt_all');
 	if (all) all.addEventListener('change', function() {
@@ -1182,6 +1343,16 @@ document.getElementById('s_origin').addEventListener('change', function() { upda
 ['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', function() { schedPreview(); wavePreview(); }));
 document.getElementById('s_fill_home').addEventListener('click', function(e) { e.preventDefault(); fillFromHome(); });
 document.getElementById('s_train').addEventListener('change', toggleTrain);
+// The two train kinds are mutually exclusive: ticking one unticks the other.
+document.getElementById('s_fake').addEventListener('change', function () {
+	if (this.checked) {
+		document.getElementById('s_train').checked = false;
+		toggleTrain();
+	}
+});
+document.getElementById('s_train').addEventListener('change', function () {
+	if (this.checked) document.getElementById('s_fake').checked = false;
+});
 document.getElementById('s_train_mode').addEventListener('change', toggleTrain);
 ['s_escort_unit','s_escort_n'].forEach(id => document.getElementById(id).addEventListener('input', wavePreview));
 document.getElementById('s_escort_unit').innerHTML = UNITS.filter(u => u !== 'snob')
@@ -1199,8 +1370,19 @@ const FAKE_LIMIT = {{ plan.fake_limit }};
 const UNIT_POP = {spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4,
 	marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100};
 const ORIGIN_BY_ID = {};
-{% for o in plan.origins %}ORIGIN_BY_ID[{{ o.id|tojson }}] = {points: {{ o.points or 0 }}, troops: {{ o.troops|tojson }}};
+{% for o in plan.origins %}ORIGIN_BY_ID[{{ o.id|tojson }}] = {points: {{ o.points or 0 }}, troops: {{ o.troops|tojson }}, seen: {{ o.seen or 0 }}};
 {% endfor %}
+/* How long ago the bot last counted this village's troops. A shortfall based
+   on an hour-old count is a guess, and saying so is the difference between a
+   warning and a wrong warning. */
+function seenAgo(row) {
+	const o = ORIGIN_BY_ID[row.origin_id];
+	if (!o || !o.seen) return '';
+	const mins = Math.round((Date.now() / 1000 - o.seen) / 60);
+	if (mins < 2) return '';
+	return mins < 90 ? ' (counted ' + mins + 'm ago)'
+		: ' (counted ' + Math.round(mins / 60) + 'h ago)';
+}
 /* What this row would actually put on the road. "all" is resolved against the
    village's own troops, because that is the number the rally point will see -
    a fake of 105 scouts from a village holding 4 is 16 population, not 218. */
@@ -1242,13 +1424,24 @@ function checkFloor(i) {
 	if (!row || !cell || !box) return;
 	const floor = rowFloor(row);
 	const found = rowPopulation(row, textToUnits(box.value));
+	// A fake train needs its stack N times over, so the shortfall it reports
+	// has to be measured against N times what was typed.
+	const waves = (!row.train && row.unit !== 'snob')
+		? (parseInt(document.getElementById('p_fake_waves').value, 10) || 1) : 1;
+	if (found && waves > 1) {
+		const each = rowPopulation(row, textToUnits(box.value));
+		found.waves = waves;
+		found.short = each.short;
+	}
 	const under = floor && found && found.pop < floor;
 	cell.innerHTML = under
 		? '<small class="text-danger">too small: ' + found.pop + ' population, this village ' +
 		  'needs ' + floor +
-		  (found.short.length ? ' &mdash; only has ' + found.short.join(', ') : '') + '</small>'
+		  (found.short.length ? ' &mdash; only has ' + found.short.join(', ') + seenAgo(row) : '') +
+		  '</small>'
 		: (found && found.short.length
-			? '<small class="text-warning">only has ' + found.short.join(', ') + '</small>' : '');
+			? '<small class="text-warning">only has ' + found.short.join(', ') +
+			  seenAgo(row) + '</small>' : '');
 	if (tr) tr.classList.toggle('floor-short', !!under);
 }
 function checkAllFloors() { PLAN_ROWS.forEach((r, i) => checkFloor(i)); }
@@ -1348,6 +1541,13 @@ function renderPlan(plan) {
 	document.getElementById('p_table').style.display = PLAN_ROWS.length ? '' : 'none';
 	document.getElementById('p_queue').disabled = !plan.queueable;
 	const ticked = PLAN_ROWS.filter(r => r.selected).length;
+	if (plan.wrong_world) {
+		summary.innerHTML = '<div class="alert alert-warning py-2 mb-2">' +
+			'<strong>None of these villages are on ' + (WORLD || 'this world') + '.</strong> ' +
+			'The plan reads fine - every origin in it belongs to a different world. ' +
+			'Check the world switcher at the bottom of the sidebar.</div>';
+		return;
+	}
 	let note = '<strong>'+PLAN_ROWS.length+'</strong> command(s) read, <strong>'+
 		ticked+'</strong> ticked'+
 		(plan.queueable > ticked ? ' ('+(plan.queueable - ticked)+' more sendable but flagged)' : '')+'.';
@@ -1500,6 +1700,10 @@ function syncEscortEnabled() {
 		if (el.parentElement) el.parentElement.style.opacity = even ? '.75' : '';
 	});
 }
+['p_fake_waves'].forEach(id => {
+	const el = document.getElementById(id);
+	if (el) el.addEventListener('change', checkAllFloors);
+});
 ['p_mode', 'p_escort_unit', 'p_escort_n'].forEach(id => {
 	const el = document.getElementById(id);
 	if (!el) return;
@@ -1519,14 +1723,20 @@ document.getElementById('p_queue').addEventListener('click', function() {
 		const i = parseInt(cb.getAttribute('data-i'), 10);
 		const r = PLAN_ROWS[i];
 		const box = document.querySelector('.p-units[data-i="'+i+'"]');
+		// A fake train is the same stack sent several times; a noble row keeps
+		// its own train settings, since that is a different thing entirely.
+		const fake = parseInt(document.getElementById('p_fake_waves').value, 10) || 1;
 		rows.push({
 			line: r.line, origin_id: r.origin_id,
 			target_x: r.target[0], target_y: r.target[1],
+			fake_waves: (!r.train && r.unit !== 'snob' && fake > 1) ? fake : null,
 			// The plan's milliseconds are the point of a spaced plan, so they
 			// go to the queue as they are rather than being floored away.
 			arrival: Math.round(r.arrival_ts * 1000) / 1000,
 			units: textToUnits(box ? box.value : ''),
-			train: r.train ? train : null,
+			train: r.train ? train
+				: ((!r.train && r.unit !== 'snob' && fake > 1)
+					? {mode: 'copies', waves: fake} : null),
 			support: r.kind === 'support',
 		});
 	});
@@ -1589,6 +1799,30 @@ function nbUpdateAvail() {
 		'<strong>'+nobles+' noble'+(nobles === 1 ? '' : 's')+' home</strong>' +
 		(parts.length ? ' · ' + parts.join(', ') : ' · no other troop snapshot yet');
 }
+/* Pull every x|y out of whatever was pasted - a list copied out of the game or
+   off a forum post arrives with commas, tabs, village names and rubbish around
+   it, and picking the coordinates out is more forgiving than asking for a
+   format. Duplicates are dropped, order is kept: that is the priority order. */
+function nbParseTargets(text) {
+	const out = [], seen = {};
+	// Anchored on both sides so a mistyped 9999|1 is not quietly read as
+	// 999|1 - a coordinate that exists, somewhere else entirely.
+	const re = /(?<!\d)(\d{1,3})\s*\|\s*(\d{1,3})(?!\d)/g;
+	let m;
+	while ((m = re.exec(text || '')) !== null) {
+		const key = m[1] + '|' + m[2];
+		if (seen[key]) continue;
+		seen[key] = 1;
+		out.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
+	}
+	return out;
+}
+function nbTargetsNote() {
+	const el = document.getElementById('nb_targets_note');
+	if (!el) return;
+	const n = nbParseTargets(document.getElementById('nb_targets').value).length;
+	el.textContent = n ? n + ' target' + (n === 1 ? '' : 's') + ' recognised' : '';
+}
 function nbAdd() {
 	const escort = {};
 	UNITS.filter(u => u !== 'snob').forEach(u => {
@@ -1597,20 +1831,39 @@ function nbAdd() {
 		if (n > 0) escort[u] = n;
 	});
 	const msg = document.getElementById('nb_msg');
-	msg.textContent = 'Adding…';
-	fetch('/app/noble/add', {
+	const targets = nbParseTargets(document.getElementById('nb_targets').value);
+	if (!targets.length) {
+		msg.innerHTML = '<span class="text-danger">no coordinates found - they look like 582|436</span>';
+		return;
+	}
+	msg.textContent = 'Adding ' + targets.length + '…';
+	fetch(appUrl('/app/noble/add_many'), {
 		method: 'POST',
 		headers: {'Content-Type': 'application/json'},
 		body: JSON.stringify({
 			source_id: document.getElementById('nb_source').value,
-			target_x: document.getElementById('nb_tx').value,
-			target_y: document.getElementById('nb_ty').value,
+			targets: targets,
 			escort: escort,
 			escort_min_pct: document.getElementById('nb_pct').value,
 		}),
 	}).then(r => r.json()).then(resp => {
-		if (!resp.ok) { msg.innerHTML = '<span class="text-danger">'+(resp.error || 'failed')+'</span>'; return; }
-		location.hash = '#noble'; location.reload();
+		const bad = (resp.results || []).filter(r => !r.ok);
+		// A clean run just shows the new jobs. A partly-refused one has to stay
+		// on screen: the reasons are per-village ("not barbarian any more",
+		// "not in the map cache yet") and each one is a different thing to do
+		// about it, so reloading them away would be throwing the answer out.
+		if (!bad.length) { location.hash = '#noble'; location.reload(); return; }
+		msg.innerHTML = '<div class="mb-1"><strong>' + resp.added + ' added</strong>, ' +
+			bad.length + ' skipped</div>' +
+			bad.map(r => '<div class="text-warning"><span class="coord">' + r.coord +
+				'</span> — ' + (r.error || 'failed') + '</div>').join('') +
+			(resp.added ? '<div class="mt-1"><a href="#noble" onclick="location.reload()">' +
+				'reload to see the ' + resp.added + ' new job' + (resp.added === 1 ? '' : 's') +
+				'</a></div>' : '');
+		// Leave only what was refused in the box, so a fix is a retry rather
+		// than a re-paste - and so nothing already added can be added twice.
+		document.getElementById('nb_targets').value = bad.map(r => r.coord).join(' ');
+		nbTargetsNote();
 	}).catch(() => { msg.innerHTML = '<span class="text-danger">request failed</span>'; });
 }
 function nbToggle(id) {
@@ -1627,6 +1880,10 @@ function nbRemove(id) {
 		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
 }
 nbBuildUnits();
+(function() {
+	const box = document.getElementById('nb_targets');
+	if (box) box.addEventListener('input', nbTargetsNote);
+})();
 const nbSource = document.getElementById('nb_source');
 if (nbSource) { nbSource.addEventListener('change', nbUpdateAvail); nbUpdateAvail(); }
 
