@@ -366,10 +366,9 @@ def planned_send(job, now=None, wrapper=None, home=None, flying_map=None,
     if job.get("status") != "armed":
         return 0, None
     now = now if now is not None else time.time()
-    in_flight = job.get("in_flight") or {}
-    flying = int(in_flight.get("nobles") or 0)
-    if flying and now < int(in_flight.get("back_at") or 0):
-        return 0, None  # the train is still out; nothing to hold back
+    flying = own_nobles_flying(job, now)
+    if flying:
+        return 0, None  # the train is still in the air; nothing to hold back
     flying = max(flying, nobles_heading_to(job, flying_map))
     allowed = max_safe_nobles(estimate_loyalty(job, now=now)) - flying
     if allowed <= 0:
@@ -388,6 +387,46 @@ def planned_send(job, now=None, wrapper=None, home=None, flying_map=None,
     if packages is None:
         return 0, None
     return nobles, packages
+
+
+# A report's timestamp and the landing we computed are two clocks describing
+# the same moment, and they disagree by seconds. Only a report from the same
+# hit can be anywhere near it - the previous wave's is hours older - so a few
+# minutes of slack costs nothing and saves waiting out a report already read.
+REPORT_SKEW = 300
+
+
+def flight_landed_at(flight):
+    """When a recorded train hit the target.
+
+    Records written before this was stored only carry the round trip, which is
+    the flight out, the flight back and RETURN_MARGIN - so taking the margin
+    off first gives the landing exactly rather than a few minutes late.
+    """
+    lands = int((flight or {}).get("lands_at") or 0)
+    if lands:
+        return lands
+    sent = int((flight or {}).get("sent_at") or 0)
+    back = int((flight or {}).get("back_at") or 0)
+    if not (sent and back):
+        return back
+    return sent + max(0, (back - sent - RETURN_MARGIN)) // 2
+
+
+def own_nobles_flying(job, now=None):
+    """How many of this job's own nobles are still in the air.
+
+    Until they land, not until they walk home. A noble that has hit has already
+    taken its loyalty off the target and is counted in the next report; holding
+    it against the guard for the whole return trip counts it twice, and idles
+    the job for hours while the target regenerates what was just taken.
+    """
+    now = now if now is not None else time.time()
+    flight = job.get("in_flight") or {}
+    nobles = int(flight.get("nobles") or 0)
+    if not nobles:
+        return 0
+    return nobles if now < flight_landed_at(flight) else 0
 
 
 def focus_budgets(jobs, flying_map=None, home_by_source=None, now=None,
@@ -441,11 +480,8 @@ def focus_budgets(jobs, flying_map=None, home_by_source=None, now=None,
         # that is the difference between claiming it and claiming none: its
         # budget came out 0 and the nobles it was owed went to the target below
         # it, which is the exact spreading this function exists to prevent.
-        own = (job.get("in_flight") or {})
-        own_nobles = int(own.get("nobles") or 0)
-        if own_nobles and now >= int(own.get("back_at") or 0):
-            own_nobles = 0
-        in_flight = max(own_nobles, nobles_heading_to(job, flying_map))
+        in_flight = max(own_nobles_flying(job, now),
+                        nobles_heading_to(job, flying_map))
         claim = min(pool, max(0, nobles_needed_worst_case(loyalty) - in_flight))
         allowed = max(0, max_safe_nobles(loyalty) - in_flight)
         budgets[job.get("id")] = min(allowed, claim)
@@ -708,6 +744,10 @@ class NobleBarbManager:
                 "in_flight": {
                     "nobles": sent,
                     "sent_at": now,
+                    # When they hit, which is what the guard cares about, and
+                    # when they are home again, which is only the backstop for
+                    # a report that never arrives.
+                    "lands_at": now + int(duration or 0),
                     "back_at": now + 2 * int(duration or 0) + RETURN_MARGIN,
                 },
                 "last_sent": now,
@@ -742,13 +782,30 @@ class NobleBarbManager:
                            % owner)
             return 0
 
-        in_flight = job.get("in_flight") or {}
-        flying = int(in_flight.get("nobles") or 0)
-        if flying and now < int(in_flight.get("back_at") or 0):
-            return 0  # wait for the round trip + its reports
+        record = job.get("in_flight") or {}
+        flying = own_nobles_flying(job, now)
         if flying:
+            return 0  # still in the air; the guard already counted them
+        if record.get("nobles"):
+            # They have hit. Before deciding anything the result has to be
+            # known, or the next send is sized from the loyalty this train
+            # already took off - the reason this used to wait out the whole
+            # round trip. Waiting for the report instead of the walk home is
+            # the same safety for a fraction of the delay: on this account the
+            # report landed two minutes after the hit and the troops were not
+            # home for another two and a half hours, all of it spent letting
+            # the target regenerate.
+            #
+            # back_at stays as the backstop. A barb that never produces a
+            # report would otherwise hold the job for good.
+            landed = flight_landed_at(record)
+            seen = int((job.get("loyalty") or {}).get("at") or 0)
+            if seen < landed - REPORT_SKEW and now < int(record.get("back_at") or 0):
+                self._waiting(job, "%d noble(s) landed - waiting for the "
+                                   "report before sizing the next send"
+                              % int(record.get("nobles") or 0))
+                return 0
             self._save(job, {"in_flight": None})
-            flying = 0
 
         # Nobles already on their way, whoever sent them. in_flight above only
         # covers the bot's own sends, so an attack launched by hand between two
