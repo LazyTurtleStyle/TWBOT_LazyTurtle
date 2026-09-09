@@ -2780,8 +2780,13 @@ class AttackPlanner:
                 "name": vdata.get("name") or pub.get("name") or vid,
                 "coords": pub.get("location"),
                 "points": pub.get("points"),
-                # Troops standing in the village right now, for the schedule form.
+                # Troops as of the bot's last visit to this village, which on a
+                # 40-village account is up to an hour ago. That is fine for
+                # filling a form and misleading for judging what can be sent, so
+                # the age travels with the number and is shown wherever the
+                # count is used to warn about anything.
                 "troops": {u: int(n) for u, n in (vdata.get("available_troops") or {}).items()},
+                "seen": vdata.get("last_run"),
             })
         origins.sort(key=lambda o: str(o["name"]))
 

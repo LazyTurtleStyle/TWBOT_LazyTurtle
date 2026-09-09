@@ -1252,8 +1252,19 @@ const FAKE_LIMIT = {{ plan.fake_limit }};
 const UNIT_POP = {spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4,
 	marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100};
 const ORIGIN_BY_ID = {};
-{% for o in plan.origins %}ORIGIN_BY_ID[{{ o.id|tojson }}] = {points: {{ o.points or 0 }}, troops: {{ o.troops|tojson }}};
+{% for o in plan.origins %}ORIGIN_BY_ID[{{ o.id|tojson }}] = {points: {{ o.points or 0 }}, troops: {{ o.troops|tojson }}, seen: {{ o.seen or 0 }}};
 {% endfor %}
+/* How long ago the bot last counted this village's troops. A shortfall based
+   on an hour-old count is a guess, and saying so is the difference between a
+   warning and a wrong warning. */
+function seenAgo(row) {
+	const o = ORIGIN_BY_ID[row.origin_id];
+	if (!o || !o.seen) return '';
+	const mins = Math.round((Date.now() / 1000 - o.seen) / 60);
+	if (mins < 2) return '';
+	return mins < 90 ? ' (counted ' + mins + 'm ago)'
+		: ' (counted ' + Math.round(mins / 60) + 'h ago)';
+}
 /* What this row would actually put on the road. "all" is resolved against the
    village's own troops, because that is the number the rally point will see -
    a fake of 105 scouts from a village holding 4 is 16 population, not 218. */
@@ -1308,9 +1319,11 @@ function checkFloor(i) {
 	cell.innerHTML = under
 		? '<small class="text-danger">too small: ' + found.pop + ' population, this village ' +
 		  'needs ' + floor +
-		  (found.short.length ? ' &mdash; only has ' + found.short.join(', ') : '') + '</small>'
+		  (found.short.length ? ' &mdash; only has ' + found.short.join(', ') + seenAgo(row) : '') +
+		  '</small>'
 		: (found && found.short.length
-			? '<small class="text-warning">only has ' + found.short.join(', ') + '</small>' : '');
+			? '<small class="text-warning">only has ' + found.short.join(', ') +
+			  seenAgo(row) + '</small>' : '');
 	if (tr) tr.classList.toggle('floor-short', !!under);
 }
 function checkAllFloors() { PLAN_ROWS.forEach((r, i) => checkFloor(i)); }
