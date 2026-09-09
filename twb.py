@@ -46,6 +46,7 @@ from game import csnipe
 from game import accountmanager
 from game import dailybonus
 from game import events
+from game import markings
 from game import minter
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
@@ -746,6 +747,40 @@ class TWB:
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)
 
+    def minting_runner(self, config):
+        """Background loop: keep the coin village stocked on a real clock.
+
+        The main loop reaches minting once per cycle, and a cycle is however
+        long the village loop takes - 56 to 111 minutes on this account in one
+        day. For a job with an hourly interval that turns "every hour" into
+        "every hour, or whenever the villages finish, whichever is later", and
+        merchants need half an hour to walk, so the slack lands as time the coin
+        village spends empty while auto-minting has nothing to work with.
+
+        It is the same pass the main loop used to make - minter.run still
+        decides for itself whether it is due - only asked punctually. The config
+        is re-read here rather than captured at startup, so switching the module
+        on or changing its interval takes effect without a restart.
+        """
+        logger = logging.getLogger("Minter")
+        poller = self._make_poller_wrapper(config)
+        while self.should_run:
+            time.sleep(60)
+            if not self.should_run:
+                break
+            try:
+                live = FileManager.load_json_file("config.json") or config
+                settings = live.get("minting", {}) or {}
+                state = FileManager.load_json_file("cache/minting.json") or {}
+                if not settings.get("enabled") and not state.get("run_now"):
+                    continue
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    poller.web.cookies.update(session["cookies"])
+                minter.run(poller, live)
+            except Exception as exc:
+                logger.warning("Minting pass failed: %s", exc)
+
     def scheduled_attack_runner(self, config):
         """Background loop: fire timed attacks queued from the Attack tab.
 
@@ -1086,6 +1121,13 @@ class TWB:
             )
             snipe_thread.start()
             print("Support-snipe runner started")
+        # Always started: it costs a config read a minute while switched off,
+        # and starting it conditionally would mean a restart to turn minting on.
+        mint_thread = threading.Thread(
+            target=self.minting_runner, args=(config,), daemon=True
+        )
+        mint_thread.start()
+        print("Coin-minting runner started")
         while self.should_run:
             # Heartbeat: proof the main loop is still turning, independent of the
             # incoming-attack poller and scheduler threads, which run on their own
@@ -1200,16 +1242,14 @@ class TWB:
                     logging.getLogger("AccountManager").warning(
                         "Account Manager setup failed: %s", exc)
 
-                # Keep the coin village stocked, before the farm runs and the
-                # village loop. Those two spend the resources this is trying to
-                # collect - and the village loop is most of the cycle, so asking
-                # after it would mean the merchants leave an hour later than
-                # they needed to.
+                # The player's own map markings, so the dashboard's map is
+                # coloured the way theirs is. Self-limiting to once a day.
                 try:
-                    minter.run(self.wrapper, config)
+                    markings.run(self.wrapper,
+                                 next(iter(config["villages"]), None))
                 except Exception as exc:
-                    logging.getLogger("Minter").warning(
-                        "Minting pass failed: %s", exc)
+                    logging.getLogger("Markings").debug(
+                        "Marking refresh failed: %s", exc)
 
                 if config.get("farms", {}).get("player_farm_priority", True):
                     self.run_player_farms(config)

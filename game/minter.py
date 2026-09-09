@@ -195,21 +195,28 @@ def read_call(wrapper, village_id, group="0"):
 
 # -- deciding --------------------------------------------------------------
 
-def plan_request(villages, headroom, cost, ratio="coin", keep=0, minimum=1000):
+def plan_request(villages, room, cost, ratio="coin", keep=0, minimum=1000):
     """How much to ask each village for.
 
-    Walked in order, each village giving what it can spare until the target's
-    warehouse is accounted for - so the nearest villages (which the screen lists
-    by travel time) fill it first and the rest are left alone rather than
-    sending resources that would arrive to a full warehouse.
-    """
-    if ratio == "coin" and cost:
-        total = float(sum(cost.values()))
-        share = {r: cost[r] / total for r in RESOURCES}
-    else:
-        share = {r: 1.0 / len(RESOURCES) for r in RESOURCES}
+    `room` is what the target can still take of each resource - its own bar
+    minus what is in it and what is already walking - so the plan is bounded by
+    the thing that actually bounds it, one resource at a time.
 
-    budget = {r: max(0, int(headroom * share[r])) for r in RESOURCES}
+    Walked in order, each village giving what it can spare until those budgets
+    are accounted for: the nearest villages (the screen lists them by travel
+    time) fill them first and the rest are left alone rather than sending
+    resources that would arrive to a full bar.
+    """
+    budget = dict(room)
+    if ratio == "coin" and cost:
+        # Do not haul more of one resource than the others can match: a coin
+        # needs all three, so the useful ceiling per resource is what the
+        # scarcest of them can pair with, plus the room to correct the balance.
+        coins = {r: (room.get(r, 0) / float(cost[r])) if cost.get(r) else 0
+                 for r in RESOURCES}
+        target_coins = max(coins.values()) if coins else 0
+        budget = {r: min(room.get(r, 0), int(target_coins * cost[r]))
+                  for r in RESOURCES}
     asks = []
     for village in villages:
         if not any(budget.values()):
@@ -312,11 +319,18 @@ def run(wrapper, config, village_ids=None):
             storage = max(storage, village.get("storage") or 0)
     held = {r: int((target.get("resources") or {}).get(r) or 0) for r in RESOURCES}
     state["held"] = held
-    headroom = max(0, storage * len(RESOURCES)
-                   - sum(call["incoming"].values()) - sum(held.values()))
+
+    # Room per resource, not one shared pool. A warehouse is three separate
+    # bars of `storage` each - you cannot put 1.8M of iron in a 600k iron bar -
+    # and treating it as one pool is what let the village sit on 429k of iron
+    # while its wood ran dry and minting stalled for want of the cheap half of
+    # a coin. Asking per bar automatically requests most of whatever is short.
+    room = {r: max(0, storage - held[r] - int(call["incoming"].get(r) or 0))
+            for r in RESOURCES}
+    headroom = sum(room.values())
 
     asks = plan_request(
-        call["villages"], headroom,
+        call["villages"], room,
         (academy or {}).get("cost") or BASE_COIN_COST,
         ratio=str(settings.get("ratio", "coin") or "coin"),
         keep=int(settings.get("keep", 0) or 0),

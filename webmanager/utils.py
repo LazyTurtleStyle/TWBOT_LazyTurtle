@@ -1977,56 +1977,71 @@ class UnitTemplateManager:
 
 
 class MapBuilder:
+    """Everything the map page needs to draw the world itself.
+
+    It used to hand over a fixed grid of cells centred on one village, which is
+    why the map could not be moved: there was nothing outside the window to move
+    to. The whole village database is a few hundred kilobytes, so it goes across
+    as a flat list and the page draws whatever part of the world it is looking
+    at - which is what makes panning, zooming and jumping to a coordinate
+    possible at all.
+    """
 
     @staticmethod
-    def build(villages, current_village=None, size=None):
-        out_map = {}
-        min_x = 999
-        max_x = 0
-        min_y = 999
-        max_y = 0
+    def build(villages, mine=None, current_village=None):
+        mine = mine or {}
+        # The player's own in-game map markings, if the bot has read them.
+        # Colouring the dashboard's map differently from the game's would mean
+        # learning the same world twice.
+        marks = (DataReader.cache_grab("world") or {}).get("markings") or {}
+        by_tribe = marks.get("tribes") or {}
+        by_player = marks.get("players") or {}
+        owner = tribe = None
+        centre = None
 
-        current_location = None
-        grid_vils = {}
-        extra_data = {}
+        out = []
+        for vid, village in (villages or {}).items():
+            location = village.get("location")
+            if not location or len(location) != 2:
+                continue
+            is_mine = str(vid) in mine
+            if is_mine:
+                # Ownership is read off our own villages rather than assumed, so
+                # a village of ours identifies the player and the tribe even
+                # when the map was opened without a village to centre on.
+                owner = owner or village.get("owner")
+                tribe = tribe or village.get("tribe")
+            if current_village and str(vid) == str(current_village):
+                centre = [int(location[0]), int(location[1])]
+            marked = (by_player.get(str(village.get("owner")))
+                      or by_tribe.get(str(village.get("tribe"))))
+            out.append({
+                "id": str(vid),
+                "name": village.get("name") or str(vid),
+                "color": marked,
+                "x": int(location[0]),
+                "y": int(location[1]),
+                "points": village.get("points") or 0,
+                "tribe": str(village.get("tribe") or "0"),
+                "owner": str(village.get("owner") or "0"),
+                "mine": is_mine,
+            })
 
-        for v in villages:
-            vdata = villages[v]
-            x, y = vdata['location']
-            if x < min_x:
-                min_x = x
-            if x > max_x:
-                max_x = x
-
-            if y < min_y:
-                min_y = y
-            if y > max_y:
-                max_y = y
-            if current_village and vdata['id'] == current_village:
-                current_location = vdata['location']
-                extra_data['owner'] = vdata['owner']
-                extra_data['tribe'] = vdata['tribe']
-            grid_vils["%d:%d" % (x, y)] = vdata
-
-        if current_location and size:
-            min_x = current_location[0] - size
-            min_y = current_location[1] - size
-            max_x = current_location[0] + size
-            max_y = current_location[1] + size
-
-        for location_x in range(min_x, max_x):
-            if location_x not in out_map:
-                out_map[location_x - min_x] = {}
-            ylocs = {}
-            for location_y in range(min_y, max_y):
-                location = "%d:%d" % (location_x, location_y)
-                if location in grid_vils:
-                    ylocs[location_y - min_y] = grid_vils[location]
-                else:
-                    ylocs[location_y - min_y] = None
-            out_map[location_x - min_x] = ylocs
-
-        return {"grid": out_map, "extra": extra_data}
+        ours = [(v["x"], v["y"]) for v in out if v["mine"]]
+        if centre is None and ours:
+            # The middle of our own villages is the only sensible opening view:
+            # it is where the account actually is.
+            centre = [round(sum(x for x, _ in ours) / len(ours)),
+                      round(sum(y for _, y in ours) / len(ours))]
+        return {
+            "villages": out,
+            "marks": {"labels": marks.get("labels") or {},
+                      "tribes": by_tribe, "players": by_player},
+            "centre": centre or [500, 500],
+            "owner": str(owner or "0"),
+            "tribe": str(tribe or "0"),
+            "mine_count": len(ours),
+        }
 
 
 class OverviewBuilder:
@@ -2773,6 +2788,12 @@ class AttackPlanner:
             "speeds": {u: speeds[u] for u in units},
             "world_speed": world_speed,
             "unit_speed": unit_speed,
+            # Minimum attack size this world enforces, as a percentage of the
+            # sending village's points. The rally point refuses anything under
+            # it at the moment of launch, so the page warns while there is still
+            # time to fix it. 0 when the world has no such rule.
+            "fake_limit": float((DataReader.cache_grab("world") or {})
+                                .get("config", {}).get("fake_limit") or 0),
             # The player's own rally-point templates ("OFF", "Fake", ...), for
             # filling the unit fields without retyping them here.
             "templates": DataReader.troop_templates(),
@@ -3449,7 +3470,11 @@ class EventOverview:
         # There is no endpoint for it, but the balance after every action is on
         # file, so anything the balance gained between two actions came from
         # somewhere else: a daily payout, or the player cheering by hand.
-        other, payouts = 0, []
+        # Gaps in the balance run both ways: a daily payout or a hand-played
+        # cheer pushes it up, spending in the event shop pulls it down. Summing
+        # them together produced a single "not from playing" figure that went
+        # negative once the shop was used, which reads as nonsense. Kept apart.
+        other, spent, payouts = 0, 0, []
         log = sorted(state.get("log") or [], key=lambda a: a.get("ts") or 0)
         previous = None
         for action in log:
@@ -3457,11 +3482,13 @@ class EventOverview:
                     and previous.get("currency") is not None:
                 gap = (action["currency"] - previous["currency"]
                        - int(action.get("reward") or 0))
-                if gap:
+                if gap > 0:
                     other += gap
                     # Big enough to be a payout rather than a few hand-clicks.
                     if gap >= 500:
                         payouts.append(gap)
+                elif gap < 0:
+                    spent -= gap
             previous = action
         per_day = (sum(payouts) / len(payouts)) if payouts else 0
 
@@ -3511,6 +3538,7 @@ class EventOverview:
                        "expected": int(expected)},
             "luck": None if luck is None else round(luck, 2),
             "other": other,
+            "spent": spent,
             "per_day": int(per_day),
             "by_option": state.get("by_option") or {},
             "log": (state.get("log") or [])[:25],

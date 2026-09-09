@@ -4,6 +4,10 @@
 {% block content %}
 <style>
 	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	/* A row the rally point would refuse. Marked, not disabled: it is still
+	   queueable, because sending it anyway is the user's call. */
+	tr.floor-short > td { background: rgba(210,75,62,.10); }
+	.p-floor { line-height: 1.2; margin-top: .15rem; }
 	/* The import controls do two unrelated jobs - troops for every ticked row,
 	   and the shape of the noble train - so they are fenced off from each
 	   other and each says out loud what it touches. */
@@ -1187,6 +1191,67 @@ updateAvail();
 
 /* ---------- Troop templates the player made in-game ---------- */
 const TEMPLATES = {{ plan.templates|tojson }};
+/* Minimum attack size this world enforces, as a percentage of the sending
+   village's points, and the farm space each unit takes. A command under the
+   floor is refused by the rally point at the moment it should be launching,
+   which is far too late - so the row says so while it can still be fixed. */
+const FAKE_LIMIT = {{ plan.fake_limit }};
+const UNIT_POP = {spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4,
+	marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100};
+const ORIGIN_BY_ID = {};
+{% for o in plan.origins %}ORIGIN_BY_ID[{{ o.id|tojson }}] = {points: {{ o.points or 0 }}, troops: {{ o.troops|tojson }}};
+{% endfor %}
+/* What this row would actually put on the road. "all" is resolved against the
+   village's own troops, because that is the number the rally point will see -
+   a fake of 105 scouts from a village holding 4 is 16 population, not 218. */
+function rowPopulation(row, units) {
+	const origin = ORIGIN_BY_ID[row.origin_id];
+	if (!origin) return null;
+	const home = origin.troops || {};
+	let pop = 0, short = [];
+	for (const unit in units) {
+		const asked = units[unit];
+		const have = home[unit] === undefined ? null : (parseInt(home[unit], 10) || 0);
+		let n;
+		if (String(asked).trim().toLowerCase() === 'all') {
+			n = have || 0;
+		} else {
+			n = parseInt(asked, 10) || 0;
+			// You cannot send what is not standing there. This is the half that
+			// matters most: a fake of 105 scouts from a village holding 4 goes
+			// as 4, which is 16 population, and the rally point refuses it.
+			if (have !== null && have < n) { short.push(unit + ' ' + have + '/' + n); n = have; }
+		}
+		pop += (UNIT_POP[unit] || 1) * n;
+	}
+	return {pop: pop, short: short};
+}
+function rowFloor(row) {
+	const origin = ORIGIN_BY_ID[row.origin_id];
+	if (!origin || !FAKE_LIMIT || !origin.points) return 0;
+	return Math.round(origin.points * FAKE_LIMIT / 100);
+}
+/* Advisory, never blocking: the row stays tickable and queueable. The bot will
+   send it and the rally point may well refuse it - which is the user's call to
+   make, not the page's. */
+function checkFloor(i) {
+	const row = PLAN_ROWS[i];
+	const cell = document.querySelector('.p-floor[data-i="' + i + '"]');
+	const box = document.querySelector('.p-units[data-i="' + i + '"]');
+	const tr = box && box.closest('tr');
+	if (!row || !cell || !box) return;
+	const floor = rowFloor(row);
+	const found = rowPopulation(row, textToUnits(box.value));
+	const under = floor && found && found.pop < floor;
+	cell.innerHTML = under
+		? '<small class="text-danger">too small: ' + found.pop + ' population, this village ' +
+		  'needs ' + floor +
+		  (found.short.length ? ' &mdash; only has ' + found.short.join(', ') : '') + '</small>'
+		: (found && found.short.length
+			? '<small class="text-warning">only has ' + found.short.join(', ') + '</small>' : '');
+	if (tr) tr.classList.toggle('floor-short', !!under);
+}
+function checkAllFloors() { PLAN_ROWS.forEach((r, i) => checkFloor(i)); }
 function templateOptions(selectedId) {
 	return Object.keys(TEMPLATES).map(id =>
 		'<option value="'+id+'"'+(id === selectedId ? ' selected' : '')+'>'+
@@ -1328,6 +1393,7 @@ function renderPlan(plan) {
 				(delta ? '<span class="d-block text-warning">'+(delta > 0 ? '+' : '')+delta+'s vs plan</span>' : '')+'</small></td>'+
 			'<td><input type="text" class="form-control form-control-sm p-units" data-i="'+i+'" '+
 				'value="'+unitsToText(r.units)+'" oninput="refreshLeaves('+i+')">'+
+				'<div class="p-floor" data-i="'+i+'"></div>'+
 				(Object.keys(TEMPLATES).length
 					? '<select class="form-control form-control-sm mt-1 p-tpl" data-i="'+i+'" '+
 					  'onchange="applyTemplateToRow('+i+', this.value)">'+
@@ -1342,6 +1408,7 @@ function renderPlan(plan) {
 		const picked = matchTemplate(r);
 		if (picked) applyTemplateToRow(i, picked);
 	});
+	checkAllFloors();
 }
 /* The plan's send column assumes the unit it paced on. Once you change a row's
    troops - adding rams to an axe-paced nuke, say - the command has to leave
@@ -1358,6 +1425,7 @@ function refreshLeaves(i) {
 	const past = leaves < new Date();
 	cell.innerHTML = '<small'+(past ? ' class="text-danger"' : '')+'>'+fmtClock(leaves)+
 		(past ? '<span class="d-block">already past</span>' : '')+'</small>';
+	checkFloor(i);
 }
 
 document.getElementById('p_parse').addEventListener('click', function() {
