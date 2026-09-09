@@ -4,6 +4,10 @@
 {% block content %}
 <style>
 	.planner-table th, .planner-table td { padding: .3rem .5rem; }
+	/* The units column is narrow because it usually holds a few words. The
+	   editor that replaces it holds a select, a stack and a wave count, so
+	   it claims the room it needs rather than wrapping one word per line. */
+	.tr-editing { min-width: 15rem; }
 	/* A row the rally point would refuse. Marked, not disabled: it is still
 	   queueable, because sending it anyway is the user's call. */
 	tr.floor-short > td { background: rgba(210,75,62,.10); }
@@ -334,16 +338,28 @@
 							data-arrival="{{ c.arrival_ts }}" data-send="{{ c.send_ts }}"
 							data-target="{{ c.target_x }}|{{ c.target_y }}"
 							data-kind="{{ 'train' if c.waves else ('nuke' if c.units.axe else 'other') }}"
+							data-units='{{ c.units|tojson }}'
+							data-fake="{{ 1 if c.train and c.train.mode == 'copies' else 0 }}"
+							data-origin="{{ c.origin_id }}"
+							data-nwaves="{{ c.waves|length if c.waves else 0 }}"
 							data-search="{{ ('%s|%s %s %s' % (c.target_x, c.target_y, c.target_name or '', c.origin_name or ''))|lower }}">
 							<td>{% if c.status == 'pending' %}<input type="checkbox" class="rt-pick"
 								data-id="{{ c.id }}" data-arrival="{{ c.arrival_ts }}">{% endif %}</td>
 							<td class="coord">{{ c.target_x }}|{{ c.target_y }}
 								{% if c.target_name %}<small class="text-muted d-block">{{ c.target_name }}</small>{% endif %}</td>
 							<td><small>{{ c.origin_name }}</small></td>
-							<td><small>
+							<td class="tr-cell" data-id="{{ c.id }}">
+								{% if c.status == 'pending' %}<a href="#" class="tr-edit btn btn-outline-secondary btn-sm py-0 float-right ml-2"
+									data-id="{{ c.id }}" title="Change the template this command carries">edit</a>{% endif %}
+								<small>
 								{% if c.waves %}
+								{% if c.train and c.train.mode == 'copies' %}
+								<span class="badge badge-dark">{{ c.waves|length }}-wave fake train</span>
+								<span class="text-muted">identical copies</span>
+								{% else %}
 								<span class="badge badge-dark">{{ c.waves|length }}-noble train</span>
 								<span class="text-muted">{{ 'front-loaded' if c.train and c.train.mode == 'front' else 'even split' }}</span>
+								{% endif %}
 								{% if c.train and c.train.dynamic and c.status == 'pending' %}
 								<span class="badge badge-info"
 									title="Queued with 'all', so this is counted from the newest troop snapshot and counted again off the rally point just before sending. It can grow to {{ c.train.max_waves }} waves.">recounted at send</span>
@@ -1187,6 +1203,110 @@ document.addEventListener('click', function(e) {
 		rtPost([{id: id, arrival: Math.round(when * 1000) / 1000}], 'set');
 	});
 	box.addEventListener('blur', restore);
+});
+
+/* ---------- changing what a queued command carries --------------------
+   The clock is only half of an edit. A plan queued off one template is often
+   wrong about the template rather than the timing - a fake sized for a 5k
+   village leaving from an 8k one, an axe stack that should have been light -
+   and re-queueing it means re-deriving the arrival by hand. So the units are
+   editable in place too, from the same in-game templates the import uses.
+
+   Changing the stack changes the speed, so the server holds the arrival and
+   re-derives the send. A slower stack that can no longer make the landing is
+   refused there, with how late it would be. */
+function trEditor(cell, row, id) {
+	const isFake = row.getAttribute('data-fake') === '1';
+	const nWaves = parseInt(row.getAttribute('data-nwaves') || '0', 10);
+	let current = {};
+	try { current = JSON.parse(row.getAttribute('data-units') || '{}'); } catch (err) {}
+	const wrap = document.createElement('div');
+	wrap.className = 'tr-editing';
+	wrap.innerHTML =
+		'<select class="form-control form-control-sm mb-1 tr-tpl">' +
+			'<option value="">from a template…</option>' + templateOptions() + '</select>' +
+		'<input type="text" class="form-control form-control-sm mb-1 tr-units" ' +
+			'placeholder="light:65, ram:1">' +
+		(isFake ? '<div class="form-inline mb-1"><label class="small text-muted mr-1">waves</label>' +
+			'<input type="number" min="2" max="10" class="form-control form-control-sm tr-waves" ' +
+			'style="width:4.5rem"></div>' : '') +
+		'<button class="btn btn-success btn-sm py-0 tr-save">Save</button> ' +
+		'<button class="btn btn-outline-secondary btn-sm py-0 tr-cancel">Cancel</button>' +
+		'<div class="small text-muted mt-1 tr-note"></div>';
+	cell.innerHTML = '';
+	cell.appendChild(wrap);
+	const unitBox = wrap.querySelector('.tr-units');
+	const waveBox = wrap.querySelector('.tr-waves');
+	unitBox.value = unitsToText(current);
+	if (waveBox) waveBox.value = nWaves || 2;
+	const note = wrap.querySelector('.tr-note');
+	/* A fake train sends its stack once per wave, so the cost of an edit is not
+	   what is typed - it is that times the wave count. Said here rather than
+	   found out at the rally point. */
+	function retotal() {
+		const units = textToUnits(unitBox.value);
+		let pop = 0;
+		Object.keys(units).forEach(u => { pop += (UNIT_POP[u] || 1) * (parseInt(units[u], 10) || 0); });
+		const n = waveBox ? (parseInt(waveBox.value, 10) || 0) : 1;
+		let msg = pop ? pop + ' population per wave' : '';
+		if (waveBox && n > 1 && pop) {
+			msg += ' — ' + Object.keys(units).map(u => u + ' ' + (units[u] * n)).join(', ') + ' in total';
+		}
+		note.textContent = msg;
+		// The same floor the import rows are checked against, checked here too:
+		// a template that fits one village is under the minimum for a bigger
+		// one, and that is exactly the edit people come to this box to make.
+		const o = ORIGIN_BY_ID[row.getAttribute('data-origin')];
+		const need = (o && FAKE_LIMIT) ? Math.round(o.points * FAKE_LIMIT / 100) : 0;
+		note.classList.toggle('text-warning', !!(need && pop && pop < need));
+		note.classList.toggle('text-muted', !(need && pop && pop < need));
+		if (need && pop && pop < need) {
+			note.textContent = msg + ' — under this world\'s minimum of ' + need +
+				', the rally point will refuse it';
+		}
+	}
+	wrap.querySelector('.tr-tpl').addEventListener('change', function() {
+		const tpl = TEMPLATES[this.value];
+		if (tpl) { unitBox.value = unitsToText(tpl.units); retotal(); }
+	});
+	unitBox.addEventListener('input', retotal);
+	if (waveBox) waveBox.addEventListener('input', retotal);
+	retotal();
+	unitBox.focus();
+	wrap.querySelector('.tr-cancel').addEventListener('click', function(e) {
+		e.preventDefault(); location.reload();
+	});
+	function save() {
+		const units = textToUnits(unitBox.value);
+		if (!Object.keys(units).length) { unitBox.classList.add('is-invalid'); return; }
+		const body = {id: id, units: units};
+		if (waveBox) body.waves = parseInt(waveBox.value, 10) || nWaves;
+		fetch(appUrl('/app/attack/schedule/retroop'), {
+			method: 'POST', headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify(body)
+		}).then(r => r.json()).then(d => {
+			if (!d.ok) { alert('Could not change it:\n\n' + (d.error || 'unknown error')); return; }
+			// Warnings the server attached (under the minimum attack size, a
+			// trimmed escort) matter more than the reload, so they are shown
+			// before the page goes.
+			const warn = (d.notes || []).filter(n => /minimum attack size|trimmed/.test(n));
+			if (warn.length) alert(warn.join('\n'));
+			location.reload();
+		}).catch(e => alert('Could not change it: ' + e));
+	}
+	wrap.querySelector('.tr-save').addEventListener('click', function(e) { e.preventDefault(); save(); });
+	unitBox.addEventListener('keydown', function(ev) {
+		if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+		if (ev.key === 'Escape') location.reload();
+	});
+}
+document.addEventListener('click', function(e) {
+	const link = e.target.closest ? e.target.closest('.tr-edit') : null;
+	if (!link) return;
+	e.preventDefault();
+	const cell = link.closest('td');
+	if (cell.querySelector('.tr-editing')) return;             // already editing
+	trEditor(cell, link.closest('tr'), link.getAttribute('data-id'));
 });
 (function() {
 	const all = document.getElementById('rt_all');

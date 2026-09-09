@@ -848,6 +848,182 @@ class DataReader:
         return outcome.get("entry"), outcome.get("error")
 
     @staticmethod
+    def schedule_retroop(command_id, units, waves=None):
+        """Change what a queued command carries, keeping the moment it lands.
+
+        Retiming can leave the travel time alone - the units did not change.
+        Swapping the stack cannot: a fake train moved off light cavalry onto
+        axemen halves its speed, so the same arrival now needs it to leave hours
+        earlier. The arrival is what the player set and what the rest of the
+        plan is timed around, so that is what is held fixed; the send moment is
+        re-derived, and the edit is refused when the new stack can no longer get
+        there in time rather than silently landing late.
+
+        `waves` re-counts a fake train (identical copies). A noble train is
+        re-split from the new stack instead, because there the wave count is the
+        number of nobles in it.
+
+        Returns (entry, error).
+        """
+        outcome = {}
+
+        def mutate(commands):
+            for command in commands:
+                if command.get("id") != command_id:
+                    continue
+                if command.get("status") != "pending":
+                    outcome["error"] = ("this command is %s, so what it carries "
+                                        "can no longer be changed"
+                                        % command.get("status"))
+                    return
+                entry, error = DataReader._retroop_one(command, units, waves)
+                outcome["error"] = error
+                outcome["entry"] = entry
+                return
+            outcome["error"] = "no such command in the queue"
+
+        attack_scheduler.update(mutate, path=DataReader.schedule_path())
+        return outcome.get("entry"), outcome.get("error")
+
+    @staticmethod
+    def _retroop_one(command, units, waves):
+        """The body of schedule_retroop, run under the queue lock. Mutates
+        `command` in place and returns (entry, error) - on an error nothing has
+        been written, so the caller can leave the queue as it was."""
+        selected = {}
+        for unit, count in (units or {}).items():
+            if isinstance(count, str) and count.strip().lower() == "all":
+                selected[unit] = "all"
+                continue
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                selected[unit] = count
+        if not selected:
+            return None, "no units selected"
+
+        spec = dict(command.get("train") or {})
+        is_copies = bool(spec) and str(spec.get("mode")) == "copies"
+        notes = []
+        new_waves = None
+
+        if is_copies:
+            if attack_scheduler.has_all(selected):
+                return None, ("a fake train needs exact counts, not 'all' - "
+                              "every wave sends the same stack")
+            count = len(command.get("waves") or []) or 2
+            if waves is not None:
+                try:
+                    count = int(waves)
+                except (TypeError, ValueError):
+                    return None, "invalid wave count"
+            count = max(2, min(count, 10))
+            new_waves = [dict(selected) for _ in range(count)]
+            notes.append("%d identical waves, %s each"
+                         % (count, ", ".join("%s %s" % (u, n)
+                                             for u, n in selected.items())))
+            spec["nobles"] = count
+            spec["max_waves"] = count
+        elif command.get("waves"):
+            # A noble train: the wave count is however many nobles the new stack
+            # holds, so it is re-split rather than re-counted.
+            managed = DataReader.cache_grab("managed")
+            origin = managed.get(str(command.get("origin_id"))) or {}
+            home = {}
+            for unit, count in (origin.get("available_troops") or {}).items():
+                try:
+                    home[unit] = int(count)
+                except (TypeError, ValueError):
+                    continue
+            counts = attack_scheduler.resolve_all_units(selected, home)
+            escort, escort_notes = attack_scheduler.fit_escort(
+                spec.get("escort"), counts, max(counts.get("snob", 0) - 1, 0))
+            notes.extend(escort_notes or [])
+            new_waves, err = attack_scheduler.split_train(
+                counts, mode=spec.get("mode") or "front", escort=escort)
+            if err:
+                return None, err
+            spec["escort"] = escort
+            spec["nobles"] = len(new_waves)
+            spec["dynamic"] = attack_scheduler.has_all(selected)
+            spec["max_waves"] = len(new_waves)
+
+        if not (field_distance and unit_travel_seconds):
+            return None, "travel-time helpers unavailable"
+        managed = DataReader.cache_grab("managed")
+        origin = managed.get(str(command.get("origin_id"))) or {}
+        loc = (origin.get("public") or {}).get("location")
+        if not loc or len(loc) != 2:
+            return None, "unknown origin village"
+        ws, us, speeds = DataReader.world_speeds()
+        distance = field_distance((loc[0], loc[1]),
+                                  (int(command["target_x"]), int(command["target_y"])))
+        travels = [unit_travel_seconds(distance, speeds[u], ws, us)
+                   for u in selected if speeds.get(u)]
+        if not travels:
+            return None, "no travel speed for the selected units"
+        travel = max(travels)  # the slowest unit dictates arrival
+
+        arrival_ts = command.get("arrival_ts")
+        # Subtract before rounding, the way the command was created: rounding
+        # the travel first moves the send by up to a second, which on a queue
+        # timed to the millisecond is a change nobody asked for.
+        send_ts = int(arrival_ts - travel)
+        lead = attack_scheduler.command_prestage(command)
+        now = time.time()
+        if send_ts <= now:
+            return None, ("too slow - %s would have had to leave %s ago to land "
+                          "at the same moment"
+                          % (DataReader._stack_label(selected),
+                             _short_duration(now - send_ts)))
+        if send_ts <= now + lead:
+            return None, ("too slow - %s would have to leave in %s, and this "
+                          "command needs %ds of lead time to be claimed and "
+                          "pre-staged"
+                          % (DataReader._stack_label(selected),
+                             _short_duration(send_ts - now), lead))
+
+        # Under the world's minimum attack size the rally point refuses the
+        # command at the moment it should be launching. Worth saying, not worth
+        # refusing: the village may well have grown or shrunk by then, and the
+        # player asked to be warned rather than blocked.
+        floor = float((DataReader.cache_grab("world") or {})
+                      .get("config", {}).get("fake_limit") or 0)
+        points = 0
+        try:
+            points = int((origin.get("public") or {}).get("points") or 0)
+        except (TypeError, ValueError):
+            points = 0
+        if floor and points and not attack_scheduler.has_all(selected):
+            need = int(points * floor / 100.0)
+            pop = sum(UNIT_POP.get(u, 1) * n for u, n in selected.items()
+                      if isinstance(n, int))
+            if pop < need:
+                notes.append(
+                    "under this world's minimum attack size: %d population, and "
+                    "%s needs %d - the rally point will refuse it"
+                    % (pop, origin.get("name") or command.get("origin_name"), need))
+
+        command["units"] = selected
+        command["travel_seconds"] = int(travel)
+        command["send_ts"] = send_ts
+        command["distance"] = round(distance, 1)
+        command["retrooped"] = int(time.time())
+        if new_waves is not None:
+            command["waves"] = new_waves
+            command["train"] = spec
+        command["notes"] = notes
+        return command, None
+
+    @staticmethod
+    def _stack_label(units):
+        """"axe 150, ram 1" - what a refusal is talking about, so the message
+        names the stack the player just picked rather than "the new units"."""
+        return ", ".join("%s %s" % (u, n) for u, n in units.items()) or "that stack"
+
+    @staticmethod
     def schedule_cancel(command_id):
         return attack_scheduler.cancel_command(command_id, path=DataReader.schedule_path())
 

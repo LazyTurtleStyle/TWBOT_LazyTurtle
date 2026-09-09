@@ -708,6 +708,24 @@ def attack_schedule_retime():
                     "results": results})
 
 
+@app.route('/app/attack/schedule/retroop', methods=['POST'])
+def attack_schedule_retroop():
+    """Change what a queued command carries. Expects JSON:
+    {id, units: {unit: n}, waves: n}. `waves` only means anything for a fake
+    train, where it is how many copies of the stack go out.
+
+    The arrival is held and the send moment re-derived, so a slower stack can be
+    refused for no longer reaching the target in time.
+    """
+    body = request.get_json(silent=True) or {}
+    entry, error = DataReader.schedule_retroop(
+        body.get("id"), body.get("units") or {}, body.get("waves"))
+    return jsonify({"ok": bool(entry), "error": error,
+                    "send_ts": entry.get("send_ts") if entry else None,
+                    "travel_seconds": entry.get("travel_seconds") if entry else None,
+                    "notes": entry.get("notes") if entry else None})
+
+
 @app.route('/defense', methods=['GET'])
 def defense_page():
     data = sync()
