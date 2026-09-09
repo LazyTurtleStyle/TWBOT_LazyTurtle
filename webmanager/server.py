@@ -577,6 +577,40 @@ def noble_add():
     return jsonify({"ok": True, "entry": entry})
 
 
+@app.route('/app/noble/add_many', methods=['POST'])
+def noble_add_many():
+    """Create several auto-noble jobs from one pasted list of coordinates.
+    Expects JSON: source_id, targets [[x, y], ...], escort, escort_min_pct.
+
+    Each target is added on its own and reports its own result, because the
+    reasons one coordinate is refused - not barbarian any more, not in the map
+    cache yet, already has a job - are per-village and none of them should stop
+    the rest of the list. Jobs are created in the order pasted, which is the
+    order they are prioritised in.
+    """
+    body = request.get_json(silent=True) or {}
+    results = []
+    for pair in (body.get("targets") or [])[:200]:
+        try:
+            tx, ty = int(pair[0]), int(pair[1])
+        except (TypeError, ValueError, IndexError):
+            results.append({"coord": str(pair), "ok": False,
+                            "error": "not a coordinate"})
+            continue
+        entry, error = DataReader.noble_add(
+            target_x=tx, target_y=ty,
+            source_id=body.get("source_id"),
+            escort=body.get("escort") or {},
+            escort_min_pct=body.get("escort_min_pct", 80),
+        )
+        results.append({"coord": "%d|%d" % (tx, ty), "ok": bool(entry),
+                        "error": error,
+                        "name": entry.get("target_name") if entry else None,
+                        "distance": entry.get("distance") if entry else None})
+    return jsonify({"ok": True, "added": sum(1 for r in results if r["ok"]),
+                    "results": results})
+
+
 @app.route('/app/noble/toggle', methods=['GET', 'POST'])
 def noble_toggle():
     jid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")

@@ -591,7 +591,7 @@
 <div class="row">
 	<div class="col-lg-5 mb-3">
 		<div class="card">
-			<div class="card-header py-2"><strong>New noble job</strong></div>
+			<div class="card-header py-2"><strong>New noble jobs</strong></div>
 			<div class="card-body">
 				<div class="form-group mb-2">
 					<label class="small mb-1">From village (needs the academy &amp; nobles)</label>
@@ -605,15 +605,13 @@
 					</select>
 					<div id="nb_avail" class="small text-muted mt-1"></div>
 				</div>
-				<div class="form-row">
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target X</label>
-						<input id="nb_tx" type="number" class="form-control form-control-sm" />
-					</div>
-					<div class="form-group col mb-2">
-						<label class="small mb-1">Target Y</label>
-						<input id="nb_ty" type="number" class="form-control form-control-sm" />
-					</div>
+				<div class="form-group mb-2">
+					<label class="small mb-1">Target<span class="text-muted">s — paste as many as you like</span></label>
+					<textarea id="nb_targets" rows="2" class="form-control form-control-sm"
+						placeholder="582|436 580|436 586|434 585|435"></textarea>
+					<small class="text-muted">Separated by spaces, commas or new lines. Everything below
+						applies to all of them, and they are prioritised in the order pasted.</small>
+					<div id="nb_targets_note" class="small text-muted mt-1"></div>
 				</div>
 				<label class="small mb-1">Escort per noble<span class="text-muted">, sent along with every noble attack</span></label>
 				<div id="nb_units" class="form-row"></div>
@@ -623,7 +621,7 @@
 					<small class="text-muted">Send when at least this % of the escort is home (some troops may be
 						out farming); it sends what's there, capped at the configured amounts.</small>
 				</div>
-				<button id="nb_submit" class="btn btn-primary btn-sm" onclick="nbAdd()">Add job (disarmed)</button>
+				<button id="nb_submit" class="btn btn-primary btn-sm" onclick="nbAdd()">Add jobs (disarmed)</button>
 				<div id="nb_msg" class="small mt-2"></div>
 			</div>
 		</div>
@@ -1801,6 +1799,30 @@ function nbUpdateAvail() {
 		'<strong>'+nobles+' noble'+(nobles === 1 ? '' : 's')+' home</strong>' +
 		(parts.length ? ' · ' + parts.join(', ') : ' · no other troop snapshot yet');
 }
+/* Pull every x|y out of whatever was pasted - a list copied out of the game or
+   off a forum post arrives with commas, tabs, village names and rubbish around
+   it, and picking the coordinates out is more forgiving than asking for a
+   format. Duplicates are dropped, order is kept: that is the priority order. */
+function nbParseTargets(text) {
+	const out = [], seen = {};
+	// Anchored on both sides so a mistyped 9999|1 is not quietly read as
+	// 999|1 - a coordinate that exists, somewhere else entirely.
+	const re = /(?<!\d)(\d{1,3})\s*\|\s*(\d{1,3})(?!\d)/g;
+	let m;
+	while ((m = re.exec(text || '')) !== null) {
+		const key = m[1] + '|' + m[2];
+		if (seen[key]) continue;
+		seen[key] = 1;
+		out.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
+	}
+	return out;
+}
+function nbTargetsNote() {
+	const el = document.getElementById('nb_targets_note');
+	if (!el) return;
+	const n = nbParseTargets(document.getElementById('nb_targets').value).length;
+	el.textContent = n ? n + ' target' + (n === 1 ? '' : 's') + ' recognised' : '';
+}
 function nbAdd() {
 	const escort = {};
 	UNITS.filter(u => u !== 'snob').forEach(u => {
@@ -1809,20 +1831,39 @@ function nbAdd() {
 		if (n > 0) escort[u] = n;
 	});
 	const msg = document.getElementById('nb_msg');
-	msg.textContent = 'Adding…';
-	fetch('/app/noble/add', {
+	const targets = nbParseTargets(document.getElementById('nb_targets').value);
+	if (!targets.length) {
+		msg.innerHTML = '<span class="text-danger">no coordinates found - they look like 582|436</span>';
+		return;
+	}
+	msg.textContent = 'Adding ' + targets.length + '…';
+	fetch(appUrl('/app/noble/add_many'), {
 		method: 'POST',
 		headers: {'Content-Type': 'application/json'},
 		body: JSON.stringify({
 			source_id: document.getElementById('nb_source').value,
-			target_x: document.getElementById('nb_tx').value,
-			target_y: document.getElementById('nb_ty').value,
+			targets: targets,
 			escort: escort,
 			escort_min_pct: document.getElementById('nb_pct').value,
 		}),
 	}).then(r => r.json()).then(resp => {
-		if (!resp.ok) { msg.innerHTML = '<span class="text-danger">'+(resp.error || 'failed')+'</span>'; return; }
-		location.hash = '#noble'; location.reload();
+		const bad = (resp.results || []).filter(r => !r.ok);
+		// A clean run just shows the new jobs. A partly-refused one has to stay
+		// on screen: the reasons are per-village ("not barbarian any more",
+		// "not in the map cache yet") and each one is a different thing to do
+		// about it, so reloading them away would be throwing the answer out.
+		if (!bad.length) { location.hash = '#noble'; location.reload(); return; }
+		msg.innerHTML = '<div class="mb-1"><strong>' + resp.added + ' added</strong>, ' +
+			bad.length + ' skipped</div>' +
+			bad.map(r => '<div class="text-warning"><span class="coord">' + r.coord +
+				'</span> — ' + (r.error || 'failed') + '</div>').join('') +
+			(resp.added ? '<div class="mt-1"><a href="#noble" onclick="location.reload()">' +
+				'reload to see the ' + resp.added + ' new job' + (resp.added === 1 ? '' : 's') +
+				'</a></div>' : '');
+		// Leave only what was refused in the box, so a fix is a retry rather
+		// than a re-paste - and so nothing already added can be added twice.
+		document.getElementById('nb_targets').value = bad.map(r => r.coord).join(' ');
+		nbTargetsNote();
 	}).catch(() => { msg.innerHTML = '<span class="text-danger">request failed</span>'; });
 }
 function nbToggle(id) {
@@ -1839,6 +1880,10 @@ function nbRemove(id) {
 		.then(r => r.json()).then(() => { location.hash = '#noble'; location.reload(); });
 }
 nbBuildUnits();
+(function() {
+	const box = document.getElementById('nb_targets');
+	if (box) box.addEventListener('input', nbTargetsNote);
+})();
 const nbSource = document.getElementById('nb_source');
 if (nbSource) { nbSource.addEventListener('change', nbUpdateAvail); nbUpdateAvail(); }
 
