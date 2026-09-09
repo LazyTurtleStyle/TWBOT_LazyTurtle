@@ -11,6 +11,10 @@
 	.snipe-log { max-height: 9rem; overflow-y: auto; font-size: .75rem; white-space: pre-line; }
 	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
 	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
+	/* A village nothing can reach in time from is noise between the ones that
+	   can - but it is only out of reach for this landing, so it is folded away
+	   rather than dropped, and comes back when the hit time or boost changes. */
+	#sn-options-body.hide-unreachable .sn-row.sn-unreachable { display: none; }
 </style>
 
 {% macro csnipe_rows(snipes, empty_text) %}
@@ -511,10 +515,27 @@
 					value="{{ snipe.default_min_pct }}">
 			</div>
 		</div>
+		<div class="form-row align-items-end" id="sn-template-row" style="display:none">
+			<div class="form-group col-6 col-md-3">
+				<label>Fill from a troop template</label>
+				<select class="form-control form-control-sm" id="sn-template"></select>
+			</div>
+			<div class="form-group col-auto">
+				<button class="btn btn-outline-secondary btn-sm" id="sn-template-fill">Fill every village</button>
+			</div>
+			<div class="form-group col-auto">
+				<button class="btn btn-outline-secondary btn-sm" id="sn-template-fill-ticked">Fill ticked only</button>
+			</div>
+			<div class="form-group col">
+				<small class="text-muted d-block" id="sn-template-note"></small>
+			</div>
+		</div>
 		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself,
 			pace is whichever unit you enter is slowest, so mixing in a ram or axe makes the whole send walk at
-			that pace.</p>
-		<div id="sn-options-body"></div>
+			that pace. A template fills the boxes and nothing more - every one of them is still editable.
+			Villages no defensive unit could reach in time for this landing are folded away below.</p>
+		<div id="sn-options-body" class="hide-unreachable"></div>
+		<div class="small mb-2" id="sn-unreachable-note"></div>
 		<div class="text-danger small mb-2" id="sn-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="snipeArm()">Arm selected snipes</button>
 		<button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('snipe-options').style.display='none'">Close</button>
@@ -820,10 +841,71 @@ function snipeUnitGrid(grid, home) {
 // distance-derived send moment and countdown - called on every keystroke in
 // that card's unit grid, and whenever the shared hit/offset/boost fields
 // change (snipeRecalcAll), without touching what the user has typed.
+// Whether anything this village holds could still get there, judged unit by
+// unit rather than on the stack that happens to be typed. Sword too late but
+// spear still in time is a village worth showing - it is only pointless when
+// every unit it has is too slow for what is left of the clock. Villages we
+// have no troop count for are treated as reachable: that is missing data, not
+// an empty village, and hiding it would hide the fact.
+function snipeTravelMs(v, target, pace) {
+	const boost = Math.max(0.1, parseFloat(document.getElementById('sn-boost').value) || 1.0);
+	const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
+	return dist * pace / (SNIPE.world_speed * SNIPE.unit_speed) * 60000 / boost;
+}
+// The send has to be far enough ahead for the engine to still claim and fire it.
+const SN_LEAD_MS = 45000;
+// These can be sent - a ram-pace snipe is a real thing - but none of them hold
+// a wall, so none of them is a reason to keep a village on screen. Scouts in
+// particular are the fastest thing most villages own, and judging by them would
+// keep every village in the world listed.
+const SN_NO_DEFENCE = ['spy', 'ram', 'catapult'];
+// Which of the defensive units this village actually holds would still land in
+// time, fastest first. Empty means nothing useful it has can get there for this
+// landing; null means we have no troop count for it at all, which is missing
+// data rather than an empty village and must not be read as "cannot help".
+function snipeUnitsInTime(v, target) {
+	if (!target || !target.coords || !v || !v.coords) return null;
+	const home = v.home || {};
+	const counted = SNIPE.units.some(function(u) { return (home[u] || 0) > 0; });
+	if (!counted) return null;
+	const deadline = Date.now() + SN_LEAD_MS;
+	return SNIPE.units.filter(function(u) {
+			return SNIPE.speeds[u] != null && (home[u] || 0) > 0
+				&& SN_NO_DEFENCE.indexOf(u) < 0
+				&& snipeLandMs() - snipeTravelMs(v, target, SNIPE.speeds[u]) >= deadline;
+		}).sort(function(a, b) { return SNIPE.speeds[a] - SNIPE.speeds[b]; });
+}
+function snipeMarkReach(row, v, target) {
+	const inTime = snipeUnitsInTime(v, target);
+	const out = inTime !== null && inTime.length === 0;
+	row.dataset.inTime = inTime === null ? '' : inTime.join(',');
+	row.classList.toggle('sn-unreachable', out);
+	// Nothing can go from here, so nothing should be able to be armed from here
+	// by a tick left over from an earlier, more generous hit time.
+	if (out) { const cb = row.querySelector('.sn-opt'); if (cb) cb.checked = false; }
+	return out;
+}
+function snipeUpdateHidden() {
+	const body = document.getElementById('sn-options-body');
+	const note = document.getElementById('sn-unreachable-note');
+	const n = body.querySelectorAll('.sn-row.sn-unreachable').length;
+	if (!n) { note.innerHTML = ''; return; }
+	const hidden = body.classList.contains('hide-unreachable');
+	note.innerHTML = '<span class="text-muted">' + n + ' village' + (n === 1 ? '' : 's') +
+		' with no defensive unit that reaches it in time</span> · <a href="#" id="sn-toggle-unreachable">' +
+		(hidden ? 'show them anyway' : 'hide them') + '</a>';
+	document.getElementById('sn-toggle-unreachable').addEventListener('click', function(e) {
+		e.preventDefault();
+		body.classList.toggle('hide-unreachable');
+		snipeUpdateHidden();
+	});
+}
+
 function snipeRowRecalc(row) {
 	const target = SNIPE.villages[snForm.target_id];
 	const v = SNIPE.villages[row.getAttribute('data-village-id')];
 	const infoEl = row.querySelector('.sn-row-info');
+	snipeMarkReach(row, v, target);
 	let slowest = null, slowUnit = null, any = false;
 	row.querySelectorAll('.sn-unit-count').forEach(function(inp) {
 		const n = parseInt(inp.value, 10) || 0;
@@ -848,9 +930,15 @@ function snipeRowRecalc(row) {
 	const send = Math.round(snipeLandMs() - travel * 1000);
 	row.dataset.sendMs = send;
 	row.dataset.paceUnit = slowUnit;
-	if (send < Date.now() + 45000) {
+	if (send < Date.now() + SN_LEAD_MS) {
+		// This row is only still on screen because something else in it would
+		// arrive, so say what - otherwise a red "too late" on every visible row
+		// reads as the folding being broken rather than as a stack to change.
+		const alt = (row.dataset.inTime || '').split(',').filter(Boolean);
 		infoEl.innerHTML = '<span class="text-danger">too late at ' + slowUnit + ' pace, '
-			+ dist.toFixed(1) + ' fields</span>';
+			+ dist.toFixed(1) + ' fields</span>'
+			+ (alt.length ? ' <span class="text-muted">· ' + alt.slice(0, 3).join(', ')
+				+ ' would still make it</span>' : '');
 	} else {
 		infoEl.innerHTML = slowUnit + ' pace · ' + dist.toFixed(1) + ' fields · send at '
 			+ fmtMs(send) + ' · <span class="sn-eta" data-epoch-ms="' + send + '">…</span>';
@@ -859,6 +947,7 @@ function snipeRowRecalc(row) {
 
 function snipeRecalcAll() {
 	document.querySelectorAll('.sn-row').forEach(snipeRowRecalc);
+	snipeUpdateHidden();
 }
 
 function snipeBuildRows() {
@@ -902,6 +991,7 @@ function snipeBuildRows() {
 		});
 		snipeRowRecalc(row);
 	});
+	snipeUpdateHidden();
 	tickSnipe();
 }
 
@@ -915,6 +1005,76 @@ function tickSnipe() {
 	});
 }
 setInterval(tickSnipe, 1000);
+
+/* ---------- filling every village from one troop template --------------
+   A snipe set is worked out once - 1000 spear, or a spear/sword mix - and then
+   wanted in twenty villages. Typing it twenty times is how the wrong number
+   ends up in the nineteenth, so the in-game templates fill the boxes instead.
+
+   A village that holds fewer than the template asks for sends what it holds:
+   the template is the ceiling, not a demand, and capping here is what makes one
+   template usable across villages of different sizes. Everything it writes is
+   an ordinary value in an ordinary box, so any of it can still be changed by
+   hand afterwards. */
+function snipeFillFrom(templateId, tickedOnly) {
+	const tpl = SNIPE.templates[templateId];
+	const note = document.getElementById('sn-template-note');
+	if (!tpl) { note.textContent = ''; return; }
+	let filled = 0, capped = 0, empty = 0;
+	document.querySelectorAll('.sn-row').forEach(function(row) {
+		// Never fill what is folded away as out of reach, and never fill past
+		// what was asked for.
+		if (row.classList.contains('sn-unreachable')) return;
+		if (tickedOnly && !row.querySelector('.sn-opt').checked) return;
+		const v = SNIPE.villages[row.getAttribute('data-village-id')];
+		const home = (v && v.home) || {};
+		let touched = false;
+		row.querySelectorAll('.sn-unit-count').forEach(function(inp) {
+			const u = inp.getAttribute('data-unit');
+			const want = tpl.units ? tpl.units[u] : undefined;
+			let n = 0;
+			if (want !== undefined) {
+				const have = home[u] || 0;
+				// "all" is the template saying "whatever is standing there".
+				n = String(want).toLowerCase() === 'all' ? have
+					: Math.min(parseInt(want, 10) || 0, have);
+				if (String(want).toLowerCase() !== 'all' && (parseInt(want, 10) || 0) > have) capped++;
+			}
+			inp.value = n;
+			touched = true;
+		});
+		if (touched) {
+			filled++;
+			const got = [].some.call(row.querySelectorAll('.sn-unit-count'),
+				function(i) { return (parseInt(i.value, 10) || 0) > 0; });
+			if (!got) empty++;
+			snipeRowRecalc(row);
+		}
+	});
+	snipeUpdateHidden();
+	// "filled 32" while a dozen of them hold none of what the template asks for
+	// is a number that reads as done and is not, so the empties are counted out.
+	note.textContent = filled
+		? 'filled ' + (filled - empty) + ' village' + (filled - empty === 1 ? '' : 's') + ' from ' + tpl.name +
+		  (capped ? ' · ' + capped + ' box' + (capped === 1 ? '' : 'es') + ' capped at what is home' : '') +
+		  (empty ? ' · ' + empty + ' ha' + (empty === 1 ? 's' : 've') + ' none of these units' : '')
+		: (tickedOnly ? 'nothing ticked to fill' : 'no villages to fill');
+}
+(function() {
+	const sel = document.getElementById('sn-template');
+	const ids = Object.keys(SNIPE.templates || {});
+	if (!sel || !ids.length) return;   // the bot has not read them yet
+	sel.innerHTML = ids.map(function(id) {
+		return '<option value="' + id + '">' + esc(SNIPE.templates[id].name) + '</option>';
+	}).join('');
+	document.getElementById('sn-template-row').style.display = '';
+	document.getElementById('sn-template-fill').addEventListener('click', function(e) {
+		e.preventDefault(); snipeFillFrom(sel.value, false);
+	});
+	document.getElementById('sn-template-fill-ticked').addEventListener('click', function(e) {
+		e.preventDefault(); snipeFillFrom(sel.value, true);
+	});
+})();
 
 function snipeArm() {
 	const err = document.getElementById('sn-error');

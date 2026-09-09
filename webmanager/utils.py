@@ -3382,6 +3382,10 @@ class SnipeOverview:
             "active_count": len(active),
             "units": cls.SNIPE_UNITS,
             "default_units": cls.DEFAULT_UNITS,
+            # The player's own rally-point templates, so a snipe set worked out
+            # once in-game ("1000 spear", a spear/sword mix) can be poured into
+            # every village at once instead of typed per village.
+            "templates": DataReader.troop_templates(),
             "speeds": {u: speeds.get(u) for u in cls.SNIPE_UNITS
                        if speeds.get(u)},
             "world_speed": ws,
