@@ -433,8 +433,19 @@ def focus_budgets(jobs, flying_map=None, home_by_source=None, now=None,
         loyalty = estimate_loyalty(job, now=now, speed=speed)
         # Same "whoever sent them" reading step() uses: the job's own
         # bookkeeping misses trains launched by hand.
-        in_flight = max(int((job.get("in_flight") or {}).get("nobles") or 0),
-                        nobles_heading_to(job, flying_map))
+        #
+        # The job's own record only counts while the round trip is still under
+        # way. step() clears it once back_at has passed, but that happens as
+        # each job is stepped - after this ran - so reading it raw counted a
+        # noble that had already landed. For a leader that needs one more noble
+        # that is the difference between claiming it and claiming none: its
+        # budget came out 0 and the nobles it was owed went to the target below
+        # it, which is the exact spreading this function exists to prevent.
+        own = (job.get("in_flight") or {})
+        own_nobles = int(own.get("nobles") or 0)
+        if own_nobles and now >= int(own.get("back_at") or 0):
+            own_nobles = 0
+        in_flight = max(own_nobles, nobles_heading_to(job, flying_map))
         claim = min(pool, max(0, nobles_needed_worst_case(loyalty) - in_flight))
         allowed = max(0, max_safe_nobles(loyalty) - in_flight)
         budgets[job.get("id")] = min(allowed, claim)

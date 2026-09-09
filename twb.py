@@ -180,6 +180,10 @@ class TWB:
         # {village_id: {unit: count}} held back for the armed noble jobs this
         # cycle, see noble_escort_reserve().
         self.troop_reserve = {}
+        # Held for the length of a noble-barb pass. The cycle calls it and so
+        # does noble_runner's thread; two at once would each see the same
+        # noble at home and each send it.
+        self._noble_lock = threading.Lock()
 
     @staticmethod
     def internet_online():
@@ -946,23 +950,67 @@ class TWB:
             logging.getLogger("PlayerFarm").warning(
                 "Player farm pass failed: %s", exc)
 
-    def run_noble_barbs(self, config):
+    def run_noble_barbs(self, config, wrapper=None):
         """One auto-noble pass (alpha).
 
-        Runs twice per cycle: once at the top, so an armed job fires within a
-        minute of the cycle starting instead of waiting out every village (the
-        pass reads the sending village's rally point live, so it no longer
-        needs the end-of-cycle troop snapshot), and once after the village
-        loop, which catches jobs whose escort only came home mid-cycle. Jobs
-        that already sent are held by their in_flight guard, so the second
-        pass is a no-op for them."""
+        Called from three places: the top of the cycle, the end of it, and the
+        noble_runner thread's own clock. They must never overlap - two passes
+        reading the same rally point at the same time both see the same noble
+        standing there and both send it - so a pass that finds one already
+        running steps aside rather than queueing behind it. Nothing is lost by
+        skipping: the next pass is minutes away, and the jobs it would have
+        looked at are the same ones.
+        """
         if not config.get("farms", {}).get("noble_barb", True):
             return
+        if not self._noble_lock.acquire(blocking=False):
+            return
         try:
-            NobleBarbManager(wrapper=self.wrapper, config=config).run()
+            NobleBarbManager(wrapper=wrapper or self.wrapper, config=config).run()
         except Exception as exc:
             logging.getLogger("NobleBarb").warning(
                 "Noble-barb pass failed: %s", exc)
+        finally:
+            self._noble_lock.release()
+
+    def noble_runner(self, config):
+        """Background loop: give armed noble jobs a real clock.
+
+        The cycle passes are the right place to start and finish a pass, but
+        they are an hour or more apart on a big account, and a noble is only
+        home for as long as it takes to walk out again. A job whose noble lands
+        just after the top-of-cycle pass waits out the entire village loop for
+        its turn - measured on this account at 45 to 81 minutes - which is time
+        the target spends regenerating the loyalty the last noble took off it.
+
+        So the same pass is asked for punctually instead. It is cheap when
+        there is nothing to do: an armed-job count read off disk, and no
+        requests at all until one is armed. The config is re-read here so
+        turning the module off does not need a restart.
+        """
+        logger = logging.getLogger("NobleBarb")
+        poller = self._make_poller_wrapper(config)
+        interval = max(60, int(config["bot"].get("noble_check_seconds", 300)))
+        while self.should_run:
+            time.sleep(interval)
+            if not self.should_run:
+                break
+            try:
+                live = FileManager.load_json_file("config.json") or config
+                if not live.get("farms", {}).get("noble_barb", True):
+                    continue
+                # No armed job means no reason to touch the network at all.
+                jobs = FileManager.load_json_file("cache/noble_jobs.json") or {}
+                entries = jobs.get("commands") if isinstance(jobs, dict) else jobs
+                if not any((j or {}).get("status") == "armed"
+                           for j in (entries or [])):
+                    continue
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    poller.web.cookies.update(session["cookies"])
+                self.run_noble_barbs(live, wrapper=poller)
+            except Exception as exc:
+                logger.warning("Noble-barb poll failed: %s", exc)
 
     def heartbeat(self, sleeping=False):
         """Stamp proof that the main loop is still turning.
@@ -1128,6 +1176,13 @@ class TWB:
         )
         mint_thread.start()
         print("Coin-minting runner started")
+        # Same reasoning, and just as cheap while idle: an armed noble job that
+        # has to wait out a whole village loop is a noble sitting at home.
+        noble_thread = threading.Thread(
+            target=self.noble_runner, args=(config,), daemon=True
+        )
+        noble_thread.start()
+        print("Noble-barb runner started")
         while self.should_run:
             # Heartbeat: proof the main loop is still turning, independent of the
             # incoming-attack poller and scheduler threads, which run on their own
