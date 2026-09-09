@@ -231,6 +231,20 @@
 
 				<div class="form-group mb-2">
 					<label class="small mb-1">
+						<input id="s_fake" type="checkbox"> Send as a <strong>fake train</strong>
+						<span class="text-muted">, the same stack</span>
+						<select id="s_fake_waves" class="form-control form-control-sm d-inline-block"
+							style="width:4.2rem; padding:0 .3rem">
+							<option>2</option><option>3</option><option selected>4</option>
+							<option>5</option><option>6</option>
+						</select>
+						<span class="text-muted">times, back-to-back &mdash; reads like a noble train
+							to anyone not checking travel times. Exact counts only.</span>
+					</label>
+				</div>
+
+				<div class="form-group mb-2">
+					<label class="small mb-1">
 						<input id="s_train" type="checkbox"> Send as a <strong>noble train</strong>
 						<span class="text-muted">, one noble per wave, all fired back-to-back</span>
 					</label>
@@ -905,6 +919,12 @@ function copyPlanTarget() {
 
 /* ---------- Noble train ---------- */
 function trainSettings() {
+	// A fake train is the same stack repeated; a noble train splits one army.
+	// They are different things, so only one of the two can be on.
+	if (document.getElementById('s_fake').checked) {
+		return {mode: 'copies',
+			waves: parseInt(document.getElementById('s_fake_waves').value, 10) || 2};
+	}
 	if (!document.getElementById('s_train').checked) return null;
 	const mode = document.getElementById('s_train_mode').value;
 	const escort = {};
@@ -1205,6 +1225,16 @@ document.getElementById('s_origin').addEventListener('change', function() { upda
 ['s_tx','s_ty','s_arrival'].forEach(id => document.getElementById(id).addEventListener('input', function() { schedPreview(); wavePreview(); }));
 document.getElementById('s_fill_home').addEventListener('click', function(e) { e.preventDefault(); fillFromHome(); });
 document.getElementById('s_train').addEventListener('change', toggleTrain);
+// The two train kinds are mutually exclusive: ticking one unticks the other.
+document.getElementById('s_fake').addEventListener('change', function () {
+	if (this.checked) {
+		document.getElementById('s_train').checked = false;
+		toggleTrain();
+	}
+});
+document.getElementById('s_train').addEventListener('change', function () {
+	if (this.checked) document.getElementById('s_fake').checked = false;
+});
 document.getElementById('s_train_mode').addEventListener('change', toggleTrain);
 ['s_escort_unit','s_escort_n'].forEach(id => document.getElementById(id).addEventListener('input', wavePreview));
 document.getElementById('s_escort_unit').innerHTML = UNITS.filter(u => u !== 'snob')
@@ -1380,6 +1410,13 @@ function renderPlan(plan) {
 	document.getElementById('p_table').style.display = PLAN_ROWS.length ? '' : 'none';
 	document.getElementById('p_queue').disabled = !plan.queueable;
 	const ticked = PLAN_ROWS.filter(r => r.selected).length;
+	if (plan.wrong_world) {
+		summary.innerHTML = '<div class="alert alert-warning py-2 mb-2">' +
+			'<strong>None of these villages are on ' + (WORLD || 'this world') + '.</strong> ' +
+			'The plan reads fine - every origin in it belongs to a different world. ' +
+			'Check the world switcher at the bottom of the sidebar.</div>';
+		return;
+	}
 	let note = '<strong>'+PLAN_ROWS.length+'</strong> command(s) read, <strong>'+
 		ticked+'</strong> ticked'+
 		(plan.queueable > ticked ? ' ('+(plan.queueable - ticked)+' more sendable but flagged)' : '')+'.';

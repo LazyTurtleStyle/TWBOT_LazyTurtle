@@ -2731,9 +2731,16 @@ class PlanImport:
             entry["selected"] = not problems and not warnings
             out.append(entry)
 
+        # Every origin unknown, on a world that does have villages, is almost
+        # never a broken plan - it is a plan for another world, read while the
+        # dashboard was pointed at this one. Say that once, rather than leaving
+        # the same per-row error repeated down the table to be interpreted.
+        wrong_world = bool(out) and mine and not any(r["origin_id"] for r in out)
+
         return {
             "rows": out,
             "skipped": skipped,
+            "wrong_world": wrong_world,
             "queueable": sum(1 for r in out if r["ok"]),
             # Plan timestamps are read on the host clock; say how far that is
             # from the game server so an off-by-minutes host is visible here.
