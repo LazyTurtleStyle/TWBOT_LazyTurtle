@@ -33,6 +33,8 @@
 	/* A filtered-away row with an unsaved edit in it would otherwise be a
 	   change about to be saved that cannot be seen. */
 	.group-bar .warn { font-size: 12px; color: var(--ember); }
+	.bulk-row th { padding-top: 4px; padding-bottom: 8px; font-weight: normal; }
+	.bulk-row .faint { font-size: 11px; }
 </style>
 
 <div class="module-section">
@@ -78,6 +80,50 @@
 					<th>Farm</th>
 					<th>Status</th>
 					<th class="num"></th>
+				</tr>
+				<!-- Set a whole column at once. Sits in the header so each control
+				     is directly above the cells it writes, and it only ever touches
+				     the rows currently on screen - which is what makes it worth
+				     having next to the group filter. Like every other edit here it
+				     only stages: nothing is written until Save. -->
+				<tr class="bulk-row">
+					<th><span class="faint">set all shown &rarr;</span></th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="building" style="max-width:180px">
+							<option value="">&mdash;</option>
+							<option value="__default__">global default ({{ overrides.building_default }})</option>
+							<option value="false">off, do not build here</option>
+							{% for name in overrides.builder_templates %}
+							<option value="{{ name }}">{{ name }}</option>
+							{% endfor %}
+						</select>
+					</th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="units" style="max-width:180px">
+							<option value="">&mdash;</option>
+							<option value="__default__">global default ({{ overrides.units_default }})</option>
+							<option value="false">off, do not recruit here</option>
+							{% for name in overrides.troop_templates %}
+							<option value="{{ name }}">{{ name }}</option>
+							{% endfor %}
+						</select>
+					</th>
+					<th></th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="gather_enabled" style="max-width:70px">
+							<option value="">&mdash;</option>
+							<option value="true">on</option>
+							<option value="false">off</option>
+						</select>
+					</th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="farm_enabled" style="max-width:70px">
+							<option value="">&mdash;</option>
+							<option value="true">on</option>
+							<option value="false">off</option>
+						</select>
+					</th>
+					<th colspan="2"><span id="bulk_note" class="faint"></span></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -244,8 +290,51 @@
 		}
 	}
 
+	/* ---------- setting a whole column at once -------------------------
+	   Ten off villages onto one build template is ten identical clicks, and the
+	   tenth is where the wrong one gets picked. This writes the column for the
+	   rows currently on screen - so it composes with the group filter, which is
+	   the point of having both.
+
+	   It stages like everything else on this page: the cells go dirty and Save
+	   writes them, so a wrong pick costs a Discard rather than a config file.
+	   Rows with no stored config have no editors to write, and are skipped. */
+	function bulkSet(param, value) {
+		var touched = 0, skipped = 0;
+		$('tr[data-village-row]:visible').each(function () {
+			var row = $(this);
+			var el = row.find('[data-param="' + param + '"][data-village-id]');
+			if (!el.length) { skipped++; return; }
+			if (param === 'gather_enabled' || param === 'farm_enabled') {
+				var on = value === 'true';
+				el.text(on ? 'on' : 'off').toggleClass('moss', on).toggleClass('dim', !on);
+				track(el[0], on ? 'true' : 'false');
+			} else {
+				// "global default" is stored as an empty value, but that option
+				// only exists on a row that is already inheriting - so it is
+				// added where it is missing rather than silently doing nothing.
+				var v = value === '__default__' ? '' : value;
+				if (v === '' && !el.find('option[value=""]').length) {
+					el.prepend($('<option>', {value: '', text: '\u2014 global default'}));
+				}
+				el.val(v);
+				track(el[0], v);
+			}
+			touched++;
+		});
+		var msg = touched + ' row' + (touched === 1 ? '' : 's') + ' set';
+		if (skipped) msg += ' \u00b7 ' + skipped + ' skipped (no config yet)';
+		$('#bulk_note').text(msg);
+	}
+
 	$(document).ready(function () {
 		$('#group_filter, #name_filter').on('change input', applyVillageFilter);
+		$('.bulk-set').change(function () {
+			var value = $(this).val();
+			if (value === '') return;
+			bulkSet($(this).attr('data-param'), value);
+			this.selectedIndex = 0;   // a one-shot action, not a state to leave set
+		});
 		// Only the editors, not the filter controls above the table: they wear
 		// the same class to look the same, and binding on the class alone
 		// queued a change of filter as a pending edit with no village behind it.
