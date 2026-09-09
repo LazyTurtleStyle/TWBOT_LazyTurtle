@@ -1032,6 +1032,15 @@ def pre_process_overrides(data):
     ignore = {'additional_farms'}
     compare_keys = [k for k in template.keys() if k not in ignore]
 
+    # The in-game groups, as the bot last read them, so the table can be cut
+    # down to "my off villages" the way the game itself is organised. Inverted
+    # to {village id: [group ids]} because that is what a row needs.
+    groups = DataReader.groups_grab()
+    group_of = {}
+    for group in groups:
+        for member in (group.get('villages') or []):
+            group_of.setdefault(str(member), []).append(str(group.get('id')))
+
     rows = []
     overriding = 0
     for vid, vdata in (data.get('bot', {}) or {}).items():
@@ -1056,6 +1065,7 @@ def pre_process_overrides(data):
                 'managed': False,
                 'gather_enabled': bool(template.get('gather_enabled', False)),
                 'farm_enabled': bool(template.get('farm_enabled', True)),
+                'groups': group_of.get(vid, []),
             })
             continue
 
@@ -1080,9 +1090,18 @@ def pre_process_overrides(data):
             'managed': bool(vcfg.get('managed')),
             'gather_enabled': bool(vcfg.get('gather_enabled', template.get('gather_enabled', False))),
             'farm_enabled': bool(vcfg.get('farm_enabled', template.get('farm_enabled', True))),
+            'groups': group_of.get(vid, []),
         })
 
     rows.sort(key=lambda r: (not r['overrides'], r['name'].lower()))
+    here = {r['id'] for r in rows}
+    group_options = []
+    for group in groups:
+        held = sum(1 for v in (group.get('villages') or []) if str(v) in here)
+        if held:
+            group_options.append({'id': str(group.get('id')),
+                                  'name': group.get('name'),
+                                  'type': group.get('type'), 'count': held})
     total = len(rows)
     summary = '{} of {} village{} override the global template.'.format(
         overriding, total, '' if total == 1 else 's')
@@ -1096,6 +1115,10 @@ def pre_process_overrides(data):
         'troop_templates': template_names('troops'),
         'building_default': config.get('building', {}).get('default') or 'purple_predator',
         'units_default': config.get('units', {}).get('default') or 'basic',
+        # Only groups that actually hold one of these villages: the list is
+        # every group on the account, and offering ones that would filter the
+        # table down to nothing is just a way to look broken.
+        'groups': group_options,
     }
 
 

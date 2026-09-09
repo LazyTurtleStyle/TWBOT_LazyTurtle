@@ -27,6 +27,12 @@
 	}
 	.edit-bar { display: flex; align-items: center; gap: 8px; }
 	.edit-bar .faint { font-size: 12px; }
+	.group-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+	.group-bar label { font-size: 12px; color: var(--ink-faint); margin: 0; }
+	.group-bar .faint { font-size: 12px; }
+	/* A filtered-away row with an unsaved edit in it would otherwise be a
+	   change about to be saved that cannot be seen. */
+	.group-bar .warn { font-size: 12px; color: var(--ember); }
 </style>
 
 <div class="module-section">
@@ -45,6 +51,21 @@
 		table, then hit Save &mdash; nothing is written until you do.
 	</div>
 
+	{% if overrides.groups %}
+	<div class="group-bar">
+		<label for="group_filter">Group</label>
+		<select id="group_filter" class="cell-edit filter-input" style="max-width:220px">
+			<option value="">all villages ({{ overrides.total }})</option>
+			{% for g in overrides.groups %}
+			<option value="{{ g.id }}">{{ g.name }} ({{ g.count }}){% if g.type == 'dynamic' %} · dynamic{% endif %}</option>
+			{% endfor %}
+		</select>
+		<input id="name_filter" class="cell-edit filter-input" style="max-width:200px;cursor:text"
+			placeholder="filter by name or coords…">
+		<span id="filter_count" class="faint"></span>
+	</div>
+	{% endif %}
+
 	<div class="panel" style="box-shadow:none;margin-top:10px">
 		<table class="tw">
 			<thead>
@@ -61,7 +82,9 @@
 			</thead>
 			<tbody>
 				{% for row in overrides.rows %}
-				<tr{% if row.overrides %} class="alert"{% endif %}>
+				<tr{% if row.overrides %} class="alert"{% endif %} data-village-row="{{ row.id }}"
+					data-groups="{{ row.groups|join(',') }}"
+					data-search="{{ ((row.name or '') ~ ' ' ~ (row.coord or ''))|lower }}">
 					<td>
 						<a class="vlink" href="village?id={{ row.id }}">{{ row.name }}</a>
 						{% if row.coord %}<span class="coord">{{ row.coord }}</span>{% endif %}
@@ -175,6 +198,7 @@
 			$(el).addClass('is-dirty');
 		}
 		refreshBar();
+		applyVillageFilter();
 	}
 
 	// One request at a time: /app/config/set is a read-modify-write of
@@ -189,8 +213,43 @@
 			.fail(function () { failed.push(item); saveSequential(items, done, failed); });
 	}
 
+	/* ---------- cutting the table down to one in-game group ------------
+	   Fifty rows is a list you read; ten is a list you work on. The groups are
+	   the ones already kept in the game, so "show me the off villages" is the
+	   same question here as it is there.
+
+	   Filtering only hides rows - a pending edit in one is still pending, and
+	   still saved - so the bar says so rather than letting a change be saved
+	   from a row that is not on screen. */
+	function applyVillageFilter() {
+		var gid = $('#group_filter').val();
+		var text = ($('#name_filter').val() || '').trim().toLowerCase();
+		var shown = 0, hiddenDirty = 0;
+		$('tr[data-village-row]').each(function () {
+			var row = $(this);
+			var groups = (row.attr('data-groups') || '').split(',');
+			var ok = (!gid || groups.indexOf(gid) >= 0) &&
+				(!text || (row.attr('data-search') || '').indexOf(text) >= 0);
+			row.toggle(ok);
+			if (ok) shown++;
+			else if (row.find('.is-dirty').length) hiddenDirty++;
+		});
+		var total = $('tr[data-village-row]').length;
+		var msg = (gid || text) ? (shown + ' of ' + total + ' shown') : '';
+		$('#filter_count').text(msg).removeClass('warn');
+		if (hiddenDirty) {
+			$('#filter_count').text(msg + ' · ' + hiddenDirty +
+				' unsaved change' + (hiddenDirty === 1 ? '' : 's') +
+				' hidden by this filter').addClass('warn');
+		}
+	}
+
 	$(document).ready(function () {
-		$('.cell-edit').change(function () { track(this, $(this).val()); });
+		$('#group_filter, #name_filter').on('change input', applyVillageFilter);
+		// Only the editors, not the filter controls above the table: they wear
+		// the same class to look the same, and binding on the class alone
+		// queued a change of filter as a pending edit with no village behind it.
+		$('.cell-edit[data-village-id]').change(function () { track(this, $(this).val()); });
 
 		$('.cell-toggle').click(function (e) {
 			e.preventDefault();
@@ -233,7 +292,14 @@
 			applyDefault(vid);
 		});
 		$('#apply_all_default').click(function () {
-			if (!confirm('Reset ALL villages to the default village template? Every village\'s settings will be overwritten.')) return;
+			// Deliberately not scoped to the filter: the endpoint resets every
+			// village, and someone looking at ten OFF villages must not read
+			// this as resetting those ten.
+			var filtered = $('#group_filter').val() || ($('#name_filter').val() || '').trim();
+			var warn = filtered
+				? 'Reset ALL villages to the default village template?\n\nThis ignores the filter you have on - every village on the account is overwritten, not just the ones shown.'
+				: 'Reset ALL villages to the default village template? Every village\'s settings will be overwritten.';
+			if (!confirm(warn)) return;
 			$(window).off('beforeunload');
 			applyDefault(null);
 		});
