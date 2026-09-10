@@ -629,23 +629,41 @@ class ResourceBalancer:
         The page lists the duration, then the arrival, then the return - but
         under translated labels, so matching on the words would only work in
         one language. The times are read as a group instead and made to prove
-        themselves: the return is exactly one duration after the arrival, so
-        the gap between the last two clock times has to appear again in the
-        list as the stated duration. Anything that fails to line up (a page
-        with an unexpected clock in it, a layout change) returns None, and the
-        caller falls back to the distance model.
+        themselves: the return is exactly one duration after the arrival, so a
+        stated duration is believable when some later pair of clocks is exactly
+        that far apart.
+
+        The three are found by their relationship rather than by position. They
+        are not the last three clocks on the page: the server clock sits in the
+        footer, after all of them, and assuming otherwise measured the gap
+        between the return and the footer instead - which matches nothing, so
+        every real confirmation page was rejected and the world's merchant
+        speed was never learned. A page of
+
+            2:19:33   22:53:15   01:12:48   20:33:42
+            duration  arrival    return     server clock
+
+        now reads 8373 seconds, because 01:12:48 is 2:19:33 after 22:53:15.
+
+        Anything that fails to line up returns None, and the caller falls back
+        to the distance model.
         """
         times = [int(h) * 3600 + int(m) * 60 + int(sec)
                  for h, m, sec in re.findall(
                      r"\b(\d{1,3}):([0-5]\d):([0-5]\d)\b", page_text)]
         if len(times) < 3:
             return None
-        gap = (times[-1] - times[-2]) % 86400
-        if not 0 < gap <= MAX_TRAVEL_SECONDS:
-            return None
-        if gap not in times[:-2]:
-            return None
-        return gap
+        # Ordered triple: the duration is printed before the arrival, and the
+        # arrival before the return. Requiring the order stops a coincidental
+        # gap elsewhere on the page from being read as a trip time.
+        for i, duration in enumerate(times):
+            if not 0 < duration <= MAX_TRAVEL_SECONDS:
+                continue
+            for j in range(i + 1, len(times)):
+                for k in range(j + 1, len(times)):
+                    if (times[k] - times[j]) % 86400 == duration:
+                        return duration
+        return None
 
     def merchants_available(self, page_text):
         found = re.search(r'market_merchant_available_count">(\d+)', page_text)
