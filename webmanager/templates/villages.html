@@ -27,6 +27,14 @@
 	}
 	.edit-bar { display: flex; align-items: center; gap: 8px; }
 	.edit-bar .faint { font-size: 12px; }
+	.group-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+	.group-bar label { font-size: 12px; color: var(--ink-faint); margin: 0; }
+	.group-bar .faint { font-size: 12px; }
+	/* A filtered-away row with an unsaved edit in it would otherwise be a
+	   change about to be saved that cannot be seen. */
+	.group-bar .warn { font-size: 12px; color: var(--ember); }
+	.bulk-row th { padding-top: 4px; padding-bottom: 8px; font-weight: normal; }
+	.bulk-row .faint { font-size: 11px; }
 </style>
 
 <div class="module-section">
@@ -45,6 +53,32 @@
 		table, then hit Save &mdash; nothing is written until you do.
 	</div>
 
+	{% if not overrides.scavenge_global or not overrides.farm_global %}
+	<div class="faint" style="font-size:12px;margin-top:6px;color:var(--ember)">
+		{% set off = [] %}
+		{% if not overrides.scavenge_global %}{% set _ = off.append('Scavenging') %}{% endif %}
+		{% if not overrides.farm_global %}{% set _ = off.append('Farming') %}{% endif %}
+		{{ off|join(' and ') }} {{ 'is' if off|length == 1 else 'are' }} switched off account-wide in
+		Quick controls, so nothing below happens until you turn {{ 'it' if off|length == 1 else 'them' }}
+		back on. The per-village settings here are kept either way.
+	</div>
+	{% endif %}
+
+	{% if overrides.groups %}
+	<div class="group-bar">
+		<label for="group_filter">Group</label>
+		<select id="group_filter" class="cell-edit filter-input" style="max-width:220px">
+			<option value="">all villages ({{ overrides.total }})</option>
+			{% for g in overrides.groups %}
+			<option value="{{ g.id }}">{{ g.name }} ({{ g.count }}){% if g.type == 'dynamic' %} · dynamic{% endif %}</option>
+			{% endfor %}
+		</select>
+		<input id="name_filter" class="cell-edit filter-input" style="max-width:200px;cursor:text"
+			placeholder="filter by name or coords…">
+		<span id="filter_count" class="faint"></span>
+	</div>
+	{% endif %}
+
 	<div class="panel" style="box-shadow:none;margin-top:10px">
 		<table class="tw">
 			<thead>
@@ -58,10 +92,56 @@
 					<th>Status</th>
 					<th class="num"></th>
 				</tr>
+				<!-- Set a whole column at once. Sits in the header so each control
+				     is directly above the cells it writes, and it only ever touches
+				     the rows currently on screen - which is what makes it worth
+				     having next to the group filter. Like every other edit here it
+				     only stages: nothing is written until Save. -->
+				<tr class="bulk-row">
+					<th><span class="faint">set all shown &rarr;</span></th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="building" style="max-width:180px">
+							<option value="">&mdash;</option>
+							<option value="__default__">global default ({{ overrides.building_default }})</option>
+							<option value="false">off, do not build here</option>
+							{% for name in overrides.builder_templates %}
+							<option value="{{ name }}">{{ name }}</option>
+							{% endfor %}
+						</select>
+					</th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="units" style="max-width:180px">
+							<option value="">&mdash;</option>
+							<option value="__default__">global default ({{ overrides.units_default }})</option>
+							<option value="false">off, do not recruit here</option>
+							{% for name in overrides.troop_templates %}
+							<option value="{{ name }}">{{ name }}</option>
+							{% endfor %}
+						</select>
+					</th>
+					<th></th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="gather_enabled" style="max-width:70px">
+							<option value="">&mdash;</option>
+							<option value="true">on</option>
+							<option value="false">off</option>
+						</select>
+					</th>
+					<th>
+						<select class="cell-edit filter-input bulk-set" data-param="farm_enabled" style="max-width:70px">
+							<option value="">&mdash;</option>
+							<option value="true">on</option>
+							<option value="false">off</option>
+						</select>
+					</th>
+					<th colspan="2"><span id="bulk_note" class="faint"></span></th>
+				</tr>
 			</thead>
 			<tbody>
 				{% for row in overrides.rows %}
-				<tr{% if row.overrides %} class="alert"{% endif %}>
+				<tr{% if row.overrides %} class="alert"{% endif %} data-village-row="{{ row.id }}"
+					data-groups="{{ row.groups|join(',') }}"
+					data-search="{{ ((row.name or '') ~ ' ' ~ (row.coord or ''))|lower }}">
 					<td>
 						<a class="vlink" href="village?id={{ row.id }}">{{ row.name }}</a>
 						{% if row.coord %}<span class="coord">{{ row.coord }}</span>{% endif %}
@@ -175,6 +255,7 @@
 			$(el).addClass('is-dirty');
 		}
 		refreshBar();
+		applyVillageFilter();
 	}
 
 	// One request at a time: /app/config/set is a read-modify-write of
@@ -189,8 +270,86 @@
 			.fail(function () { failed.push(item); saveSequential(items, done, failed); });
 	}
 
+	/* ---------- cutting the table down to one in-game group ------------
+	   Fifty rows is a list you read; ten is a list you work on. The groups are
+	   the ones already kept in the game, so "show me the off villages" is the
+	   same question here as it is there.
+
+	   Filtering only hides rows - a pending edit in one is still pending, and
+	   still saved - so the bar says so rather than letting a change be saved
+	   from a row that is not on screen. */
+	function applyVillageFilter() {
+		var gid = $('#group_filter').val();
+		var text = ($('#name_filter').val() || '').trim().toLowerCase();
+		var shown = 0, hiddenDirty = 0;
+		$('tr[data-village-row]').each(function () {
+			var row = $(this);
+			var groups = (row.attr('data-groups') || '').split(',');
+			var ok = (!gid || groups.indexOf(gid) >= 0) &&
+				(!text || (row.attr('data-search') || '').indexOf(text) >= 0);
+			row.toggle(ok);
+			if (ok) shown++;
+			else if (row.find('.is-dirty').length) hiddenDirty++;
+		});
+		var total = $('tr[data-village-row]').length;
+		var msg = (gid || text) ? (shown + ' of ' + total + ' shown') : '';
+		$('#filter_count').text(msg).removeClass('warn');
+		if (hiddenDirty) {
+			$('#filter_count').text(msg + ' · ' + hiddenDirty +
+				' unsaved change' + (hiddenDirty === 1 ? '' : 's') +
+				' hidden by this filter').addClass('warn');
+		}
+	}
+
+	/* ---------- setting a whole column at once -------------------------
+	   Ten off villages onto one build template is ten identical clicks, and the
+	   tenth is where the wrong one gets picked. This writes the column for the
+	   rows currently on screen - so it composes with the group filter, which is
+	   the point of having both.
+
+	   It stages like everything else on this page: the cells go dirty and Save
+	   writes them, so a wrong pick costs a Discard rather than a config file.
+	   Rows with no stored config have no editors to write, and are skipped. */
+	function bulkSet(param, value) {
+		var touched = 0, skipped = 0;
+		$('tr[data-village-row]:visible').each(function () {
+			var row = $(this);
+			var el = row.find('[data-param="' + param + '"][data-village-id]');
+			if (!el.length) { skipped++; return; }
+			if (param === 'gather_enabled' || param === 'farm_enabled') {
+				var on = value === 'true';
+				el.text(on ? 'on' : 'off').toggleClass('moss', on).toggleClass('dim', !on);
+				track(el[0], on ? 'true' : 'false');
+			} else {
+				// "global default" is stored as an empty value, but that option
+				// only exists on a row that is already inheriting - so it is
+				// added where it is missing rather than silently doing nothing.
+				var v = value === '__default__' ? '' : value;
+				if (v === '' && !el.find('option[value=""]').length) {
+					el.prepend($('<option>', {value: '', text: '\u2014 global default'}));
+				}
+				el.val(v);
+				track(el[0], v);
+			}
+			touched++;
+		});
+		var msg = touched + ' row' + (touched === 1 ? '' : 's') + ' set';
+		if (skipped) msg += ' \u00b7 ' + skipped + ' skipped (no config yet)';
+		$('#bulk_note').text(msg);
+	}
+
 	$(document).ready(function () {
-		$('.cell-edit').change(function () { track(this, $(this).val()); });
+		$('#group_filter, #name_filter').on('change input', applyVillageFilter);
+		$('.bulk-set').change(function () {
+			var value = $(this).val();
+			if (value === '') return;
+			bulkSet($(this).attr('data-param'), value);
+			this.selectedIndex = 0;   // a one-shot action, not a state to leave set
+		});
+		// Only the editors, not the filter controls above the table: they wear
+		// the same class to look the same, and binding on the class alone
+		// queued a change of filter as a pending edit with no village behind it.
+		$('.cell-edit[data-village-id]').change(function () { track(this, $(this).val()); });
 
 		$('.cell-toggle').click(function (e) {
 			e.preventDefault();
@@ -233,7 +392,14 @@
 			applyDefault(vid);
 		});
 		$('#apply_all_default').click(function () {
-			if (!confirm('Reset ALL villages to the default village template? Every village\'s settings will be overwritten.')) return;
+			// Deliberately not scoped to the filter: the endpoint resets every
+			// village, and someone looking at ten OFF villages must not read
+			// this as resetting those ten.
+			var filtered = $('#group_filter').val() || ($('#name_filter').val() || '').trim();
+			var warn = filtered
+				? 'Reset ALL villages to the default village template?\n\nThis ignores the filter you have on - every village on the account is overwritten, not just the ones shown.'
+				: 'Reset ALL villages to the default village template? Every village\'s settings will be overwritten.';
+			if (!confirm(warn)) return;
 			$(window).off('beforeunload');
 			applyDefault(null);
 		});

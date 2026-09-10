@@ -119,6 +119,7 @@
   },
   "farms": {
     "farm": true,
+    "scavenge": true,
     "min_points": 0,
     "max_points": 5000,
     "find_player_owned": false,
