@@ -15,7 +15,7 @@ from game.balancer import ResourceBalancer
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.incomings import load_groups
-from game.map import Map
+from game.map import Map, MapCache
 from game.reports import ReportManager
 from game.resources import ResourceManager
 from game.snobber import SnobManager
@@ -605,7 +605,12 @@ class Village:
         self.balancer.merchant_minutes_per_field = cfg.get(
             "merchant_minutes_per_field") or None
 
-        public = self.area.in_cache(self.village_id) if self.area else None
+        # Straight from the village cache rather than through self.area: that
+        # is only built by setup_attack_manager(), which runs *after* this, so
+        # on a village's first pass after a restart it is still None and this
+        # village reads as 0 points - under any sender threshold, so the whole
+        # account skips a full balancing cycle every time the bot is restarted.
+        public = MapCache.get_cache(village_id=self.village_id)
         my_points = int((public or {}).get("points") or 0)
         try:
             self.balancer.run(
