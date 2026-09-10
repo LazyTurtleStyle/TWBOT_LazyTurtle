@@ -38,6 +38,10 @@ MERCHANT_CAPACITY = 1000
 # _record_merchant_speed), so this only ever decides sends made before the
 # first confirmation page has been read.
 MERCHANT_MINUTES_PER_FIELD = 30
+# Sanity bounds for a merchant speed timed off a confirmation page. Wide on
+# purpose: they reject a misread clock, not an unusually quick world.
+MIN_SANE_MINUTES_PER_FIELD = 2.0
+MAX_SANE_MINUTES_PER_FIELD = 120.0
 # Ceiling on a computed trip, so an unknown coordinate cannot block a receiver
 # for good. See ResourceBalancer.travel_seconds.
 MAX_TRAVEL_SECONDS = 24 * 3600
@@ -248,8 +252,37 @@ class ResourceBalancer:
         if distance <= 0 or seconds <= 0:
             return
         rate = round(seconds / 60.0 / distance, 4)
+        # One bad reading used to become the world's speed for good, and a rate
+        # that is too FAST is the dangerous direction: every convoy then looks
+        # delivered while it is still travelling, and the receivers overfill.
+        # Seen live on nl116 - a banked 1.0 min/field against a real 4.01 put
+        # 23k of clay into a 22k warehouse.
+        #
+        # The bounds are deliberately wide. The world model (30 / world speed)
+        # is only a guess and was itself five times out here, so it cannot be
+        # the yardstick; these are the limits of anything physically sane on
+        # any world, and exist to catch a misread clock, not to second-guess a
+        # real measurement.
+        if not MIN_SANE_MINUTES_PER_FIELD <= rate <= MAX_SANE_MINUTES_PER_FIELD:
+            self.logger.warning(
+                "Ignoring a merchant speed of %.3f min/field timed over %.1f "
+                "fields - outside %g-%g, so it is a misread page rather than "
+                "a fast world", rate, distance,
+                MIN_SANE_MINUTES_PER_FIELD, MAX_SANE_MINUTES_PER_FIELD)
+            return
         state = _load_state()
         known = (state.get("_merchant") or {}).get("minutes_per_field")
+        # A measurement that disagrees with the settled rate by more than a
+        # factor of two is a parse going wrong, not the world changing speed.
+        # The first reading has nothing to check against and is trusted; a
+        # second one that contradicts it is not, so a single bad page cannot
+        # take over.
+        if known and not (0.5 <= rate / float(known) <= 2.0):
+            self.logger.warning(
+                "Ignoring a merchant speed of %.3f min/field: this world has "
+                "been timed at %.3f, and one page disagreeing by more than "
+                "double is a misread, not a change", rate, float(known))
+            return
         state["_merchant"] = {
             "minutes_per_field": rate,
             "measured": int(time.time()),
@@ -280,6 +313,59 @@ class ResourceBalancer:
         distance = self._distance(self._location(sender), self._location(receiver))
         return min(int(math.ceil(distance * self.minutes_per_field() * 60)),
                    MAX_TRAVEL_SECONDS)
+
+    def read_receiver(self, target_id):
+        """What the game says a village holds, can hold, and has coming.
+
+        The receiver's own market page prints "Binnenkomende grondstoffen" -
+        the exact totals of every convoy still travelling, counted by the
+        server. That is the number the headroom calculation actually wants, and
+        it is not an estimate: no travel model, no ledger, and no way for two
+        senders to disagree about it.
+
+        The ledger this replaces had to guess when a convoy would land, and a
+        guess that runs fast writes a convoy off as delivered while it is still
+        on the road - which is how a 22k warehouse ends up with 23k of clay
+        booked into it by two senders who each measured the same empty space.
+
+        The same page is rendered as the receiver, so its own stock and
+        warehouse size come off it too - fresher than the snapshot it wrote at
+        the end of its last run, and free, since the request is already being
+        made.
+
+        Returns None when the page cannot be read, which the caller treats as
+        "do not send", because sending on an unknown headroom is the mistake
+        this exists to prevent.
+        """
+        page = self.wrapper.get_url(
+            "game.php?village=%s&screen=market&mode=call" % target_id)
+        text = getattr(page, "text", "") or ""
+        if not text:
+            return None
+        total = {}
+        for res in RESOURCES:
+            marker = 'id="total_%s"' % res
+            start = text.find(marker)
+            if start < 0:
+                return None
+            # The cell is sliced out before the digits are read: the game writes
+            # thousands separators as their own <span>, so "23<span>.</span>000"
+            # reads as 23 to anything that stops at the first tag.
+            end = text.find("</td>", start)
+            cell = text[start:end if end > 0 else start + 300]
+            digits = re.sub(r"\D", "", re.sub(r"<[^>]+>", "", cell))
+            total[res] = int(digits or 0)
+        stock = {}
+        for res in RESOURCES:
+            found = re.search(r'"%s"\s*:\s*(\d+)' % res, text)
+            if not found:
+                return None
+            stock[res] = int(found.group(1))
+        cap = re.search(r'"storage_max"\s*:\s*(\d+)', text)
+        if not cap:
+            return None
+        return {"incoming": total, "resources": stock,
+                "storage_max": int(cap.group(1))}
 
     @staticmethod
     def _pending(flights, since):
@@ -804,6 +890,25 @@ class ResourceBalancer:
             if not self.may_serve(vid, self.rank_senders(villages, target)):
                 self.logger.debug(
                     "Leaving %s to a better-ranked sender", vid)
+                continue
+            # Everything up to here ran off cached snapshots and the in-flight
+            # ledger, which is fine for choosing who to help. It is not good
+            # enough to decide how much: the ledger has to predict when convoys
+            # land, and a prediction that runs fast frees up room that does not
+            # exist. So the room is re-measured against what the server says is
+            # actually on its way, immediately before committing merchants.
+            live = self.read_receiver(vid)
+            if live is None:
+                self.logger.warning(
+                    "Could not read what is already heading to %s - not "
+                    "sending rather than guessing", vid)
+                continue
+            incoming = live["incoming"]
+            room = self._headroom(live, incoming)
+            if not any(v >= self.min_send_amount for v in room.values()):
+                self.logger.info(
+                    "Skipping %s: %s already on the way fills it", vid,
+                    ", ".join("%d %s" % (v, k) for k, v in incoming.items() if v))
                 continue
             plan = self._plan(room, my_stock, merchants)
             if not plan:
