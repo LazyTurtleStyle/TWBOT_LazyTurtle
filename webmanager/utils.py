@@ -3101,6 +3101,36 @@ class DefenseOverview:
         village_db = data.get("villages", {}) or {}
         incomings_by_target = OverviewBuilder._build_incomings(village_db)
         now = int(time.time())
+        # Incoming support, cached whole by the poller. Deliberately kept out of
+        # incomings_by_target: everything downstream of that decides whether a
+        # village is under attack, and a reinforcement is not an attack.
+        supports_by_target = {}
+        support_age = None
+        try:
+            path = DataReader.data_path("cache", "incoming_support.json")
+            blob = {}
+            if os.path.exists(path):
+                with open(path) as handle:
+                    blob = json.load(handle) or {}
+            when = OverviewBuilder._to_int(blob.get("when"))
+            support_age = (now - when) if when else None
+            for command in (blob.get("commands") or []):
+                # The scraper records the arrival; the countdown is derived
+                # here, the same way the attack side does it, so a cache read
+                # minutes ago still counts down correctly.
+                arrival = OverviewBuilder._to_int(command.get("arrival"))
+                if not arrival:
+                    continue
+                eta = arrival - now
+                if eta <= 0:
+                    continue        # already landed
+                command = dict(command, eta=eta)
+                supports_by_target.setdefault(
+                    str(command.get("target_id")), []).append(command)
+        except Exception:
+            supports_by_target = {}
+        for cmds in supports_by_target.values():
+            cmds.sort(key=lambda c: OverviewBuilder._to_int(c.get("eta")))
 
         # Garrisons come from the account-wide troop-location reading the bot
         # refreshes every few minutes (cache/troops_moving.json), NOT from each
@@ -3170,6 +3200,7 @@ class DefenseOverview:
                 "soonest_eta": soonest,
                 "soonest_arrival": (now + soonest) if soonest is not None else None,
                 "commands": future,
+                "supports": supports_by_target.get(str(vid), []),
                 "def_troops": home_def,
                 "def_total": sum(home_def.values()),
                 "def_away": away_def,
@@ -3211,6 +3242,7 @@ class DefenseOverview:
             # Each command carries an eta, not an absolute time; the page turns
             # them back into arrivals against this.
             "now": now,
+            "support_age": support_age,
             "defensive_units": cls.DEFENSIVE_UNITS,
             "total_def": total_def,
             "total_def_sum": sum(total_def.values()),

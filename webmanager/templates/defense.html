@@ -642,6 +642,15 @@ const DEF_GROUPS = {{ defense.groups|tojson }};
 const DEF_NOW = {{ defense.now or 0 }};
 const DEF_UNITS = {{ defense.defensive_units|tojson }};
 
+/* Hand the command straight to the snipe tab with the village and the hit
+   already filled in - the whole point of having the button here is not typing
+   a coordinate and a millisecond back in by hand. */
+function voSnipe(villageId, commandId, arrival, arrivalMs) {
+	showPane('snipe');
+	history.replaceState(null, '', '#snipe');
+	snipeOpenOptions(villageId, commandId, arrival, arrivalMs);
+}
+
 function voFill() {
 	const g = document.getElementById('vo_group');
 	if (!g.options.length) {
@@ -661,8 +670,14 @@ function voFill() {
 		(a.soonest_eta || 1e9) - (b.soonest_eta || 1e9) ||
 		String(a.name).localeCompare(String(b.name)));
 	sel.innerHTML = list.length
-		? list.map(v => '<option value="' + v.id + '">' + esc(v.name) +
-			(v.incoming ? ' \u2014 ' + v.incoming + ' incoming' : '') + '</option>').join('')
+		? list.map(v => {
+			const sup = (v.supports || []).length;
+			const bits = [];
+			if (v.incoming) bits.push(v.incoming + ' attack' + (v.incoming === 1 ? '' : 's'));
+			if (sup) bits.push(sup + ' support');
+			return '<option value="' + v.id + '">' + esc(v.name) +
+				(bits.length ? ' \u2014 ' + bits.join(', ') : '') + '</option>';
+		}).join('')
 		: '<option value="">no villages in this group</option>';
 	if (keep && list.some(v => String(v.id) === keep)) sel.value = keep;
 	voRender();
@@ -685,7 +700,13 @@ function voRender() {
 		(v.def_away_total ? ' <small class="text-muted">+' + v.def_away_total.toLocaleString() +
 			' out (supporting or in transit)</small>' : '') +
 		(v.def_fresh ? '' : ' <small class="text-warning">snapshot only</small>') + '</div>';
-	if (!v.incoming) {
+	// Attacks and support together, the way the village's own "Binnenkomende
+	// troepen" panel shows them - soonest first regardless of which it is,
+	// because what matters is the order things land in.
+	const rows = (v.commands || []).map(c => ({c: c, attack: true}))
+		.concat((v.supports || []).map(c => ({c: c, attack: false})))
+		.sort((a, b) => (a.c.eta || 0) - (b.c.eta || 0));
+	if (!rows.length) {
 		// Bootstrap's alert-success is near-white on near-white under this
 		// theme; the badge the main table already uses reads properly.
 		html += '<div class="small"><span class="badge badge-success">clear</span> ' +
@@ -693,17 +714,35 @@ function voRender() {
 		body.innerHTML = html; return;
 	}
 	html += '<table class="table table-sm def-table mb-0"><thead><tr>' +
-		'<th>Lands in</th><th>At</th><th>Looks like</th><th>From</th><th>Player</th>' +
-		'<th class="text-right">Fields</th></tr></thead><tbody>' +
-		v.commands.map(c => {
-			const at = DEF_NOW + c.eta;
-			return '<tr><td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
+		'<th></th><th>Lands in</th><th>At</th><th>Looks like</th><th>From</th>' +
+		'<th>Player</th><th class="text-right">Fields</th><th></th>' +
+		'</tr></thead><tbody>' +
+		rows.map(r => {
+			const c = r.c, at = DEF_NOW + c.eta;
+			const kind = r.attack
+				? '<span class="badge badge-danger">attack</span>'
+				: '<span class="badge badge-info">support</span>';
+			const looks = r.attack
+				? (c.tag ? '<span class="badge badge-secondary">' + esc(c.tag) + '</span>'
+				         : '<span class="text-muted">?</span>')
+				: '<span class="text-muted">\u2014</span>';
+			// Only an attack can be sniped, and only one that has not landed.
+			const snipe = r.attack
+				? '<button class="btn btn-sm btn-outline-warning py-0" ' +
+				  'onclick=\'voSnipe(' + JSON.stringify(String(v.id)) + ',' +
+				      JSON.stringify(String(c.command_id)) + ',' + at + ',' +
+				      (c.arrival_ms || at * 1000) + ')\'>snipe</button>'
+				: '';
+			return '<tr' + (r.attack ? ' class="table-danger"' : '') + '>' +
+				'<td>' + kind + '</td>' +
+				'<td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
 				'<td class="ms" data-ms="' + (c.arrival_ms || at * 1000) + '"></td>' +
-				'<td>' + (c.tag ? '<span class="badge badge-secondary">' + esc(c.tag) + '</span>' : '<span class="text-muted">?</span>') + '</td>' +
+				'<td>' + looks + '</td>' +
 				'<td><small>' + esc(c.origin_name || '') + ' <span class="coord text-muted">' +
 					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
 				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
-				'<td class="text-right">' + (c.distance != null ? c.distance.toFixed(1) : '') + '</td></tr>';
+				'<td class="text-right">' + (c.distance != null ? Number(c.distance).toFixed(1) : '') + '</td>' +
+				'<td class="text-right">' + snipe + '</td></tr>';
 		}).join('') + '</tbody></table>';
 	body.innerHTML = html;
 	// The shared renderers do not know about rows created after page load.
