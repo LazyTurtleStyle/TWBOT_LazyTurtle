@@ -595,6 +595,34 @@
 				<small class="text-muted d-block" id="sn-template-note"></small>
 			</div>
 		</div>
+		<!-- Launch list. The per-village grid below is for hand-tuning a send;
+		     this is for answering the only two questions that matter when a
+		     train is inbound: what do I send, and when do I press it. -->
+		<div class="card mb-2" id="sn-launch-card">
+			<div class="card-header py-1 d-flex align-items-center">
+				<strong class="small">Snipe options</strong>
+				<small class="text-muted ml-2" id="sn-launch-note"></small>
+				<span class="ml-auto small">
+					<span class="custom-control custom-checkbox custom-control-inline">
+						<input type="checkbox" class="custom-control-input" id="sn-def-only" checked>
+						<label class="custom-control-label text-muted" for="sn-def-only">defensive units only</label>
+					</span>
+					<label class="text-muted mb-0 mr-1">cap per unit</label>
+					<input id="sn-cap" type="number" min="0" class="form-control form-control-sm d-inline-block"
+						style="width:6.5rem" placeholder="all home">
+				</span>
+			</div>
+			<div class="table-responsive" style="max-height:26rem">
+				<table class="table table-sm def-table mb-0" id="sn-launch-table">
+					<thead><tr>
+						<th>Launch in</th><th>Send at</th><th>Source</th><th>Send</th>
+						<th>Pace</th><th class="text-right">Travel</th><th></th>
+					</tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</div>
+
 		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself,
 			pace is whichever unit you enter is slowest, so mixing in a ram or axe makes the whole send walk at
 			that pace. A template fills the boxes and nothing more - every one of them is still editable.
@@ -1096,6 +1124,8 @@ const SN_LEAD_MS = 45000;
 // particular are the fastest thing most villages own, and judging by them would
 // keep every village in the world listed.
 const SN_NO_DEFENCE = ['spy', 'ram', 'catapult'];
+// What actually holds a wall, in the order the game lists them.
+const SN_DEFENSIVE = ['spear', 'sword', 'archer', 'marcher', 'heavy', 'knight'];
 // Which of the defensive units this village actually holds would still land in
 // time, fastest first. Empty means nothing useful it has can get there for this
 // landing; null means we have no troop count for it at all, which is missing
@@ -1182,9 +1212,137 @@ function snipeRowRecalc(row) {
 	}
 }
 
+/* ---------- the launch list -------------------------------------------
+   A village does not offer one snipe, it offers one per speed tier it can
+   field. A command travels at the pace of its slowest unit, so sending spear
+   and archer together is quicker than adding sword to them - and quicker means
+   it may be launched later. Listing only the full stack hides every option
+   that is still launchable when the full stack's moment has already gone.
+
+   So each village contributes one option per distinct speed among the units it
+   holds, each option carrying everything at least that fast. What you read off
+   the row is the whole decision: what to send, and how long until you have to
+   send it.
+*/
+function snipeOptionsFor(v, target) {
+	const home = v.home || {};
+	const capBox = document.getElementById('sn-cap');
+	const cap = parseInt(capBox && capBox.value, 10);
+	// A snipe is a wall of defence landing in a gap. Axes and light cavalry can
+	// be sent, but they defend badly, and offering them as options buries the
+	// stacks that actually hold - so they are off by default rather than absent.
+	const defOnly = document.getElementById('sn-def-only');
+	const wanted = (defOnly && defOnly.checked) ? SN_DEFENSIVE : SNIPE.units;
+	const usable = wanted.filter(u => SNIPE.speeds[u] != null && (home[u] || 0) > 0
+		&& SN_NO_DEFENCE.indexOf(u) < 0);
+	if (!usable.length || !target || !target.coords || !v.coords) return [];
+	const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
+	const deadline = Date.now() + SN_LEAD_MS;
+	const paces = [...new Set(usable.map(u => SNIPE.speeds[u]))].sort((a, b) => a - b);
+	const out = [], seen = {};
+	paces.forEach(function(pace) {
+		const units = {};
+		usable.forEach(function(u) {
+			if (SNIPE.speeds[u] > pace) return;
+			const n = cap > 0 ? Math.min(cap, home[u]) : home[u];
+			if (n > 0) units[u] = n;
+		});
+		// Two tiers can describe the same stack when nothing sits between them.
+		const key = Object.keys(units).sort().map(u => u + ':' + units[u]).join(',');
+		if (!key || seen[key]) return;
+		seen[key] = 1;
+		const travel = snipeTravelMs(v, target, pace);
+		const send = snipeLandMs() - travel;
+		if (send < deadline) return;              // cannot be launched in time
+		const paceUnit = usable.filter(u => SNIPE.speeds[u] === pace)[0];
+		out.push({village: v, units: units, pace: pace, paceUnit: paceUnit,
+			travel: travel, send: send, dist: dist});
+	});
+	return out;
+}
+
+function snipeBuildLaunchList() {
+	const target = SNIPE.villages[snForm.target_id];
+	const body = document.querySelector('#sn-launch-table tbody');
+	if (!body) return;
+	let all = [];
+	document.querySelectorAll('.sn-row').forEach(function(row) {
+		const v = SNIPE.villages[row.getAttribute('data-village-id')];
+		if (v) all = all.concat(snipeOptionsFor(v, target));
+	});
+	// Soonest launch first: the top row is the one about to expire.
+	all.sort((a, b) => a.send - b.send);
+	SNIPE_OPTIONS = all;
+	document.getElementById('sn-launch-note').textContent = all.length
+		? all.length + ' option' + (all.length === 1 ? '' : 's') + ' across ' +
+		  new Set(all.map(o => o.village.id)).size + ' villages'
+		: 'nothing can reach this landing in time';
+	body.innerHTML = all.map(function(o, i) {
+		const stack = Object.keys(o.units).map(u => unitLabel(u) + ' ' +
+			o.units[u].toLocaleString()).join(', ');
+		return '<tr><td><span class="def-eta text-warning" data-arrival="' +
+				Math.round(o.send / 1000) + '">\u2026</span></td>' +
+			'<td class="ms" data-ms="' + Math.round(o.send) + '"></td>' +
+			'<td><small><strong>' + esc(o.village.name) + '</strong> ' +
+				'<span class="coord text-muted">' + o.village.coords[0] + '|' + o.village.coords[1] +
+				'</span> <span class="text-muted">' + o.dist.toFixed(1) + ' f</span></small></td>' +
+			'<td><small>' + esc(stack) + '</small></td>' +
+			'<td><span class="badge badge-secondary">' + unitLabel(o.paceUnit) + '</span></td>' +
+			'<td class="text-right"><small>' + fmtDur(o.travel / 1000) + '</small></td>' +
+			'<td class="text-right"><button class="btn btn-sm btn-warning py-0" ' +
+				'onclick="snipeArmOption(' + i + ')">arm</button></td></tr>';
+	}).join('') || '<tr><td colspan="7" class="text-muted small">No option reaches this landing in time.</td></tr>';
+	body.querySelectorAll('.ms[data-ms]').forEach(function(el) {
+		const ms = parseInt(el.getAttribute('data-ms'), 10);
+		const d = new Date(ms);
+		el.innerHTML = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+			'.<small>' + pad(ms % 1000, 3) + '</small>';
+	});
+	tickSnipe();
+}
+let SNIPE_OPTIONS = [];
+/* The game's internal unit codes are cryptic in a couple of places; the rest
+   read fine as they are. */
+const SN_UNIT_LABEL = {spy: 'scout', light: 'light cav', heavy: 'heavy cav',
+	marcher: 'm. archer', knight: 'paladin', catapult: 'cat'};
+function unitLabel(u) { return SN_UNIT_LABEL[u] || u; }
+function fmtDur(s) {
+	s = Math.max(0, Math.round(s));
+	const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+	return (h ? h + ':' + pad(m) : m) + ':' + pad(s % 60);
+}
+(function() {
+	const cap = document.getElementById('sn-cap');
+	if (cap) cap.addEventListener('input', snipeBuildLaunchList);
+	const only = document.getElementById('sn-def-only');
+	if (only) only.addEventListener('change', snipeBuildLaunchList);
+})();
+function snipeArmOption(i) {
+	const o = SNIPE_OPTIONS[i];
+	if (!o) return;
+	const err = document.getElementById('sn-error');
+	err.textContent = '';
+	fetch('/app/snipe/arm', {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({
+			incoming_id: snForm.incoming_id,
+			target_village_id: snForm.target_id,
+			land_ms: snipeLandMs(),
+			options: [{village_id: o.village.id, pace_unit: o.paceUnit, units: o.units}],
+			shortfall: document.getElementById('sn-shortfall').value,
+			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
+			boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
+		}),
+	}).then(r => r.json()).then(function(res) {
+		if (res.errors && res.errors.length) { err.textContent = res.errors.join(' \u00b7 '); if (!res.armed) return; }
+		location.hash = '#snipe'; location.reload();
+	}).catch(function(e) { err.textContent = String(e); });
+}
+
 function snipeRecalcAll() {
 	document.querySelectorAll('.sn-row').forEach(snipeRowRecalc);
 	snipeUpdateHidden();
+	snipeBuildLaunchList();
 }
 
 function snipeBuildRows() {
@@ -1229,6 +1387,7 @@ function snipeBuildRows() {
 		snipeRowRecalc(row);
 	});
 	snipeUpdateHidden();
+	snipeBuildLaunchList();
 	tickSnipe();
 }
 
