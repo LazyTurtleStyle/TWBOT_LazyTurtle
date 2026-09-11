@@ -72,6 +72,8 @@
 
 <ul class="nav nav-tabs mb-3" id="def-tabs">
 	<li class="nav-item"><a class="nav-link active" href="#overview" data-pane="overview">Overview</a></li>
+	<li class="nav-item"><a class="nav-link" href="#village" data-pane="village">Village
+		{% if defense.under_attack_count %}<span class="badge badge-danger">{{ defense.under_attack_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#csnipe" data-pane="csnipe">C-snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if csnipe.active_count %}<span class="badge badge-danger">{{ csnipe.active_count }}</span>{% endif %}</a></li>
@@ -214,6 +216,35 @@
 	</div>
 </div>
 </div><!-- /pane-overview -->
+
+<!-- One village at a time. With a hundred villages the account-wide table is
+     the wrong tool: you want everything landing on 022 and nothing else. -->
+<div id="pane-village" style="display:none">
+<div class="card">
+	<div class="card-header py-2"><strong>One village</strong>
+		<small class="text-muted">pick a group, then a village</small></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="form-group col-12 col-md-3 mb-2">
+				<label class="small mb-1">Group</label>
+				<select id="vo_group" class="form-control form-control-sm"></select>
+			</div>
+			<div class="form-group col-12 col-md-4 mb-2">
+				<label class="small mb-1">Village</label>
+				<select id="vo_village" class="form-control form-control-sm"></select>
+			</div>
+			<div class="form-group col-12 col-md-3 mb-2">
+				<label class="small mb-1">&nbsp;</label>
+				<div class="custom-control custom-checkbox mt-1">
+					<input type="checkbox" class="custom-control-input" id="vo_only_attacked">
+					<label class="custom-control-label small" for="vo_only_attacked">only villages under attack</label>
+				</div>
+			</div>
+		</div>
+		<div id="vo_body"></div>
+	</div>
+</div>
+</div><!-- /pane-village -->
 
 <div id="pane-csnipe" style="display:none">
 <p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
@@ -583,7 +614,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'csnipe', 'csnipetest', 'snipe'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -600,6 +631,100 @@ document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 	});
 });
 if (PANES.indexOf(location.hash.slice(1)) > 0) showPane(location.hash.slice(1));
+
+/* ---------- one village at a time ------------------------------------
+   The account-wide table answers "where am I being hit". This answers "what
+   exactly is landing on 022", which is the question once there are a hundred
+   villages and eight commands on one of them. Everything here is rendered from
+   data already on the page - no extra request to open it. */
+const DEF_VILLAGES = {{ defense.villages|tojson }};
+const DEF_GROUPS = {{ defense.groups|tojson }};
+const DEF_NOW = {{ defense.now or 0 }};
+const DEF_UNITS = {{ defense.defensive_units|tojson }};
+
+function voFill() {
+	const g = document.getElementById('vo_group');
+	if (!g.options.length) {
+		g.innerHTML = '<option value="">all groups (' + DEF_VILLAGES.length + ')</option>' +
+			DEF_GROUPS.map(x => '<option value="' + x.id + '">' + esc(x.name) + ' (' + x.count + ')' +
+				(x.type === 'dynamic' ? ' \u00b7 dynamic' : '') + '</option>').join('');
+	}
+	const gid = g.value;
+	const onlyAttacked = document.getElementById('vo_only_attacked').checked;
+	const list = DEF_VILLAGES.filter(v =>
+		(!gid || (v.groups || []).indexOf(gid) >= 0) && (!onlyAttacked || v.incoming));
+	const sel = document.getElementById('vo_village');
+	const keep = sel.value;
+	// Under attack first, soonest first - the same ordering as the main table,
+	// so the village you are looking for is at the top when it matters.
+	list.sort((a, b) => (b.incoming ? 1 : 0) - (a.incoming ? 1 : 0) ||
+		(a.soonest_eta || 1e9) - (b.soonest_eta || 1e9) ||
+		String(a.name).localeCompare(String(b.name)));
+	sel.innerHTML = list.length
+		? list.map(v => '<option value="' + v.id + '">' + esc(v.name) +
+			(v.incoming ? ' \u2014 ' + v.incoming + ' incoming' : '') + '</option>').join('')
+		: '<option value="">no villages in this group</option>';
+	if (keep && list.some(v => String(v.id) === keep)) sel.value = keep;
+	voRender();
+}
+
+function voRender() {
+	const id = document.getElementById('vo_village').value;
+	const v = DEF_VILLAGES.find(x => String(x.id) === String(id));
+	const body = document.getElementById('vo_body');
+	if (!v) { body.innerHTML = '<p class="text-muted small mb-0">Nothing to show.</p>'; return; }
+	const chips = DEF_UNITS.filter(u => v.def_troops[u])
+		.map(u => '<span class="unit-chip">' + u + ' <strong>' + v.def_troops[u].toLocaleString() +
+			'</strong></span>').join('');
+	let html = '<div class="mb-2"><strong>' + esc(v.name) + '</strong> ' +
+		'<span class="coord text-muted">' + (v.coords ? v.coords[0] + '|' + v.coords[1] : '') +
+		' \u00b7 #' + v.id + '</span>' +
+		(v.points ? ' <span class="text-muted">' + v.points.toLocaleString() + ' points</span>' : '') + '</div>' +
+		'<div class="mb-2"><span class="text-muted small">defending at home:</span> ' +
+		'<strong>' + (v.def_total || 0).toLocaleString() + '</strong> ' + chips +
+		(v.def_away_total ? ' <small class="text-muted">+' + v.def_away_total.toLocaleString() +
+			' out (supporting or in transit)</small>' : '') +
+		(v.def_fresh ? '' : ' <small class="text-warning">snapshot only</small>') + '</div>';
+	if (!v.incoming) {
+		// Bootstrap's alert-success is near-white on near-white under this
+		// theme; the badge the main table already uses reads properly.
+		html += '<div class="small"><span class="badge badge-success">clear</span> ' +
+			'<span class="text-muted">nothing incoming</span></div>';
+		body.innerHTML = html; return;
+	}
+	html += '<table class="table table-sm def-table mb-0"><thead><tr>' +
+		'<th>Lands in</th><th>At</th><th>Looks like</th><th>From</th><th>Player</th>' +
+		'<th class="text-right">Fields</th></tr></thead><tbody>' +
+		v.commands.map(c => {
+			const at = DEF_NOW + c.eta;
+			return '<tr><td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
+				'<td class="ms" data-ms="' + (c.arrival_ms || at * 1000) + '"></td>' +
+				'<td>' + (c.tag ? '<span class="badge badge-secondary">' + esc(c.tag) + '</span>' : '<span class="text-muted">?</span>') + '</td>' +
+				'<td><small>' + esc(c.origin_name || '') + ' <span class="coord text-muted">' +
+					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
+				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
+				'<td class="text-right">' + (c.distance != null ? c.distance.toFixed(1) : '') + '</td></tr>';
+		}).join('') + '</tbody></table>';
+	body.innerHTML = html;
+	// The shared renderers do not know about rows created after page load.
+	body.querySelectorAll('.ms[data-ms]').forEach(function(el) {
+		const ms = parseInt(el.getAttribute('data-ms'), 10);
+		if (!ms) { el.textContent = '\u2014'; return; }
+		const d = new Date(ms);
+		el.innerHTML = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+			'.<small>' + pad(ms % 1000, 3) + '</small>';
+	});
+	tickDefense();
+}
+(function() {
+	const g = document.getElementById('vo_group'), v = document.getElementById('vo_village'),
+	      a = document.getElementById('vo_only_attacked');
+	if (!g) return;
+	g.addEventListener('change', voFill);
+	a.addEventListener('change', voFill);
+	v.addEventListener('change', voRender);
+	voFill();
+})();
 
 /* ---------- cutting the village table down ---------------------------
    58 rows is a list you scroll past; the front is a list you act on. The
