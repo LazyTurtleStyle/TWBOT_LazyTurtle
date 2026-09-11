@@ -1658,13 +1658,27 @@ def tw_cookies_export():
     return resp
 
 
-@app.route('/app/tw-extension.zip', methods=['GET'])
-def tw_extension_zip():
+def _build_extension_zip(flavour="chrome"):
+    """The session-restore extension, packed for one browser.
+
+    Chrome and Firefox disagree about exactly one line of the manifest and
+    agree about everything else - none of the JavaScript differs, because every
+    API it calls (cookies, storage, tabs, action, runtime) exists in both and
+    Firefox accepts the chrome.* alias. So the two downloads are the same files
+    with the background declaration swapped:
+
+        chrome   background.service_worker  - the only form Chrome accepts
+        firefox  background.scripts         - the only form Firefox accepts
+
+    Firefox also wants an add-on id of its own before it will take the folder,
+    which Chrome ignores and would reject in strict mode, so it is only added
+    where it belongs.
+    """
     import io
     import zipfile
     ext_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'browser-extension')
     if not os.path.isdir(ext_dir):
-        return "Extension folder not found on server.", 404
+        return None
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for fname in sorted(os.listdir(ext_dir)):
@@ -1698,13 +1712,44 @@ def tw_extension_zip():
                     manifest["name"] += " (%s)" % world
                     manifest["action"]["default_title"] = \
                         "Open TribalWars %s with bot session" % world
+                if flavour == "firefox":
+                    # Firefox has no service worker in MV3; it runs the same
+                    # file as an event page instead.
+                    manifest["background"] = {"scripts": ["background.js"]}
+                    # Without an id of its own Firefox refuses to load the
+                    # folder at all, and a signed build needs a stable one.
+                    manifest["browser_specific_settings"] = {
+                        "gecko": {
+                            "id": "twb-session-restore@%s" % (world or "local"),
+                            "strict_min_version": "115.0",
+                        }
+                    }
                 zf.writestr(fname, json.dumps(manifest, indent=2))
             else:
                 zf.write(fpath, fname)
     buf.seek(0)
-    zip_name = "twb-session-extension-%s.zip" % (DataReader.active_world() or "default")
-    return Response(buf.read(), content_type='application/zip',
+    return buf.read()
+
+
+def _extension_response(flavour):
+    blob = _build_extension_zip(flavour)
+    if blob is None:
+        return "Extension folder not found on server.", 404
+    suffix = "-firefox" if flavour == "firefox" else ""
+    zip_name = "twb-session-extension-%s%s.zip" % (
+        DataReader.active_world() or "default", suffix)
+    return Response(blob, content_type='application/zip',
                     headers={'Content-Disposition': 'attachment; filename="%s"' % zip_name})
+
+
+@app.route('/app/tw-extension.zip', methods=['GET'])
+def tw_extension_zip():
+    return _extension_response("chrome")
+
+
+@app.route('/app/tw-extension-firefox.zip', methods=['GET'])
+def tw_extension_firefox_zip():
+    return _extension_response("firefox")
 
 
 @app.route('/app/tw-proxy', methods=['GET'])
