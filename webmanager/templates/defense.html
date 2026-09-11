@@ -13,6 +13,12 @@
 	.def-filters .form-control-sm { font-size: .78rem; }
 	.inc-list { font-size: .72rem; line-height: 1.5; max-height: 9rem; overflow-y: auto; }
 	.inc-list .badge { font-size: .62rem; }
+	.sn-unit-edit { white-space: nowrap; margin-right: .5rem; }
+	.sn-unit-edit input { width: 4.6rem; font-size: .72rem; padding: 0 .2rem; margin-left: .15rem;
+		background: var(--surface-2, #241d17); color: inherit; border: 1px solid var(--line, #3a2f26);
+		border-radius: 3px; }
+	/* The one box that must not be emptied is marked, not just validated. */
+	.sn-unit-edit.paced input { border-color: var(--ember, #e07b2c); }
 	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
 	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
 	/* A village nothing can reach in time from is noise between the ones that
@@ -1256,7 +1262,10 @@ function snipeOptionsFor(v, target) {
 		if (send < deadline) return;              // cannot be launched in time
 		const paceUnit = usable.filter(u => SNIPE.speeds[u] === pace)[0];
 		out.push({village: v, units: units, pace: pace, paceUnit: paceUnit,
-			travel: travel, send: send, dist: dist});
+			travel: travel, send: send, dist: dist,
+			// What the village actually holds, so an edit cannot ask for more
+			// troops than exist.
+			max: Object.assign({}, units)});
 	});
 	return out;
 }
@@ -1278,15 +1287,27 @@ function snipeBuildLaunchList() {
 		  new Set(all.map(o => o.village.id)).size + ' villages'
 		: 'nothing can reach this landing in time';
 	body.innerHTML = all.map(function(o, i) {
-		const stack = Object.keys(o.units).map(u => unitLabel(u) + ' ' +
-			o.units[u].toLocaleString()).join(', ');
+		// Editable, because the listed amount is everything the village holds
+		// and you rarely want to send all of it. The unit setting the pace is
+		// floored at one: take the last of it out and the command travels at
+		// the next unit's speed, which lands it somewhere other than where the
+		// row says - so that box refuses to go below 1 rather than silently
+		// re-timing the snipe.
+		const stack = Object.keys(o.units).map(function(u) {
+			const paced = (u === o.paceUnit);
+			return '<span class="sn-unit-edit' + (paced ? ' paced' : '') + '">' +
+				unitLabel(u) + ' <input type="number" class="sn-amt" data-opt="' + i + '" ' +
+				'data-unit="' + u + '" min="' + (paced ? 1 : 0) + '" max="' + o.max[u] + '" ' +
+				'value="' + o.units[u] + '"' + (paced ? ' title="sets the pace - cannot go below 1"' : '') +
+				'></span>';
+		}).join(' ');
 		return '<tr><td><span class="def-eta text-warning" data-arrival="' +
 				Math.round(o.send / 1000) + '">\u2026</span></td>' +
 			'<td class="ms" data-ms="' + Math.round(o.send) + '"></td>' +
 			'<td><small><strong>' + esc(o.village.name) + '</strong> ' +
 				'<span class="coord text-muted">' + o.village.coords[0] + '|' + o.village.coords[1] +
 				'</span> <span class="text-muted">' + o.dist.toFixed(1) + ' f</span></small></td>' +
-			'<td><small>' + esc(stack) + '</small></td>' +
+			'<td><small>' + stack + '</small></td>' +
 			'<td><span class="badge badge-secondary">' + unitLabel(o.paceUnit) + '</span></td>' +
 			'<td class="text-right"><small>' + fmtDur(o.travel / 1000) + '</small></td>' +
 			'<td class="text-right"><button class="btn btn-sm btn-warning py-0" ' +
@@ -1297,6 +1318,22 @@ function snipeBuildLaunchList() {
 		const d = new Date(ms);
 		el.innerHTML = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
 			'.<small>' + pad(ms % 1000, 3) + '</small>';
+	});
+	body.querySelectorAll('.sn-amt').forEach(function(inp) {
+		inp.addEventListener('input', function() {
+			const o = SNIPE_OPTIONS[parseInt(inp.getAttribute('data-opt'), 10)];
+			if (!o) return;
+			const u = inp.getAttribute('data-unit');
+			const floor = (u === o.paceUnit) ? 1 : 0;
+			let n = parseInt(inp.value, 10);
+			if (isNaN(n)) return;                 // mid-typing, leave it alone
+			n = Math.max(floor, Math.min(n, o.max[u]));
+			if (String(n) !== inp.value) inp.value = n;
+			o.units[u] = n;
+			// Removing troops can only ever make a stack faster, and the pace
+			// unit can never reach zero, so the slowest unit - and with it the
+			// launch moment this row is showing - does not move.
+		});
 	});
 	tickSnipe();
 }
@@ -1328,7 +1365,8 @@ function snipeArmOption(i) {
 			incoming_id: snForm.incoming_id,
 			target_village_id: snForm.target_id,
 			land_ms: snipeLandMs(),
-			options: [{village_id: o.village.id, pace_unit: o.paceUnit, units: o.units}],
+			options: [{village_id: o.village.id, pace_unit: o.paceUnit,
+				units: Object.fromEntries(Object.entries(o.units).filter(x => x[1] > 0))}],
 			shortfall: document.getElementById('sn-shortfall').value,
 			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
 			boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
