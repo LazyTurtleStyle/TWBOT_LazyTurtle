@@ -9,6 +9,10 @@
 	.ms { font-variant-numeric: tabular-nums; }
 	.ms small { opacity: .65; }
 	.snipe-log { max-height: 9rem; overflow-y: auto; font-size: .75rem; white-space: pre-line; }
+	.def-filters { display: inline-flex; align-items: center; gap: .4rem; }
+	.def-filters .form-control-sm { font-size: .78rem; }
+	.inc-list { font-size: .72rem; line-height: 1.5; max-height: 9rem; overflow-y: auto; }
+	.inc-list .badge { font-size: .62rem; }
 	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
 	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
 	/* A village nothing can reach in time from is noise between the ones that
@@ -114,7 +118,19 @@
 <!-- Per-village table -->
 <div class="card">
 	<div class="card-header py-2"><strong>Villages,</strong>
-		<small class="text-muted">under attack first</small></div>
+		<small class="text-muted">under attack first</small>
+		<span class="float-right def-filters">
+			<select id="dv_group" class="form-control form-control-sm d-inline-block" style="width:14rem">
+				<option value="">all villages ({{ defense.villages|length }})</option>
+				<option value="__attacked__">under attack only ({{ defense.under_attack_count }})</option>
+				{% for g in defense.groups %}
+				<option value="{{ g.id }}">{{ g.name }} ({{ g.count }}){% if g.type == 'dynamic' %} · dynamic{% endif %}</option>
+				{% endfor %}
+			</select>
+			<input id="dv_name" class="form-control form-control-sm d-inline-block" style="width:12rem"
+				placeholder="village name or coords…">
+			<small id="dv_count" class="text-muted ml-1"></small>
+		</span></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -123,7 +139,10 @@
 			</tr></thead>
 			<tbody>
 				{% for v in defense.villages %}
-				<tr class="{% if v.incoming %}table-danger{% endif %}">
+				<tr class="{% if v.incoming %}table-danger{% endif %} dv-row"
+					data-groups="{{ v.groups|join(',') }}"
+					data-attacked="{{ 1 if v.incoming else 0 }}"
+					data-search="{{ ((v.name or '') ~ ' ' ~ (v.coords[0] ~ '|' ~ v.coords[1] if v.coords else '') ~ ' ' ~ v.id)|lower }}">
 					<td>
 						<strong>{{ v.name }}</strong>
 						<small class="text-muted d-block coord">
@@ -141,7 +160,22 @@
 							<span class="badge badge-success">clear</span>
 						{% endif %}
 					</td>
-					<td class="text-right">{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>{% else %}—{% endif %}</td>
+					<td class="text-right">
+						{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>
+						{% if v.incoming > 1 %}
+						{# One village taking several commands is the case that matters: the
+						   soonest arrival alone hides the shape of the train, so every
+						   arrival is listed with what it looks like and who sent it. #}
+						<div class="inc-list small text-muted mt-1 text-left">
+							{% for c in v.commands[:8] %}
+							<div><span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
+								{% if c.tag %}<span class="badge badge-secondary">{{ c.tag }}</span>{% endif %}
+								<span class="text-muted">{{ c.player_name }}</span></div>
+							{% endfor %}
+							{% if v.incoming > 8 %}<div>+{{ v.incoming - 8 }} more</div>{% endif %}
+						</div>
+						{% endif %}
+						{% else %}—{% endif %}</td>
 					<td>
 						<strong>{{ v.def_total|comma }}</strong>
 						{% set parts = [] %}
@@ -566,6 +600,45 @@ document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 	});
 });
 if (PANES.indexOf(location.hash.slice(1)) > 0) showPane(location.hash.slice(1));
+
+/* ---------- cutting the village table down ---------------------------
+   58 rows is a list you scroll past; the front is a list you act on. The
+   groups are the ones already kept in the game, so the question asked here is
+   the same one asked there - plus "under attack only", which is the reason
+   this page gets opened in a hurry.
+
+   Filtering is display-only: the counters above the table stay account-wide
+   on purpose, because "24 under attack" is the number you want even while
+   looking at one group. */
+function defFilter() {
+	var gid = document.getElementById('dv_group').value;
+	var text = (document.getElementById('dv_name').value || '').trim().toLowerCase();
+	var shown = 0, hiddenAttacked = 0;
+	document.querySelectorAll('tr.dv-row').forEach(function(tr) {
+		var groups = (tr.getAttribute('data-groups') || '').split(',');
+		var attacked = tr.getAttribute('data-attacked') === '1';
+		var okGroup = !gid || (gid === '__attacked__' ? attacked : groups.indexOf(gid) >= 0);
+		var okText = !text || (tr.getAttribute('data-search') || '').indexOf(text) >= 0;
+		var show = okGroup && okText;
+		tr.style.display = show ? '' : 'none';
+		if (show) shown++;
+		else if (attacked) hiddenAttacked++;
+	});
+	var total = document.querySelectorAll('tr.dv-row').length;
+	var el = document.getElementById('dv_count');
+	if (!gid && !text) { el.textContent = ''; el.classList.remove('text-danger'); return; }
+	// A village under attack that the filter is hiding is the one thing this
+	// page must not let you miss.
+	el.textContent = shown + ' of ' + total +
+		(hiddenAttacked ? ' · ' + hiddenAttacked + ' under attack hidden' : '');
+	el.classList.toggle('text-danger', hiddenAttacked > 0);
+	el.classList.toggle('text-muted', hiddenAttacked === 0);
+}
+(function() {
+	var g = document.getElementById('dv_group'), n = document.getElementById('dv_name');
+	if (g) g.addEventListener('change', defFilter);
+	if (n) n.addEventListener('input', defFilter);
+})();
 
 // --- time rendering ---
 function pad(n, w) { return String(n).padStart(w || 2, '0'); }

@@ -3184,8 +3184,33 @@ class DefenseOverview:
             -v["def_total"],
         ))
 
+        # The in-game groups, so the table can be cut down the way the account
+        # is already organised - "show me the front" rather than scrolling 58
+        # rows. Only groups that actually hold a managed village are offered.
+        groups = DataReader.groups_grab()
+        here = {str(v["id"]) for v in villages}
+        group_of = {}
+        group_options = []
+        for group in groups:
+            members = [str(m) for m in (group.get("villages") or [])]
+            held = [m for m in members if m in here]
+            if not held:
+                continue
+            group_options.append({"id": str(group.get("id")),
+                                  "name": group.get("name"),
+                                  "type": group.get("type"),
+                                  "count": len(held)})
+            for m in held:
+                group_of.setdefault(m, []).append(str(group.get("id")))
+        for v in villages:
+            v["groups"] = group_of.get(str(v["id"]), [])
+
         return {
             "villages": villages,
+            "groups": group_options,
+            # Each command carries an eta, not an absolute time; the page turns
+            # them back into arrivals against this.
+            "now": now,
             "defensive_units": cls.DEFENSIVE_UNITS,
             "total_def": total_def,
             "total_def_sum": sum(total_def.values()),
