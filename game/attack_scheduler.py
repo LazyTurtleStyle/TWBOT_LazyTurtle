@@ -644,19 +644,27 @@ def fire_command(wrapper, origin_id, confirm_data, expect=None):
         data=confirm_data,
     )
     if not result:
-        return False, "launch request failed"
-    text = getattr(result, "text", "") or ""
-    if 'data-bot-protect="forced"' in text:
-        return False, "bot protection is up - the command did NOT leave"
-    try:
-        payload = json.loads(text)
-    except (TypeError, ValueError):
-        # Not JSON, so the game rendered a page at us instead of making a
-        # command. Its <title> is the closest thing to a reason it gives.
-        title = re.search(r"<title>(.*?)</title>", text, re.S)
-        why = re.sub(r"\s+", " ", title.group(1)).strip() if title else ""
-        return False, ("the game did not accept the launch%s"
-                       % (": %s" % why if why else " (no command was created)"))
+        return False, "launch request failed (no response)"
+    # get_api_action hands back the decoded JSON when the game sent JSON, and
+    # the raw response when it did not - so a dict here is already the answer,
+    # and anything else has to be read out of the page. Treating the dict as a
+    # response object was reading every successful launch as a failure, which
+    # is the same mistake as before with the sign flipped.
+    if isinstance(result, dict):
+        payload = result
+    else:
+        text = getattr(result, "text", "") or ""
+        if 'data-bot-protect="forced"' in text:
+            return False, "bot protection is up - the command did NOT leave"
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            # Not JSON, so the game rendered a page at us instead of making a
+            # command. Its <title> is the closest thing to a reason it gives.
+            title = re.search(r"<title>(.*?)</title>", text, re.S)
+            why = re.sub(r"\s+", " ", title.group(1)).strip() if title else ""
+            return False, ("the game did not accept the launch%s"
+                           % (": %s" % why if why else " (no command was created)"))
     if isinstance(payload, dict) and payload.get("error"):
         return False, "the game refused the launch: %s" % payload["error"]
     response = (payload or {}).get("response") or {}

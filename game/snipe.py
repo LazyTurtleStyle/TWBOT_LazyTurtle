@@ -192,11 +192,14 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                        "troops stayed home", path=path, notify=False)
 
     clock.sleep_until(send_at, network_lead)
-    ok, _msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
-                                             expect="support")
+    ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
+                                            expect="support")
     if not ok:
-        return _finish(sid, "failed", "launch request failed - support did "
-                       "NOT leave", path=path)
+        # Pass the game's own words through. A generic "launch request failed"
+        # is the difference between knowing the token went stale and spending
+        # an evening guessing.
+        return _finish(sid, "failed", "support did NOT leave: %s" % msg,
+                       path=path)
 
     # Read the outgoing command back for the achieved arrival millisecond.
     command_id, arrival_ms, _cancel = csnipe._locate_outgoing(
