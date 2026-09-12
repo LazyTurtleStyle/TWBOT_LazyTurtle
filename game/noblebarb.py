@@ -725,7 +725,7 @@ class NobleBarbManager:
                 self._log(job, "send would land inside forced peace, holding")
                 return 0
             ok, msg = attack_scheduler.fire_command(
-                self.wrapper, job.get("source_id"), confirm_data)
+                self.wrapper, job.get("source_id"), confirm_data, expect="attack")
             if not ok:
                 self._log(job, "launch failed: %s" % msg)
                 break

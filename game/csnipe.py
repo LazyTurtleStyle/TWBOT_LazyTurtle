@@ -395,7 +395,8 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
             break
         aim = int(clock.server_now_ms() + 3000)
         clock.sleep_until(aim, network_lead)
-        ok, _ = attack_scheduler.fire_command(wrapper, village_id, confirm_data)
+        ok, _ = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
+                                             expect="support")
         if not ok:
             break
         _, arrival, cancel_url = _locate_outgoing(
@@ -557,7 +558,8 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                % ((send_target - now) / 1000.0, send_target % 1000,
                   " - attempt %d" % attempt if attempt > 1 else ""), path=path)
         clock.sleep_until(send_target, network_lead)
-        ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data)
+        ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
+                                               expect="support")
         if not ok:
             return _finish(sid, "failed", "launch request failed - troops did NOT "
                            "leave", path=path)

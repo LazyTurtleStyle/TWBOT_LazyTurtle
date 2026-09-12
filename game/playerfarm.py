@@ -352,7 +352,7 @@ class PlayerFarmManager:
                         "skipping", farm.get("id"))
             return False, None
         ok, _msg = attack_scheduler.fire_command(
-            self.wrapper, farm.get("source_id"), confirm_data)
+            self.wrapper, farm.get("source_id"), confirm_data, expect="attack")
         if ok:
             logger.info("Player farm run %s -> %s (%s|%s) with %s",
                         farm.get("source_id"), farm.get("target_name"),

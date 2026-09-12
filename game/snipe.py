@@ -192,7 +192,8 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                        "troops stayed home", path=path, notify=False)
 
     clock.sleep_until(send_at, network_lead)
-    ok, _msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data)
+    ok, _msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
+                                             expect="support")
     if not ok:
         return _finish(sid, "failed", "launch request failed - support did "
                        "NOT leave", path=path)

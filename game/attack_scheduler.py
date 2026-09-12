@@ -618,20 +618,24 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
     return confirm_data, duration, None
 
 
-# Things a launch response contains when nothing was actually launched: the
-# confirm form rendered again, or the game's own refusal box.
-_LAUNCH_NOT_SENT = ('id="troop_confirm_submit"', 'id="command-data-form"',
-                    '<div class="error_box">')
-
-
-def fire_command(wrapper, origin_id, confirm_data):
+def fire_command(wrapper, origin_id, confirm_data, expect=None):
     """Send the final launch request for an already-prepared command.
 
     A truthy response is not a sent command. The game answers 200 to a launch
-    it refused, to a bot-protection interstitial, and to a payload it could not
-    make sense of - it simply re-renders the confirm form or an error box. This
-    used to report all three as "sent", which is how three support snipes came
-    back successful having never left the village.
+    it refused, to bot protection, and to a payload it could not make sense of.
+    Reporting all three as "sent" is how three support snipes came back
+    successful having never left the village.
+
+    The two shapes are easy to tell apart once you look:
+
+        sent      {"response":{"type":"support","source_village":{...}}}
+        refused   <!DOCTYPE html> ... <title>Actie ongeldig</title>
+
+    A launch that worked answers with JSON describing the command it made, and
+    that JSON names the type - so `expect` ("attack" or "support") is checked
+    against it. That is the assertion the original bug needed: a support send
+    that the server had quietly turned into an attack would have failed here
+    the first time instead of being discovered three snipes later.
     """
     result = wrapper.get_api_action(
         village_id=origin_id,
@@ -644,15 +648,27 @@ def fire_command(wrapper, origin_id, confirm_data):
     text = getattr(result, "text", "") or ""
     if 'data-bot-protect="forced"' in text:
         return False, "bot protection is up - the command did NOT leave"
-    for marker in _LAUNCH_NOT_SENT:
-        if marker in text:
-            box = re.search(r'<div class="error_box">\s*(.*?)\s*</div>', text, re.S)
-            detail = re.sub(r"<[^>]+>", " ", box.group(1)).strip() if box else ""
-            detail = re.sub(r"\s+", " ", detail)
-            return False, ("the game did not accept the launch%s"
-                           % (": %s" % detail if detail else
-                              " (it returned the confirm form again)"))
-    return True, "sent"
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        # Not JSON, so the game rendered a page at us instead of making a
+        # command. Its <title> is the closest thing to a reason it gives.
+        title = re.search(r"<title>(.*?)</title>", text, re.S)
+        why = re.sub(r"\s+", " ", title.group(1)).strip() if title else ""
+        return False, ("the game did not accept the launch%s"
+                       % (": %s" % why if why else " (no command was created)"))
+    if isinstance(payload, dict) and payload.get("error"):
+        return False, "the game refused the launch: %s" % payload["error"]
+    response = (payload or {}).get("response") or {}
+    if not response:
+        return False, "the launch returned no command (nothing was created)"
+    kind = response.get("type")
+    if expect and kind and kind != expect:
+        # Phrased without an article: "a attack" is the sort of thing that
+        # makes a real warning look like a bug in the warning.
+        return False, ("the game made this a %s command, not %s - it is the "
+                       "wrong kind and it has been sent" % (kind, expect))
+    return True, "sent" + (" as %s" % kind if kind else "")
 
 
 def send_command(wrapper, origin_id, x, y, units):
@@ -660,7 +676,7 @@ def send_command(wrapper, origin_id, x, y, units):
     confirm_data, _duration, err = prepare_command(wrapper, origin_id, x, y, units)
     if err:
         return False, err
-    return fire_command(wrapper, origin_id, confirm_data)
+    return fire_command(wrapper, origin_id, confirm_data, expect="attack")
 
 
 def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
@@ -689,7 +705,8 @@ def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
             # send anyway but report how far off the launch is.
             logger.warning("Scheduled attack %s launching %.1fs late",
                            command.get("id"), -wait)
-    ok, msg = fire_command(wrapper, command.get("origin_id"), confirm_data)
+    ok, msg = fire_command(wrapper, command.get("origin_id"), confirm_data,
+                           expect="support" if command.get("support") else "attack")
     if ok:
         msg = "%s sent (server travel %ds; %s)" % (
             "support" if command.get("support") else "attack", duration, aimed_on)
@@ -807,7 +824,7 @@ def execute_timed_train(wrapper, command, network_lead=NETWORK_LEAD):
     started = time.time()
     sent, errors = [], list(failed)
     for index, confirm_data, _duration in prepared:
-        ok, msg = fire_command(wrapper, origin, confirm_data)
+        ok, msg = fire_command(wrapper, origin, confirm_data, expect="attack")
         if ok:
             sent.append(index + 1)
         else:
