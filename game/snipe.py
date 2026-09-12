@@ -202,11 +202,43 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                        path=path)
 
     # Read the outgoing command back for the achieved arrival millisecond.
-    command_id, arrival_ms, _cancel = csnipe._locate_outgoing(
+    command_id, arrival_ms, cancel_url = csnipe._locate_outgoing(
         wrapper, clock, village_id, snipe.get("target_x"),
         snipe.get("target_y"), land_ms)
     if arrival_ms is not None:
         delta = arrival_ms - land_ms
+        # A snipe that misses the gap is not a smaller success, it is a stack
+        # standing in a village it was never meant to garrison - and worse, it
+        # reads as defence that is not where you think it is. With a tolerance
+        # set, a command outside it is pulled straight back: the cancel window
+        # is minutes wide and we are inside it by seconds, so this is the one
+        # moment it can be taken back cleanly.
+        #
+        # This is what makes arming several worthwhile. Fire five, keep the
+        # ones that land inside the limit, and the rest walk home.
+        limit = snipe.get("max_delta_ms")
+        try:
+            limit = int(limit) if limit not in (None, "") else 0
+        except (TypeError, ValueError):
+            limit = 0
+        if limit > 0 and abs(delta) > limit:
+            recalled = False
+            if cancel_url:
+                recalled = wrapper.get_url(cancel_url) is not None
+            if recalled:
+                return _finish(sid, "missed",
+                               "landed %+dms, outside the %dms limit - "
+                               "recalled" % (delta, limit), path=path,
+                               outgoing_id=command_id,
+                               arrival_actual_ms=int(arrival_ms),
+                               delta_ms=int(delta))
+            return _finish(sid, "done",
+                           "landed %+dms, outside the %dms limit, but it could "
+                           "NOT be recalled - the troops are on their way"
+                           % (delta, limit), path=path,
+                           outgoing_id=command_id,
+                           arrival_actual_ms=int(arrival_ms),
+                           delta_ms=int(delta))
         _finish(sid, "done", "support lands at .%03d, %+dms vs target"
                 % (arrival_ms % 1000, delta), path=path,
                 outgoing_id=command_id, arrival_actual_ms=int(arrival_ms),

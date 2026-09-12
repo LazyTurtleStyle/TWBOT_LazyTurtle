@@ -490,9 +490,15 @@
 						{% else %}est. <span class="ms" data-ms="{{ (s.send_est_ts or 0) * 1000 }}">…</span>{% endif %}
 					</td>
 					<td class="small">
+						{% if s.status == 'missed' %}<span class="badge badge-secondary">recalled</span> {% endif %}
 						{{ s.result or '—' }}
 						{% if s.delta_ms is defined and s.delta_ms is not none %}
-							<span class="badge badge-{{ 'success' if s.delta_ms|abs <= 100 else 'warning' }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{# Judged against the limit that was set for this snipe, not a
+							   fixed number: the whole point is that you choose what counts
+							   as close enough. #}
+							{% set cap = s.max_delta_ms or 100 %}
+							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('success' if s.delta_ms|abs <= cap else 'warning') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
 						{% endif %}
 					</td>
 					<td class="text-right">
@@ -584,6 +590,12 @@
 				<label>Min %</label>
 				<input type="number" class="form-control form-control-sm" id="sn-minpct" min="0" max="100"
 					value="{{ snipe.default_min_pct }}">
+			</div>
+			<div class="form-group col-6 col-md-3">
+				<label>Keep only within <small class="text-muted">(ms, 0 = keep all)</small></label>
+				<input type="number" class="form-control form-control-sm" id="sn-maxdelta" min="0" max="5000"
+					value="0" title="After firing, the bot reads back where the command actually lands. Outside this many milliseconds it is recalled straight away.">
+				<small class="text-muted">Arm several and keep the ones that land inside it.</small>
 			</div>
 		</div>
 		<div class="form-row align-items-end" id="sn-template-row" style="display:none">
@@ -1370,6 +1382,7 @@ function snipeArmOption(i) {
 			shortfall: document.getElementById('sn-shortfall').value,
 			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
 			boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
+			max_delta_ms: parseInt(document.getElementById('sn-maxdelta').value, 10) || 0,
 		}),
 	}).then(r => r.json()).then(function(res) {
 		if (res.errors && res.errors.length) { err.textContent = res.errors.join(' \u00b7 '); if (!res.armed) return; }
@@ -1537,6 +1550,7 @@ function snipeArm() {
 		shortfall: document.getElementById('sn-shortfall').value,
 		min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
 		boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
+		max_delta_ms: parseInt(document.getElementById('sn-maxdelta').value, 10) || 0,
 	};
 	fetch('/app/snipe/arm', {
 		method: 'POST',

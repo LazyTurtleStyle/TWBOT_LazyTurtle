@@ -816,6 +816,7 @@ def snipe_arm():
         shortfall=body.get("shortfall"),
         min_pct=body.get("min_pct"),
         boost=body.get("boost"),
+        max_delta_ms=body.get("max_delta_ms"),
     )
     return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
 

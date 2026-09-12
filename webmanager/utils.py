@@ -1313,7 +1313,7 @@ class DataReader:
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
-                        shortfall, min_pct, boost):
+                        shortfall, min_pct, boost, max_delta_ms=0):
         """Arm one snipe per selected option: each sends `units` as support
         from its own village so they land at land_ms (epoch milliseconds) in
         the target village. Returns (armed_entries, per_option_errors)."""
@@ -1337,6 +1337,12 @@ class DataReader:
             return [], ["invalid numbers in the snipe form"]
         if shortfall not in ("scale", "all", "strict"):
             shortfall = "scale"
+        # How far off the target landing a command may be and still be kept.
+        # 0 means keep whatever lands, which is how this behaved before.
+        try:
+            max_delta_ms = max(0, int(float(max_delta_ms or 0)))
+        except (TypeError, ValueError):
+            max_delta_ms = 0
         if boost <= 0:
             boost = 1.0
         now = time.time()
@@ -1399,6 +1405,7 @@ class DataReader:
                 "boost": boost,
                 "shortfall": shortfall,
                 "min_pct": min_pct,
+                "max_delta_ms": max_delta_ms,
                 "distance": round(field_distance(oloc, tloc), 1),
                 "travel_est": int(travel),
                 "send_est_ts": int(send_est),
