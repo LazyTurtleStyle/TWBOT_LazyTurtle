@@ -564,7 +564,17 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
     pre_data = {k: v for k, v in Extractor.attack_form(pre)}
     pre_data.update({str(u): str(n) for u, n in units.items()})
     pre_data.update({"x": x, "y": y, "target_type": "coord"})
-    # The submit button's name tells the server the command type.
+    # The submit button's name tells the server the command type - and the
+    # rally point renders BOTH buttons, so both names come back from the form
+    # scrape. Setting one without clearing the other posts them together, and
+    # the server resolves that in favour of attack: a support send then built
+    # an attack confirm, the launch had its only type field stripped off as
+    # "the other kind", and the game created nothing at all while the request
+    # still came back 200. Three snipes reported sent and none existed.
+    #
+    # Verified against the live rally point: posting both yields a confirm page
+    # carrying attack=true, posting support alone yields support=true.
+    pre_data.pop("support" if not support else "attack", None)
     if support:
         pre_data["support"] = "Ondersteunen"
     else:
@@ -608,15 +618,41 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
     return confirm_data, duration, None
 
 
+# Things a launch response contains when nothing was actually launched: the
+# confirm form rendered again, or the game's own refusal box.
+_LAUNCH_NOT_SENT = ('id="troop_confirm_submit"', 'id="command-data-form"',
+                    '<div class="error_box">')
+
+
 def fire_command(wrapper, origin_id, confirm_data):
-    """Send the final launch request for an already-prepared command."""
+    """Send the final launch request for an already-prepared command.
+
+    A truthy response is not a sent command. The game answers 200 to a launch
+    it refused, to a bot-protection interstitial, and to a payload it could not
+    make sense of - it simply re-renders the confirm form or an error box. This
+    used to report all three as "sent", which is how three support snipes came
+    back successful having never left the village.
+    """
     result = wrapper.get_api_action(
         village_id=origin_id,
         action="popup_command",
         params={"screen": "place"},
         data=confirm_data,
     )
-    return (True, "sent") if result else (False, "launch request failed")
+    if not result:
+        return False, "launch request failed"
+    text = getattr(result, "text", "") or ""
+    if 'data-bot-protect="forced"' in text:
+        return False, "bot protection is up - the command did NOT leave"
+    for marker in _LAUNCH_NOT_SENT:
+        if marker in text:
+            box = re.search(r'<div class="error_box">\s*(.*?)\s*</div>', text, re.S)
+            detail = re.sub(r"<[^>]+>", " ", box.group(1)).strip() if box else ""
+            detail = re.sub(r"\s+", " ", detail)
+            return False, ("the game did not accept the launch%s"
+                           % (": %s" % detail if detail else
+                              " (it returned the confirm form again)"))
+    return True, "sent"
 
 
 def send_command(wrapper, origin_id, x, y, units):
