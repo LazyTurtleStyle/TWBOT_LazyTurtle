@@ -19,6 +19,10 @@
 		border-radius: 3px; }
 	/* The one box that must not be emptied is marked, not just validated. */
 	.sn-unit-edit.paced input { border-color: var(--ember, #e07b2c); }
+	.tag-cell { display: flex; align-items: center; gap: .25rem; flex-wrap: wrap; }
+	.tag-cell input { width: 5.5rem; font-size: .72rem; padding: 0 .25rem; }
+	.tag-cell .btn { font-size: .68rem; }
+	.tag-cell .tag-status { flex-basis: 100%; font-size: .66rem; }
 	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
 	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
 	/* A village nothing can reach in time from is noise between the ones that
@@ -701,6 +705,35 @@ const DEF_GROUPS = {{ defense.groups|tojson }};
 const DEF_NOW = {{ defense.now or 0 }};
 const DEF_UNITS = {{ defense.defensive_units|tojson }};
 
+/* Write the tag to the game. Same endpoint the Overview page uses, so a tag
+   set here is the command's name in TribalWars, not a note that only this
+   dashboard can see - which is the whole point: the game's own incoming list
+   is what gets read when it matters. */
+function voTag(commandId, preset) {
+	const box = document.getElementById('vtag-' + commandId);
+	const st = document.getElementById('vtagst-' + commandId);
+	if (preset !== undefined && box) box.value = preset;
+	const value = box ? box.value : (preset || '');
+	if (st) st.textContent = 'saving…';
+	fetch('/app/incoming/tag', {
+		method: 'POST',
+		headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+		body: 'command_id=' + encodeURIComponent(commandId) + '&tag=' + encodeURIComponent(value),
+	}).then(r => r.json()).then(function(res) {
+		if (!st) return;
+		if (!res || !res.ok) { st.textContent = 'failed'; st.className = 'tag-status small text-danger'; return; }
+		const ig = res.ingame || {};
+		// Saying where it landed matters: a tag the game never received looks
+		// identical to one it did, right up until you go and read the game.
+		if (ig.ok) { st.textContent = 'tagged in game'; st.className = 'tag-status small text-success'; }
+		else if (ig.reason === 'no_endpoint_yet') { st.textContent = 'saved here only - the bot has not scraped a live incomings page yet'; st.className = 'tag-status small text-warning'; }
+		else if (ig.reason === 'no_session') { st.textContent = 'saved here only - needs a fresh session'; st.className = 'tag-status small text-warning'; }
+		else { st.textContent = 'saved here only'; st.className = 'tag-status small text-warning'; }
+	}).catch(function() {
+		if (st) { st.textContent = 'failed'; st.className = 'tag-status small text-danger'; }
+	});
+}
+
 /* Hand the command straight to the snipe tab with the village and the hit
    already filled in - the whole point of having the button here is not typing
    a coordinate and a millisecond back in by hand. */
@@ -787,7 +820,7 @@ function voRender() {
 		total + ' inbound match \u201c' + esc(want) + '\u201d</div>';
 	html += '<table class="table table-sm def-table mb-0"><thead><tr>' +
 		'<th></th><th>Lands in</th><th>At</th><th>Looks like</th><th>From</th>' +
-		'<th>Player</th><th class="text-right">Fields</th><th></th>' +
+		'<th>Player</th><th class="text-right">Fields</th><th>Tag</th><th></th>' +
 		'</tr></thead><tbody>' +
 		rows.map(r => {
 			const c = r.c, at = DEF_NOW + c.eta;
@@ -810,6 +843,27 @@ function voRender() {
 				      JSON.stringify(String(c.command_id)) + ',' + at + ',' +
 				      (c.arrival_ms || at * 1000) + ')\'>snipe</button>'
 				: '';
+			// What the flight time says it can still be. Anything faster has
+			// already been ruled out by how long it has been in the air, so
+			// this is a measurement rather than a guess - it is the suggestion
+			// worth having one click away.
+			const guess = c.tag_auto || '';
+			const tagCell = r.attack
+				? '<div class="tag-cell">' +
+				  '<input id="vtag-' + c.command_id + '" class="form-control form-control-sm" ' +
+				      'value="' + esc(guess) + '" placeholder="tag">' +
+				  // Single-quoted attribute: JSON.stringify emits double quotes,
+				  // which close a double-quoted onclick and leave the handler
+				  // truncated to "voTag(".
+				  (guess ? '<button class="btn btn-sm btn-outline-warning py-0" title="tag it as ' +
+				      esc(guess) + ' - the slowest unit still consistent with the flight time" ' +
+				      'onclick=\'voTag(' + JSON.stringify(String(c.command_id)) + ',' +
+				          JSON.stringify(guess) + ')\'>' + esc(guess) + '</button>' : '') +
+				  '<button class="btn btn-sm btn-outline-secondary py-0" ' +
+				      'onclick=\'voTag(' + JSON.stringify(String(c.command_id)) + ')\'>save</button>' +
+				  '<span class="tag-status small text-muted" id="vtagst-' + c.command_id + '"></span>' +
+				  '</div>'
+				: '';
 			return '<tr' + (r.attack ? ' class="table-danger"' : '') + '>' +
 				'<td>' + kind + '</td>' +
 				'<td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
@@ -819,6 +873,7 @@ function voRender() {
 					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
 				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
 				'<td class="text-right">' + (c.distance != null ? Number(c.distance).toFixed(1) : '') + '</td>' +
+				'<td>' + tagCell + '</td>' +
 				'<td class="text-right">' + snipe + '</td></tr>';
 		}).join('') + '</tbody></table>';
 	body.innerHTML = html;
