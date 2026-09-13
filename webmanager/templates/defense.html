@@ -135,8 +135,14 @@
 				<option value="{{ g.id }}">{{ g.name }} ({{ g.count }}){% if g.type == 'dynamic' %} · dynamic{% endif %}</option>
 				{% endfor %}
 			</select>
-			<input id="dv_name" class="form-control form-control-sm d-inline-block" style="width:12rem"
+			<input id="dv_name" class="form-control form-control-sm d-inline-block" style="width:11rem"
 				placeholder="village name or coords…">
+			<input id="dv_label" class="form-control form-control-sm d-inline-block" style="width:11rem"
+				placeholder="incoming name…" list="dv_label_list"
+				title="The command name as it reads in game. Type Aanval to find everything not tagged yet.">
+			<datalist id="dv_label_list">
+				{% for lab in defense.incoming_labels %}<option value="{{ lab.name }}">{{ lab.count }}</option>{% endfor %}
+			</datalist>
 			<small id="dv_count" class="text-muted ml-1"></small>
 		</span></div>
 	<div class="table-responsive">
@@ -150,7 +156,8 @@
 				<tr class="{% if v.incoming %}table-danger{% endif %} dv-row"
 					data-groups="{{ v.groups|join(',') }}"
 					data-attacked="{{ 1 if v.incoming else 0 }}"
-					data-search="{{ ((v.name or '') ~ ' ' ~ (v.coords[0] ~ '|' ~ v.coords[1] if v.coords else '') ~ ' ' ~ v.id)|lower }}">
+					data-search="{{ ((v.name or '') ~ ' ' ~ (v.coords[0] ~ '|' ~ v.coords[1] if v.coords else '') ~ ' ' ~ v.id)|lower }}"
+					data-labels="{{ (v.commands | map(attribute='game_label') | select | join(' '))|lower }}">
 					<td>
 						<strong>{{ v.name }}</strong>
 						<small class="text-muted d-block coord">
@@ -177,7 +184,7 @@
 						<div class="inc-list small text-muted mt-1 text-left">
 							{% for c in v.commands[:8] %}
 							<div><span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
-								{% if c.tag %}<span class="badge badge-secondary">{{ c.tag }}</span>{% endif %}
+								{% if c.game_label %}<span class="badge badge-secondary">{{ c.game_label|truncate(28, True, '…') }}</span>{% endif %}
 								<span class="text-muted">{{ c.player_name }}</span></div>
 							{% endfor %}
 							{% if v.incoming > 8 %}<div>+{{ v.incoming - 8 }} more</div>{% endif %}
@@ -240,10 +247,16 @@
 				<select id="vo_village" class="form-control form-control-sm"></select>
 			</div>
 			<div class="form-group col-12 col-md-3 mb-2">
+				<label class="small mb-1">Incoming name</label>
+				<input id="vo_label" class="form-control form-control-sm" list="dv_label_list"
+					placeholder="e.g. Aanval"
+					title="The command name as it reads in game. Aanval is an attack nobody has tagged yet.">
+			</div>
+			<div class="form-group col-12 col-md-2 mb-2">
 				<label class="small mb-1">&nbsp;</label>
 				<div class="custom-control custom-checkbox mt-1">
 					<input type="checkbox" class="custom-control-input" id="vo_only_attacked">
-					<label class="custom-control-label small" for="vo_only_attacked">only villages under attack</label>
+					<label class="custom-control-label small" for="vo_only_attacked">only under attack</label>
 				</div>
 			</div>
 		</div>
@@ -706,8 +719,10 @@ function voFill() {
 	}
 	const gid = g.value;
 	const onlyAttacked = document.getElementById('vo_only_attacked').checked;
+	const want = (document.getElementById('vo_label').value || '').trim().toLowerCase();
 	const list = DEF_VILLAGES.filter(v =>
-		(!gid || (v.groups || []).indexOf(gid) >= 0) && (!onlyAttacked || v.incoming));
+		(!gid || (v.groups || []).indexOf(gid) >= 0) && (!onlyAttacked || v.incoming) &&
+		(!want || (v.commands || []).some(c => (c.game_label || '').toLowerCase().indexOf(want) >= 0)));
 	const sel = document.getElementById('vo_village');
 	const keep = sel.value;
 	// Under attack first, soonest first - the same ordering as the main table,
@@ -749,16 +764,27 @@ function voRender() {
 	// Attacks and support together, the way the village's own "Binnenkomende
 	// troepen" panel shows them - soonest first regardless of which it is,
 	// because what matters is the order things land in.
-	const rows = (v.commands || []).map(c => ({c: c, attack: true}))
+	const want = (document.getElementById('vo_label').value || '').trim().toLowerCase();
+	let rows = (v.commands || []).map(c => ({c: c, attack: true}))
 		.concat((v.supports || []).map(c => ({c: c, attack: false})))
 		.sort((a, b) => (a.c.eta || 0) - (b.c.eta || 0));
+	// Filtering by command name is about finding attacks, so it drops support
+	// rather than asking why a reinforcement has no attack tag.
+	const total = rows.length;
+	if (want) rows = rows.filter(r => r.attack &&
+		(r.c.game_label || '').toLowerCase().indexOf(want) >= 0);
 	if (!rows.length) {
 		// Bootstrap's alert-success is near-white on near-white under this
 		// theme; the badge the main table already uses reads properly.
-		html += '<div class="small"><span class="badge badge-success">clear</span> ' +
-			'<span class="text-muted">nothing incoming</span></div>';
+		html += want && total
+			? '<div class="small text-muted">none of the ' + total +
+			  ' inbound here match \u201c' + esc(want) + '\u201d</div>'
+			: '<div class="small"><span class="badge badge-success">clear</span> ' +
+			  '<span class="text-muted">nothing incoming</span></div>';
 		body.innerHTML = html; return;
 	}
+	if (want) html += '<div class="small text-muted mb-1">' + rows.length + ' of ' +
+		total + ' inbound match \u201c' + esc(want) + '\u201d</div>';
 	html += '<table class="table table-sm def-table mb-0"><thead><tr>' +
 		'<th></th><th>Lands in</th><th>At</th><th>Looks like</th><th>From</th>' +
 		'<th>Player</th><th class="text-right">Fields</th><th></th>' +
@@ -768,8 +794,13 @@ function voRender() {
 			const kind = r.attack
 				? '<span class="badge badge-danger">attack</span>'
 				: '<span class="badge badge-info">support</span>';
+			// The command name as it reads in game. That is the field that says
+			// "Aanval" until somebody tags it, so it is the one worth showing -
+			// the bot's own classification is empty on almost everything.
+			const label = c.game_label || c.tag || '';
 			const looks = r.attack
-				? (c.tag ? '<span class="badge badge-secondary">' + esc(c.tag) + '</span>'
+				? (label ? '<span class="badge badge-secondary" title="' + esc(label) + '">' +
+					esc(label.length > 30 ? label.slice(0, 30) + '\u2026' : label) + '</span>'
 				         : '<span class="text-muted">?</span>')
 				: '<span class="text-muted">\u2014</span>';
 			// Only an attack can be sniped, and only one that has not landed.
@@ -807,6 +838,8 @@ function voRender() {
 	if (!g) return;
 	g.addEventListener('change', voFill);
 	a.addEventListener('change', voFill);
+	const lab = document.getElementById('vo_label');
+	if (lab) lab.addEventListener('input', voFill);
 	v.addEventListener('change', voRender);
 	voFill();
 })();
@@ -823,20 +856,24 @@ function voRender() {
 function defFilter() {
 	var gid = document.getElementById('dv_group').value;
 	var text = (document.getElementById('dv_name').value || '').trim().toLowerCase();
+	var label = (document.getElementById('dv_label').value || '').trim().toLowerCase();
 	var shown = 0, hiddenAttacked = 0;
 	document.querySelectorAll('tr.dv-row').forEach(function(tr) {
 		var groups = (tr.getAttribute('data-groups') || '').split(',');
 		var attacked = tr.getAttribute('data-attacked') === '1';
 		var okGroup = !gid || (gid === '__attacked__' ? attacked : groups.indexOf(gid) >= 0);
 		var okText = !text || (tr.getAttribute('data-search') || '').indexOf(text) >= 0;
-		var show = okGroup && okText;
+		// The in-game command name. "Aanval" is what an untagged attack is
+		// called, so typing it lists exactly the ones still waiting for a tag.
+		var okLabel = !label || (tr.getAttribute('data-labels') || '').indexOf(label) >= 0;
+		var show = okGroup && okText && okLabel;
 		tr.style.display = show ? '' : 'none';
 		if (show) shown++;
 		else if (attacked) hiddenAttacked++;
 	});
 	var total = document.querySelectorAll('tr.dv-row').length;
 	var el = document.getElementById('dv_count');
-	if (!gid && !text) { el.textContent = ''; el.classList.remove('text-danger'); return; }
+	if (!gid && !text && !label) { el.textContent = ''; el.classList.remove('text-danger'); return; }
 	// A village under attack that the filter is hiding is the one thing this
 	// page must not let you miss.
 	el.textContent = shown + ' of ' + total +
@@ -848,6 +885,8 @@ function defFilter() {
 	var g = document.getElementById('dv_group'), n = document.getElementById('dv_name');
 	if (g) g.addEventListener('change', defFilter);
 	if (n) n.addEventListener('input', defFilter);
+	var lab = document.getElementById('dv_label');
+	if (lab) lab.addEventListener('input', defFilter);
 })();
 
 // --- time rendering ---

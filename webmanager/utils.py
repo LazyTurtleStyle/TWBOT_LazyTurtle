@@ -3243,9 +3243,20 @@ class DefenseOverview:
         for v in villages:
             v["groups"] = group_of.get(str(v["id"]), [])
 
+        # Every distinct in-game command name currently inbound, commonest
+        # first. "Aanval" is what an untagged attack is called, so this doubles
+        # as "how many are still waiting for a tag".
+        label_counts = collections.Counter(
+            (c.get("game_label") or "").strip()
+            for cmds in incomings_by_target.values() for c in cmds
+            if (c.get("eta") or 0) > 0 and (c.get("game_label") or "").strip())
+        incoming_labels = [{"name": name, "count": n}
+                           for name, n in label_counts.most_common()]
+
         return {
             "villages": villages,
             "groups": group_options,
+            "incoming_labels": incoming_labels,
             # Each command carries an eta, not an absolute time; the page turns
             # them back into arrivals against this.
             "now": now,
