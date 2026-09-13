@@ -11,8 +11,16 @@
 	.snipe-log { max-height: 9rem; overflow-y: auto; font-size: .75rem; white-space: pre-line; }
 	.def-filters { display: inline-flex; align-items: center; gap: .4rem; }
 	.def-filters .form-control-sm { font-size: .78rem; }
-	.inc-list { font-size: .72rem; line-height: 1.5; max-height: 9rem; overflow-y: auto; }
+	.inc-list { font-size: .72rem; line-height: 1.5; max-height: 14rem; overflow-y: auto; }
 	.inc-list .badge { font-size: .62rem; }
+	/* One command per line, columns lining up down the list so a village taking
+	   nine of them still reads as a list rather than a paragraph. */
+	.inc-row { display: grid; grid-template-columns: 4.2rem 11rem 5.5rem auto;
+		align-items: center; gap: .3rem; padding: .1rem 0; }
+	.inc-row .inc-player { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.inc-row .tag-cell { flex-wrap: nowrap; }
+	.inc-row .tag-cell input { width: 4.6rem; }
+	.inc-row .tag-status { flex-basis: auto; margin-left: .25rem; white-space: nowrap; }
 	.sn-unit-edit { white-space: nowrap; margin-right: .5rem; }
 	.sn-unit-edit input { width: 4.6rem; font-size: .72rem; padding: 0 .2rem; margin-left: .15rem;
 		background: var(--surface-2, #241d17); color: inherit; border: 1px solid var(--line, #3a2f26);
@@ -181,19 +189,31 @@
 					</td>
 					<td class="text-right">
 						{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>
-						{% if v.incoming > 1 %}
-						{# One village taking several commands is the case that matters: the
-						   soonest arrival alone hides the shape of the train, so every
-						   arrival is listed with what it looks like and who sent it. #}
+						{# Every command is listed, not only where there are several: the
+						   soonest arrival alone hides the shape of a train, and a village
+						   with one incoming still has one command that wants a tag. #}
 						<div class="inc-list small text-muted mt-1 text-left">
-							{% for c in v.commands[:8] %}
-							<div><span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
-								{% if c.game_label %}<span class="badge badge-secondary">{{ c.game_label|truncate(28, True, '…') }}</span>{% endif %}
-								<span class="text-muted">{{ c.player_name }}</span></div>
+							{% for c in v.commands[:10] %}
+							<div class="inc-row">
+								<span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
+								{% if c.game_label %}<span class="badge badge-secondary" title="{{ c.game_label }}">{{ c.game_label|truncate(22, True, '…') }}</span>{% endif %}
+								<span class="text-muted inc-player">{{ c.player_name }}</span>
+								<span class="tag-cell">
+									<input id="vtag-{{ c.command_id }}" class="form-control form-control-sm"
+										value="{{ c.tag_auto or '' }}" placeholder="tag">
+									{% if c.tag_auto %}
+									<button class="btn btn-sm btn-outline-warning py-0"
+										title="tag it as {{ c.tag_auto }} - the slowest unit still consistent with the flight time"
+										onclick="voTag('{{ c.command_id }}','{{ c.tag_auto }}')">{{ c.tag_auto }}</button>
+									{% endif %}
+									<button class="btn btn-sm btn-outline-secondary py-0"
+										onclick="voTag('{{ c.command_id }}')">save</button>
+									<span class="tag-status small text-muted" id="vtagst-{{ c.command_id }}"></span>
+								</span>
+							</div>
 							{% endfor %}
-							{% if v.incoming > 8 %}<div>+{{ v.incoming - 8 }} more</div>{% endif %}
+							{% if v.incoming > 10 %}<div class="text-muted">+{{ v.incoming - 10 }} more — open the Village tab for the rest</div>{% endif %}
 						</div>
-						{% endif %}
 						{% else %}—{% endif %}</td>
 					<td>
 						<strong>{{ v.def_total|comma }}</strong>
@@ -721,14 +741,26 @@ function voTag(commandId, preset) {
 		body: 'command_id=' + encodeURIComponent(commandId) + '&tag=' + encodeURIComponent(value),
 	}).then(r => r.json()).then(function(res) {
 		if (!st) return;
-		if (!res || !res.ok) { st.textContent = 'failed'; st.className = 'tag-status small text-danger'; return; }
+		if (!res || !res.ok) { st.textContent = 'failed'; st.title = 'the dashboard could not save the tag';
+			st.className = 'tag-status small text-danger'; return; }
 		const ig = res.ingame || {};
 		// Saying where it landed matters: a tag the game never received looks
-		// identical to one it did, right up until you go and read the game.
-		if (ig.ok) { st.textContent = 'tagged in game'; st.className = 'tag-status small text-success'; }
-		else if (ig.reason === 'no_endpoint_yet') { st.textContent = 'saved here only - the bot has not scraped a live incomings page yet'; st.className = 'tag-status small text-warning'; }
-		else if (ig.reason === 'no_session') { st.textContent = 'saved here only - needs a fresh session'; st.className = 'tag-status small text-warning'; }
-		else { st.textContent = 'saved here only'; st.className = 'tag-status small text-warning'; }
+		// identical to one it did, right up until you go and read the game. The
+		// short form keeps the row a row; the long form is the tooltip, because
+		// these sit forty to a screen on the overview.
+		if (ig.ok) {
+			st.textContent = '\u2713 in game';
+			st.title = 'renamed in TribalWars';
+			st.className = 'tag-status small text-success';
+		} else {
+			st.textContent = '\u2713 local';
+			st.title = ig.reason === 'no_endpoint_yet'
+				? 'saved here, but not renamed in game yet - the bot has not scraped a live incomings page'
+				: (ig.reason === 'no_session'
+					? 'saved here, but the in-game rename needs a fresh session'
+					: 'saved here, but the in-game rename did not go through');
+			st.className = 'tag-status small text-warning';
+		}
 	}).catch(function() {
 		if (st) { st.textContent = 'failed'; st.className = 'tag-status small text-danger'; }
 	});
