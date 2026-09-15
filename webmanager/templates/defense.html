@@ -41,6 +41,21 @@
 	   send a second wave - but it reads as spent rather than as a fresh choice. */
 	#sn-launch-table tr.sn-armed { opacity: .72; }
 	#sn-launch-table tr.sn-armed td:first-child { box-shadow: inset 2px 0 0 var(--ok, #4f9d69); }
+	/* The c-snipe explainer: a definition list reads as "field -> what to type",
+	   which is the shape of the question, and stays compact on one screen. */
+	.cs-explain dl { display: grid; grid-template-columns: max-content 1fr;
+		gap: .1rem .75rem; margin: 0; }
+	.cs-explain dt { font-weight: 600; color: var(--ink, inherit); white-space: nowrap; }
+	.cs-explain dd { margin: 0; }
+	.cs-gap-strip { display: flex; flex-wrap: wrap; gap: .35rem; }
+	.cs-gap { border: 1px solid var(--line, #3a2f26); background: var(--surface-2, #241d17);
+		color: inherit; font-size: .72rem; line-height: 1.15; padding: .2rem .45rem; }
+	.cs-gap small { opacity: .65; }
+	.cs-gap.active { border-color: var(--ember, #e07b2c); box-shadow: inset 0 0 0 1px var(--ember, #e07b2c); }
+	/* Tight enough that the engine's own +30-90ms spread decides it, so it is
+	   marked rather than presented as an equal choice. */
+	.cs-gap-tight { border-style: dashed; }
+	.cs-gap-tight small { color: var(--warn, #d8a657); opacity: .9; }
 </style>
 
 {% macro csnipe_rows(snipes, empty_text) %}
@@ -358,15 +373,17 @@
 	<div class="card-header py-2"><strong>Arm cancel snipe</strong>
 		<small class="text-muted" id="cs-context"></small></div>
 	<div class="card-body py-2">
+		<div class="mb-2" id="cs-gaps"></div>
 		<div class="form-row">
 			<div class="form-group col-6 col-md-2">
 				<label>First hit ms <small class="text-muted">(.000–.999)</small></label>
-				<input type="number" class="form-control form-control-sm" id="cs-hit-ms" min="0" max="999" value="0">
+				<input type="number" class="form-control form-control-sm" id="cs-hit-ms" min="0" max="999" value="0"
+					oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Land +ms after it</label>
 				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="1" max="5000"
-					value="{{ csnipe.default_aim_ms }}">
+					value="{{ csnipe.default_aim_ms }}" oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>No later than +ms <small class="text-muted">(alpha)</small></label>
@@ -387,19 +404,49 @@
 				<input type="number" class="form-control form-control-sm" id="cs-ty">
 			</div>
 		</div>
+		<!-- The arithmetic of the two ms fields, on screen. "Land +ms after it"
+		     reads to a lot of people as "before the hit" - the dodge is the one
+		     thing in this panel where that would be fatal, so the moment it
+		     actually produces is spelled out rather than left to be worked out
+		     from two boxes three columns apart. -->
+		<div class="small mb-2" id="cs-return-note"></div>
 		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
-		<small class="text-muted d-block mb-2">The troops below dodge out and land back <strong>no earlier than</strong>
-			first hit + aim, typically 30–90&nbsp;ms after it: the server credits a cancelled command's travel
-			in whole seconds, so the return keeps the <em>send's</em> millisecond, the bot fires throwaway
-			one-unit probes at the barb first to measure today's send timing, then aims the real send just past
-			your target (without probe time it falls back to a blind +150&nbsp;ms buffer, achieving
-			150–400&nbsp;ms). A badly-jittered send costs +2&nbsp;s (late, never early). <strong>Lone incoming:
-			use 300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; 100&nbsp;ms gaps are
-			makeable when calibration succeeds. Check the log's "send bias" line.
-			<strong>Tight gap (both sides fatal):</strong> also fill "no later than +ms" (e.g. the next hit's
-			offset minus a margin), the bot then aims the middle of that window and, when a measured send
-			would miss it, cancels the attempt immediately and re-fires on a later 2-second slot until one
-			lands inside (needs a few minutes of lead; ~10–15&nbsp;s per retry, up to 8 tries).</small>
+		<!-- Same facts as before, in the order you need them: what the two
+		     numbers you type mean, then what to type, then how close it lands.
+		     One twelve-line paragraph asked you to hold all three at once. -->
+		<div class="cs-explain small mb-2">
+			<p class="mb-1">The troops below leave for the target above and are cancelled
+				mid-flight, so they walk back in and are home at
+				<strong>first hit + aim</strong> &mdash; <strong>never before it</strong>, which is
+				the whole point: home early means home for the hit you were dodging.</p>
+			<dl class="mb-1">
+				<dt>First hit ms</dt>
+				<dd>The <em>.mmm</em> of the attack you are sniping. Filled in for you.</dd>
+				<dt>Land +ms after it</dt>
+				<dd>How far into the gap to come home &mdash; <strong>after</strong> the hit,
+					always. This counts the opposite way to the Snipe tab next door, whose
+					offset is negative because support has to be standing there <em>before</em>
+					the command it is meeting; here the stack has to be out when the hit lands.
+					<strong>Lone incoming: 300&ndash;500.</strong>
+					Noble train: just past the first hit &mdash; 100&nbsp;ms gaps are makeable.</dd>
+				<dt>No later than +ms <span class="badge badge-warning">alpha</span></dt>
+				<dd>Only for a gap that is fatal on <em>both</em> sides. Set it to the next
+					hit's offset minus a margin: the bot aims the middle of that window and,
+					when a send would miss it, cancels and re-fires on a later 2-second slot
+					until one lands inside. Needs a few minutes of lead, ~10&ndash;15&nbsp;s
+					per retry, 8 tries. Leave empty otherwise.</dd>
+				<dt>Engage (min before)</dt>
+				<dd>When the bot starts. It must be able to send and still be under way at
+					the halfway moment, which is where the cancel goes.</dd>
+			</dl>
+			<p class="mb-0">How close it lands: <strong>+30&ndash;90&nbsp;ms</strong> once the
+				throwaway one-unit probes have measured today's send timing,
+				<strong>+150&ndash;400&nbsp;ms</strong> without them, and <strong>+2&nbsp;s</strong>
+				on a badly jittered send. Late, never early &mdash; the server credits a cancelled
+				command's flight in whole seconds, so the return carries the <em>send's</em>
+				millisecond and a send that slips only rolls it one 2-second slot later. The log's
+				"send bias" line says which of the three you are getting.</p>
+		</div>
 		<div class="d-flex align-items-center flex-wrap mb-1">
 			<button class="btn btn-sm btn-outline-info py-0"
 				onclick="csnipeCheckTroops('cs', csForm.village_id)">Check troops now</button>
@@ -1142,6 +1189,156 @@ function csnipeFillLive(prefix) {
 	document.getElementById(prefix + '-troop-note').innerHTML +=
 		' <span class="text-success">· filled</span>';
 }
+
+/* ---------- picking the gap, not the command ---------------------------
+   A train is a nuke and then nobles a hundred milliseconds apart, and the
+   stack has to come home in one of the gaps between them - usually the one
+   after the first noble, because that is the noble the attacker loads.
+
+   Naming that gap by one of its ends is what made this form hard to use. It
+   asks for "first hit + how long after", so it anchors on the command you land
+   AFTER; anyone thinking about the deadline instead picks the command they
+   want to land BEFORE and is then a whole noble late. The gap has two ends and
+   only one of them is the dangerous one, so neither end is the right thing to
+   ask for: this asks for the gap itself and fills in both.
+
+   Only the earlier end anchors the aim - the later one becomes "no later than",
+   which is what turns the send into fire-measure-refire rather than one shot at
+   the jitter. */
+function csnipeVillageIncomings(villageId) {
+	return (CSNIPE.incomings || [])
+		.filter(function(c) { return String(c.village_id) === String(villageId); })
+		.map(function(c) {
+			return {c: c, ms: c.arrival_ms || (c.arrival || 0) * 1000};
+		})
+		.sort(function(a, b) { return a.ms - b.ms; });
+}
+
+/* A margin at each end so the aim is not sitting on a hit. The 100ms gap of an
+   ordinary train is the normal case and is makeable once the probes calibrate,
+   so it is NOT flagged - marking every train tight would be crying wolf. Below
+   about 80ms the engine's own +30-90ms spread is wider than the room the
+   window leaves it, and retries are re-rolling the same jitter, so that is
+   where the strip says so. */
+const CS_GAP_EDGE_MS = 25;
+const CS_GAP_TIGHT_MS = 80;
+
+function csnipeGapStrip(villageId) {
+	const el = document.getElementById('cs-gaps');
+	if (!el) return;
+	const list = csnipeVillageIncomings(villageId);
+	if (list.length < 2) {
+		// One command, so there is no gap to choose - it is the lone-incoming
+		// case the "land +ms after it" default already covers.
+		el.innerHTML = '';
+		return;
+	}
+	CS_GAPS = list;
+	el.innerHTML = '<div class="small text-muted mb-1">' + list.length +
+		' commands land on this village. Pick the gap to come home in — ' +
+		'usually the one after the first noble, since that is the one the ' +
+		'attacker loads:</div><div class="cs-gap-strip"></div>';
+	const strip = el.querySelector('.cs-gap-strip');
+	list.forEach(function(item, i) {
+		const next = list[i + 1];
+		const width = next ? (next.ms - item.ms) : null;
+		const tight = width !== null && width < CS_GAP_TIGHT_MS;
+		strip.insertAdjacentHTML('beforeend',
+			'<button class="btn btn-sm cs-gap' + (tight ? ' cs-gap-tight' : '') +
+			'" data-gap="' + i + '" onclick="csnipePickGap(' + i + ')">' +
+			'after <strong>.' + pad(item.ms % 1000, 3) + '</strong>' +
+			(next ? ' before <strong>.' + pad(next.ms % 1000, 3) + '</strong>' +
+				'<small class="d-block">' + width + ' ms' +
+				(tight ? ' · tight' : '') + '</small>'
+			      : '<small class="d-block">last · no deadline</small>') +
+			'</button>');
+	});
+	csnipeMarkGap();
+}
+
+let CS_GAPS = [];
+let CS_GAP_PICKED = null;
+
+function csnipeMarkGap() {
+	document.querySelectorAll('#cs-gaps .cs-gap').forEach(function(b) {
+		b.classList.toggle('active',
+			String(b.getAttribute('data-gap')) === String(CS_GAP_PICKED));
+	});
+}
+
+function csnipePickGap(i) {
+	const item = CS_GAPS[i];
+	if (!item) return;
+	CS_GAP_PICKED = i;
+	const next = CS_GAPS[i + 1];
+	// The gap's earlier end is the anchor: everything the form asks for is
+	// measured from the command the troops come home after.
+	csForm.incoming_id = item.c.command_id;
+	csForm.arrival = Math.floor(item.ms / 1000);
+	document.getElementById('cs-hit-ms').value = item.ms % 1000;
+	if (next) {
+		const width = next.ms - item.ms;
+		const aim = Math.max(1, Math.min(CS_GAP_EDGE_MS, Math.floor(width / 4)));
+		const latest = Math.max(aim + 1, width - CS_GAP_EDGE_MS);
+		document.getElementById('cs-aim-ms').value = aim;
+		document.getElementById('cs-latest-ms').value = latest;
+	} else {
+		// Nothing behind it, so there is no deadline to miss and no reason to
+		// crowd the hit: the lone-incoming advice applies.
+		document.getElementById('cs-aim-ms').value = 400;
+		document.getElementById('cs-latest-ms').value = '';
+	}
+	const d = new Date(item.ms);
+	document.getElementById('cs-context').textContent =
+		'· ' + (CSNIPE.villages[csForm.village_id] || {}).name +
+		', home after ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' +
+		pad(d.getSeconds()) + '.' + pad(item.ms % 1000, 3);
+	csnipeMarkGap();
+	csnipeReturnNote();
+}
+
+/* The moment the troops are actually home, spelled out from the two ms boxes.
+
+   A c-snipe is a dodge: the stack must be OUT when the hit lands and back
+   immediately after, so the return is always later than the hit. The Snipe tab
+   next door counts the other way - its offset is negative because support has
+   to be standing there BEFORE the command it is meeting - and reading one
+   convention onto the other is the one mistake here that costs a stack. */
+function csnipeReturnNote() {
+	const el = document.getElementById('cs-return-note');
+	if (!el || !csForm.arrival) { if (el) el.innerHTML = ''; return; }
+	const hit = parseInt(document.getElementById('cs-hit-ms').value, 10) || 0;
+	const aim = parseInt(document.getElementById('cs-aim-ms').value, 10) || 0;
+	const hitMs = csForm.arrival * 1000 + hit;
+	const back = hitMs + aim;
+	let html = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
+		'. Your troops are out for it and walk back in at </span><strong>' +
+		fmtMs(back) + '</strong><span class="text-muted"> \u2014 ' + aim +
+		' ms later. Earlier than the hit would mean home <em>for</em> it.</span>';
+	// The deadline is the end that decides whether this worked, so it is said
+	// in those words: the engine is never early and may be late, so the only
+	// way to miss is to drift past the next command.
+	const next = CS_GAP_PICKED === null ? null : CS_GAPS[CS_GAP_PICKED + 1];
+	if (next) {
+		const latest = parseInt(document.getElementById('cs-latest-ms').value, 10);
+		// Absolute moments throughout: a train usually sits inside one second,
+		// but it does not have to, and comparing bare ms offsets across a
+		// second boundary would read a safe deadline as a missed one.
+		const clear = isNaN(latest) ? null : next.ms - (hitMs + latest);
+		html += '<br><span class="text-muted">That is </span><strong>' +
+			(next.ms - back) + ' ms before</strong><span class="text-muted"> the ' +
+			'next command at ' + fmtMs(next.ms) + ', the one it must not be late ' +
+			'for. ' + (clear === null
+				? 'No deadline set, so a slow send can drift past it.'
+				: (clear > 0
+					? 'The deadline keeps it ' + clear + ' ms clear of that.'
+					: '<strong class="text-danger">The deadline is ' + (-clear) +
+					  ' ms past it - widen the gap or lower it.</strong>')) +
+			'</span>';
+	}
+	el.innerHTML = html;
+}
+
 /* Where the prefilled counts came from and how old they are. The figures are
    good enough to plan with and are not what you want to stake a send on, so
    the form says which reading it is showing rather than presenting either as
@@ -1174,6 +1371,15 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
 	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
+	CS_GAP_PICKED = null;
+	csnipeGapStrip(villageId);
+	// The row you clicked names the command you want to come home AFTER, so it
+	// selects that gap; the strip is there to move to another one.
+	const at = CS_GAPS.findIndex(function(g) {
+		return String(g.c.command_id) === String(commandId);
+	});
+	if (at >= 0 && CS_GAPS.length > 1) csnipePickGap(at);
+	csnipeReturnNote();
 	document.getElementById('cs-troop-note').innerHTML = csnipeHomeNote(v);
 	delete CS_LIVE['cs'];
 	document.getElementById('cs-error').textContent = '';
