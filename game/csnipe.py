@@ -578,11 +578,25 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                            "lands in under 20s", path=path)
         # First send moment >= now+2s (and >= the gate) on the right 2-second
         # parity: the return keeps the send's ms and lands an even number of
-        # seconds after it, so aim at R's ms offset + the late buffer (or the
-        # window's middle), corrected by the measured bias (the send is
-        # expected to land at aim + bias), all mod 2s.
-        aim = (return_ms + (window_ms // 2 if window_ms else buffer_ms)
-               - send_bias) % 2000
+        # seconds after it, so aim at R's ms offset + how late we mean to be,
+        # corrected by the measured bias (the send is expected to land at
+        # aim + bias), all mod 2s.
+        #
+        # How late we mean to be is the buffer - as close to the target as the
+        # calibration allows - and NOT the middle of the window. Aiming mid-
+        # window read the window as a request instead of a limit: a live snipe
+        # with a 1900ms window was aimed 950ms late, landed +987ms, and was
+        # reported as a window hit. It was a hit. It was also a second late in a
+        # gap measured in tens of milliseconds, when the same send aimed at the
+        # buffer would have landed +95ms.
+        #
+        # The middle only wins when the window is tighter than the buffer:
+        # there, aiming at the buffer is aiming past the far edge, so every
+        # send misses and the retry budget burns for nothing.
+        lateness = buffer_ms
+        if window_ms and window_ms < buffer_ms:
+            lateness = window_ms // 2
+        aim = (return_ms + lateness - send_bias) % 2000
         earliest = max(now + 2000, send_floor)
         send_target = earliest - (earliest % 2000) + aim
         if send_target < earliest:
@@ -604,8 +618,13 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
 
         _patch(sid, path=path, send_target_ms=int(send_target),
                travel_seconds=int(duration), send_attempts=attempt)
-        _event(sid, "sending in %.1fs (aimed at .%03d)%s"
-               % ((send_target - now) / 1000.0, send_target % 1000,
+        # The landing this aim implies, said before the send rather than after
+        # it: the ms alone cannot show a 2-second parity that is off, which is
+        # exactly the failure that looks like "right ms, one second out".
+        implied = int((send_target + send_bias - return_ms) % 2000)
+        _event(sid, "sending in %.1fs (aimed at .%03d, to land +%dms past the "
+               "target)%s"
+               % ((send_target - now) / 1000.0, send_target % 1000, implied,
                   " - attempt %d" % attempt if attempt > 1 else ""), path=path)
         clock.sleep_until(send_target, network_lead)
         # The mechanic does not care which kind of command it is - troops
