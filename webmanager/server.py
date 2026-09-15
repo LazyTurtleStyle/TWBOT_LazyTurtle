@@ -816,6 +816,37 @@ def troops_live():
     return jsonify(DataReader.live_home_troops(village_id))
 
 
+@app.route('/app/dead-clears', methods=['GET'])
+def dead_clears():
+    """Enemy villages whose attack on us died, from the reports already cached.
+    Optional min_units / min_loss_pct narrow it."""
+    def _int(name):
+        raw = request.args.get(name)
+        try:
+            return int(raw) if raw not in (None, "") else None
+        except ValueError:
+            return None
+    return jsonify({"ok": True,
+                    "rows": DataReader.dead_clears(_int("min_units"),
+                                                   _int("min_loss_pct"))})
+
+
+@app.route('/app/village/note', methods=['GET', 'POST'])
+def village_note():
+    """GET reads a village's note (and who/where it is); POST adds one line to
+    it, keeping whatever was already written there."""
+    village_id = (request.args.get("village_id")
+                  or (request.form.get("village_id") if request.form else None))
+    if not village_id:
+        return jsonify({"ok": False, "reason": "bad_village"})
+    if request.method == "GET":
+        return jsonify(DataReader.village_note_read(village_id))
+    line = request.form.get("line") or ""
+    if not line.strip():
+        return jsonify({"ok": False, "reason": "empty_line"})
+    return jsonify(DataReader.village_note_add(village_id, line.strip()))
+
+
 @app.route('/app/csnipe/cancel', methods=['GET', 'POST'])
 def csnipe_cancel():
     sid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")

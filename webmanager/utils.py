@@ -51,6 +51,11 @@ except Exception:  # pragma: no cover - dashboard still works without live reads
     read_home_troops = None
 
 try:
+    from game import villagenotes
+except Exception:  # pragma: no cover - dashboard still works without notes
+    villagenotes = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -1874,6 +1879,115 @@ class DataReader:
                 return json.load(handle).get("bot", {}).get("user_agent")
         except (OSError, ValueError):
             return None
+
+    # A nuke that dies is gone for weeks, so the village that sent it cannot
+    # hit again until it is rebuilt. Anything under this is a probe or a
+    # snipe-bait rather than a clear.
+    DEAD_CLEAR_MIN_UNITS = 5000
+    # Losses are near-binary in practice - on this account, of the incoming
+    # attacks over 2000 units, 41 lost everything and 52 lost under half, with
+    # a single 70% in between - so this only has to separate the two piles.
+    DEAD_CLEAR_MIN_LOSS_PCT = 90
+
+    @staticmethod
+    def dead_clears(min_units=None, min_loss_pct=None):
+        """Enemy villages whose attack on us died, newest first.
+
+        Read from the reports already on disk - every one of these was known
+        the day it happened, one report at a time, which is exactly why it is
+        worth collecting: by the time the next wave comes the answer is weeks
+        old and nobody remembers it.
+
+        A report counts when the attacker sent a real stack and got it all
+        killed. Only attacks ON us are considered (ours are in the same cache),
+        and each origin village is reported once with its most recent kill.
+        """
+        min_units = int(min_units or DataReader.DEAD_CLEAR_MIN_UNITS)
+        min_loss_pct = int(min_loss_pct if min_loss_pct is not None
+                           else DataReader.DEAD_CLEAR_MIN_LOSS_PCT)
+        managed = DataReader.cache_grab("managed") or {}
+        village_db = DataReader.cache_grab("villages") or {}
+        by_village = {}
+        for report in (DataReader.cache_grab("reports") or {}).values():
+            if report.get("type") != "attack":
+                continue
+            origin, dest = str(report.get("origin")), str(report.get("dest"))
+            if dest not in managed or origin in managed or not origin:
+                continue
+            extra = report.get("extra") or {}
+            sent = sum(OverviewBuilder._to_int(n)
+                       for n in (extra.get("units_sent") or {}).values())
+            lost = sum(OverviewBuilder._to_int(n)
+                       for n in (extra.get("units_losses") or {}).values())
+            if sent < min_units or not sent:
+                continue
+            pct = round(100.0 * lost / sent)
+            if pct < min_loss_pct:
+                continue
+            when = OverviewBuilder._to_int(extra.get("when"))
+            known = village_db.get(origin) or {}
+            previous = by_village.get(origin)
+            if previous and previous["when"] >= when:
+                continue
+            target = managed.get(dest) or {}
+            by_village[origin] = {
+                "village_id": origin,
+                "name": known.get("name"),
+                "coords": known.get("location"),
+                "points": known.get("points"),
+                "owner": str(known.get("owner")) if known.get("owner") else None,
+                "when": when,
+                "date": (datetime.datetime.fromtimestamp(when).strftime("%d-%m-%Y")
+                         if when else ""),
+                "sent": sent,
+                "lost": lost,
+                "loss_pct": pct,
+                "target_id": dest,
+                "target_name": (target.get("name")
+                                or (target.get("public") or {}).get("name") or dest),
+            }
+        rows = sorted(by_village.values(), key=lambda r: r["when"], reverse=True)
+        return rows
+
+    @staticmethod
+    def village_note_read(village_id):
+        """The note currently on a village, plus the token to change it."""
+        if villagenotes is None:
+            return {"ok": False, "reason": "unavailable"}
+        village_id = str(village_id)
+        if not village_id.isdigit():
+            return {"ok": False, "reason": "bad_village"}
+        session = DataReader.get_session() or {}
+        home = next(iter(DataReader.cache_grab("managed") or {}), None)
+        return villagenotes.read_note(
+            village_id, session.get("cookies") or {},
+            session.get("endpoint") or "", DataReader._bot_user_agent(),
+            home_village=home)
+
+    @staticmethod
+    def village_note_add(village_id, line):
+        """Add one line to a village's note without losing what is there.
+
+        Reads first, folds the line in with villagenotes.compose (which returns
+        nothing when the line is already present, so running this twice over the
+        same reports changes nothing), and only then saves.
+        """
+        if villagenotes is None:
+            return {"ok": False, "reason": "unavailable"}
+        current = DataReader.village_note_read(village_id)
+        if not current.get("ok"):
+            return current
+        merged = villagenotes.compose(current.get("note"), line)
+        if merged is None:
+            return {"ok": True, "skipped": "already noted",
+                    "note": current.get("note")}
+        session = DataReader.get_session() or {}
+        home = next(iter(DataReader.cache_grab("managed") or {}), None)
+        result = villagenotes.write_note(
+            str(village_id), merged, session.get("cookies") or {},
+            session.get("endpoint") or "", DataReader._bot_user_agent(),
+            current.get("csrf"), home_village=home)
+        return result
 
     @staticmethod
     def live_home_troops(village_id):
