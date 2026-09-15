@@ -766,6 +766,18 @@ function voTag(commandId, preset) {
 	});
 }
 
+/* When a command lands, to the millisecond. A train puts several commands
+   inside the same second, so ordering on the whole second alone leaves them in
+   whatever order they came out of the cache - and which one lands first is the
+   entire question when you are picking a gap to snipe into. Falls back to the
+   second (as .000) while the poller has not read a millisecond off the arrival
+   column yet. */
+function defArrivalMs(c) {
+	if (c.arrival_ms) return c.arrival_ms;
+	if (c.arrival) return c.arrival * 1000;
+	return (DEF_NOW + (c.eta || 0)) * 1000;
+}
+
 /* Hand the command straight to the snipe tab with the village and the hit
    already filled in - the whole point of having the button here is not typing
    a coordinate and a millisecond back in by hand. */
@@ -832,7 +844,7 @@ function voRender() {
 	const want = (document.getElementById('vo_label').value || '').trim().toLowerCase();
 	let rows = (v.commands || []).map(c => ({c: c, attack: true}))
 		.concat((v.supports || []).map(c => ({c: c, attack: false})))
-		.sort((a, b) => (a.c.eta || 0) - (b.c.eta || 0));
+		.sort((a, b) => defArrivalMs(a.c) - defArrivalMs(b.c));
 	// Filtering by command name is about finding attacks, so it drops support
 	// rather than asking why a reinforcement has no attack tag.
 	const total = rows.length;

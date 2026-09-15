@@ -2426,6 +2426,26 @@ class OverviewBuilder:
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _arrival_key(command):
+        """Sort key for an incoming or support command: its arrival to the ms.
+
+        A train lands several commands inside the same second, so ordering on
+        `arrival` alone leaves them in whatever order the cache happened to
+        hand over - and which of them lands first is the entire question when
+        you are picking a gap to snipe into. `arrival_ms` is the ms-exact
+        reading the poller takes off the arrival column; when it has not read
+        one yet the whole second is all we know, so it sorts as .000 and sits
+        ahead of anything in the same second whose millisecond IS known.
+        """
+        millis = command.get("arrival_ms")
+        if millis:
+            try:
+                return int(millis)
+            except (TypeError, ValueError):
+                pass
+        return OverviewBuilder._to_int(command.get("arrival")) * 1000
+
     @classmethod
     def _build_incomings(cls, village_db):
         """Group tracked incoming commands by target village, enriched with
@@ -2492,7 +2512,7 @@ class OverviewBuilder:
             by_target.setdefault(str(entry.get("target_id")), []).append(view)
 
         for commands in by_target.values():
-            commands.sort(key=lambda c: c.get("arrival") or 0)
+            commands.sort(key=cls._arrival_key)
         return by_target
 
     @classmethod
@@ -3137,7 +3157,7 @@ class DefenseOverview:
         except Exception:
             supports_by_target = {}
         for cmds in supports_by_target.values():
-            cmds.sort(key=lambda c: OverviewBuilder._to_int(c.get("eta")))
+            cmds.sort(key=OverviewBuilder._arrival_key)
 
         # Garrisons come from the account-wide troop-location reading the bot
         # refreshes every few minutes (cache/troops_moving.json), NOT from each
@@ -3302,7 +3322,7 @@ def live_incomings(managed, village_db):
                 "eta": c.get("eta"),
                 "tag": c.get("tag") or c.get("game_label") or c.get("tag_auto"),
             })
-    incomings.sort(key=lambda c: c.get("arrival") or 0)
+    incomings.sort(key=OverviewBuilder._arrival_key)
     return incomings
 
 
