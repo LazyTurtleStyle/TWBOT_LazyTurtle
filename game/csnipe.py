@@ -21,13 +21,27 @@ Constraints, and how they shape the flow:
   authoritative check.
 - Return arithmetic (measured live on an NL world, 2026-07-08, via the test tab): the
   server credits a cancelled command's under-way time in WHOLE seconds - the
-  troops land back at S + 2k seconds (k = whole seconds under way at the
-  cancel), keeping the send's millisecond offset exactly. The ms-precise
-  "2C - S" arrival the cancel-response page displays is a rendering artifact;
-  the command list afterwards (and the troops) follow the quantized value, so
-  the achieved return is read back from the command list, never from the
-  cancel page. Natural (uncancelled) returns floor the turnaround at the
-  target to :000 - the same whole-second crediting.
+  troops land back at S + 2k seconds, keeping the send's millisecond offset
+  exactly. The ms-precise "2C - S" arrival the cancel-response page displays is
+  a rendering artifact; the command list afterwards (and the troops) follow the
+  quantized value, so the achieved return is read back from the command list,
+  never from the cancel page. Natural (uncancelled) returns floor the turnaround
+  at the target to :000 - the same whole-second crediting.
+- What k counts, resolved live 2026-09-15: k is the number of wall-clock second
+  BOUNDARIES crossed between the send and the cancel, NOT (C - S) / 1000. Two
+  real snipes settled it, both with the cancel a hair past its aim:
+
+      send .611, cancel .861 same second  -> k as planned, return .611  (+139ms)
+      send .950, cancel .100 next second  -> k+1,          return .950  (+2163ms)
+
+  The second one is the whole proof: under send-ms crediting it had been under
+  way k seconds and 150ms and should have returned on plan; it came back a full
+  2s later, which is only what crossing one extra :000 buys. So the cancel is
+  planned against a wall-clock second and fired in the MIDDLE of it, where half
+  a second of slack sits on either side. Aiming it at S + k*1000 + margin - as
+  this did - silently bought the extra boundary for every send whose ms landed
+  at .850 or later, 15% of them, and that is a 2s late return: harmless on a
+  lone dodge, fatal in a train's 100ms gap.
 - Consequences for accuracy: the send's ms IS the return's ms, so the send is
   aimed at R's ms offset plus a small late buffer on the correct 2-SECOND
   parity (return - send must be an even number of seconds), and S is
@@ -45,8 +59,9 @@ Constraints, and how they shape the flow:
   rolls the return a fatal 2s early - so k is sized from the earliest the
   send may have fired, the cancel fires a margin into the window with no
   latency lead, and overshooting the far edge merely costs 2s of lateness.
-  Whether the window is anchored to the send's ms or to wall-clock seconds is
-  unresolved; firing after the later of the two starts is safe under both.
+  The window is anchored to wall-clock seconds (see above), so the cancel goes
+  in the middle of the crediting second rather than a margin past the send's
+  own ms.
 
 Parsing notes: TW renders ms clocks split across markup
 ('14:26:49<span>:641</span>'), so clock regexes must run on tag-stripped
@@ -96,8 +111,12 @@ SEND_LATE_BUFFER_MS = 150
 # Fire the cancel this far into its one-second window (adaptive: rtt/2
 # clamped to this range). Before the window opens the return rolls 2s early
 # - fatal; past the far edge it slips 2s late - harmless.
-CANCEL_MARGIN_MIN_MS = 250
-CANCEL_MARGIN_MAX_MS = 600
+# Where in the crediting second to fire the cancel. The credit is the number of
+# wall-clock second boundaries crossed (see the module docstring), so the safest
+# place is the middle of that second: half a second of room on both sides, and
+# the one-way latency of the request itself only pushes it further from the
+# edge that matters. Firing near a boundary is what cost a live snipe 2s.
+CANCEL_MID_SECOND_MS = 500
 # An unmeasured send may have fired up to this much before the aimed moment;
 # k is sized from that early bound (a too-small k returns 2s early).
 UNMEASURED_SEND_EARLY_MS = 300
@@ -353,23 +372,30 @@ def _cancel_window_ms():
     return int(config.get("command_cancel_time") or DEFAULT_CANCEL_WINDOW) * 1000
 
 
-def _plan_cancel(send_low_ms, send_high_ms, return_ms, rtt):
-    """Cancel moment under the quantized-return model: the troops land back
-    at S + 2k seconds, so pick the smallest k whose return is not before
-    return_ms and fire a margin into the one-second window that credits it.
-    k is sized from the earliest the send may have fired and the window
-    start from the latest - an error in either direction would otherwise
-    pull the return a fatal 2s early (pass send_low == send_high for a
-    measured send). Returns (fire_at_ms, margin_ms, k)."""
+def _plan_cancel(send_low_ms, send_high_ms, return_ms):
+    """Cancel moment under the quantized-return model: the troops land back at
+    S + 2k seconds, so pick the smallest k whose return is not before return_ms
+    and fire in the middle of the wall-clock second that credits it.
+
+    The credit is the number of second BOUNDARIES crossed between the send and
+    the cancel, not (cancel - send) / 1000 - measured live, see the module
+    docstring. So the cancel is anchored to a wall-clock second, never to the
+    send's own millisecond: aiming it at S + k*1000 + margin put it in the next
+    second whenever the send's ms was late enough that frac + margin passed
+    :000, and the extra boundary is credited as k+1, which lands the troops a
+    silent 2 seconds late. On a lone dodge that is harmless. In a noble train's
+    100ms gap it is the difference between walling the nobles and walking home
+    to a conquered village.
+
+    k is sized from the EARLIEST the send may have fired so the return is never
+    before return_ms, and the crediting second from the LATEST, so a send that
+    turns out to have been in the previous second is credited k+1 (2s late,
+    safe) rather than k-1 (2s early, fatal). Pass send_low == send_high for a
+    measured send. Returns (fire_at_ms, margin_ms, k)."""
     k = max(1, -(-(return_ms - send_low_ms) // 2000))
-    margin = int(min(CANCEL_MARGIN_MAX_MS, max(CANCEL_MARGIN_MIN_MS, rtt * 500)))
-    # If the crediting window is anchored to wall-clock seconds instead of
-    # the send's ms, everything past the next :000 belongs to k+1 (harmless,
-    # +2s); stay under it when the send's ms offset leaves room.
-    frac = int(send_high_ms % 1000)
-    if frac + margin > 900:
-        margin = max(150, 900 - frac)
-    return int(send_high_ms + k * 1000 + margin), margin, k
+    crediting_second = send_high_ms // 1000 + k
+    margin = CANCEL_MID_SECOND_MS
+    return int(crediting_second * 1000 + margin), margin, k
 
 
 def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
@@ -544,8 +570,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         if send_target < earliest:
             send_target += 2000
 
-        cancel_at, _, _ = _plan_cancel(send_target, send_target, return_ms,
-                                       clock.rtt)
+        cancel_at, _, _ = _plan_cancel(send_target, send_target, return_ms)
         if duration * 1000 < (cancel_at - send_target) + MIN_CANCEL_MARGIN_MS:
             return _finish(
                 sid, "failed",
@@ -653,8 +678,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                            "the outgoing command was already cancelled",
                            path=path, notify=False)
 
-    cancel_at, margin_ms, k = _plan_cancel(send_low, send_high, return_ms,
-                                           clock.rtt)
+    cancel_at, margin_ms, k = _plan_cancel(send_low, send_high, return_ms)
     return_planned = send_low + 2000 * k
     _patch(sid, path=path, send_ms=int(send_actual), outgoing_id=command_id,
            cancel_ms=int(cancel_at), return_planned_ms=int(return_planned))
