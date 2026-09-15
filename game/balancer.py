@@ -48,6 +48,17 @@ MAX_TRAVEL_SECONDS = 24 * 3600
 STATE_FILE = "cache/balancer.json"
 WORLD_CONFIG_FILE = "cache/world/config.json"
 
+# read_receiver's answer when the receiver has no marketplace at all: the page
+# that prints what is already on its way is simply not rendered, so there is
+# nothing to read and nothing wrong with the reading.
+NO_MARKET = "no_market"
+# How long that verdict stands before it is checked again. A marketplace is
+# built back (or catapulted down) on the scale of hours, and the cost of being
+# wrong is only that a village waits one window longer for resources, so this
+# is deliberately generous: the point is to stop every sender in the account
+# re-asking the same dead page on every pass.
+NO_MARKET_TTL = 4 * 3600
+
 
 def _load_state():
     if not FileManager.path_exists(STATE_FILE):
@@ -164,6 +175,33 @@ class ResourceBalancer:
             seen[key] = int(time.time())
             _save_state(state)
         return int(seen[key])
+
+    @staticmethod
+    def _no_market_until(target_id):
+        """When this receiver's "no marketplace" verdict expires, or 0."""
+        entry = (_load_state().get("_no_market") or {}).get(str(target_id))
+        return int(entry or 0) + NO_MARKET_TTL if entry else 0
+
+    @staticmethod
+    def _mark_no_market(target_id):
+        """Record that this receiver has no marketplace. True the first time,
+        so the warning is said once rather than by every sender on every pass."""
+        state = _load_state()
+        marks = state.setdefault("_no_market", {})
+        key = str(target_id)
+        now = int(time.time())
+        fresh = int(marks.get(key) or 0) + NO_MARKET_TTL > now
+        marks[key] = now
+        _save_state(state)
+        return not fresh
+
+    @staticmethod
+    def _clear_no_market(target_id):
+        """A receiver that answered properly has a marketplace again."""
+        state = _load_state()
+        marks = state.get("_no_market") or {}
+        if marks.pop(str(target_id), None) is not None:
+            _save_state(state)
 
     def _mark_turn(self):
         """Record that this village got its chance to send during this pass."""
@@ -342,6 +380,17 @@ class ResourceBalancer:
         text = getattr(page, "text", "") or ""
         if not text:
             return None
+        # A village whose marketplace is at 0 renders the page without the
+        # incoming-resources table at all, which is indistinguishable from a
+        # failed read if you only look for the markers. It is worth telling
+        # apart: one means the session or the page is wrong and is worth a
+        # warning every time, the other is a standing fact about that village
+        # that no amount of retrying will change. The level is read from the
+        # game's own state blob rather than the page's wording, so it does not
+        # depend on the account's language.
+        level = re.search(r'"market"\s*:\s*"?(\d+)', text)
+        if level and int(level.group(1)) == 0:
+            return NO_MARKET
         total = {}
         for res in RESOURCES:
             marker = 'id="total_%s"' % res
@@ -451,6 +500,14 @@ class ResourceBalancer:
                 continue
             points = self._points(village)
             if points > self.receiver_max_points or points >= my_points:
+                continue
+            # Known to have no marketplace, so its incoming-resources page will
+            # not render and the headroom cannot be measured. Skipping it here
+            # rather than at the end of the pass is what saves the request -
+            # one per sender per pass, for a village that cannot be helped.
+            if self._no_market_until(vid) > time.time():
+                self.logger.debug(
+                    "Skipping %s: no marketplace, nothing to read there", vid)
                 continue
             coming = self._pending(flights.get(vid),
                                    int(village.get("last_run") or 0))
@@ -916,11 +973,22 @@ class ResourceBalancer:
             # exist. So the room is re-measured against what the server says is
             # actually on its way, immediately before committing merchants.
             live = self.read_receiver(vid)
+            if live is NO_MARKET:
+                # Said once per village per TTL rather than once per sender per
+                # pass: with 50 senders this was 200+ identical warnings a day
+                # about a single village, which is how a real one gets missed.
+                if self._mark_no_market(vid):
+                    self.logger.warning(
+                        "%s has no marketplace, so what is already on its way "
+                        "cannot be read - it will not be balanced until one is "
+                        "built there", target.get("name") or vid)
+                continue
             if live is None:
                 self.logger.warning(
                     "Could not read what is already heading to %s - not "
                     "sending rather than guessing", vid)
                 continue
+            self._clear_no_market(vid)
             incoming = live["incoming"]
             room = self._headroom(live, incoming)
             if not any(v >= self.min_send_amount for v in room.values()):
