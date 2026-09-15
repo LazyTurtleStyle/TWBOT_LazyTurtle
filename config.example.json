@@ -75,6 +75,13 @@
     "auto_play": false,
     "option": "auto"
   },
+  "report_analysis": {
+    "enabled": false,
+    "min_units": 5000,
+    "min_loss_pct": 90,
+    "note_prefix": "Clear dood",
+    "max_per_run": 10
+  },
   "units": {
     "recruit": true,
     "upgrade": true,

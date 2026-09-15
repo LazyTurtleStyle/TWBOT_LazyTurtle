@@ -26,6 +26,8 @@ import urllib.parse
 
 import requests
 
+from core.filemanager import FileManager
+
 logger = logging.getLogger("WorldVillages")
 
 CACHE_REL = ("cache", "world", "villages_txt.json")
@@ -75,3 +77,30 @@ def fetch(endpoint):
     # A world always has thousands of villages; a handful means we read
     # something that was not the file.
     return villages if len(villages) > 100 else None
+
+
+def cached(wrapper, ttl=TTL):
+    """The world's village list, read at most once every `ttl` seconds.
+
+    Uses the bot's own wrapper so the request is paced and logged like every
+    other one it makes. The web process has no wrapper and goes through
+    fetch() instead; both write the same cache file, so whichever ran last
+    serves the other.
+    """
+    path = CACHE_REL[0] + "/" + "/".join(CACHE_REL[1:])
+    try:
+        if FileManager.path_exists(path):
+            full = FileManager._resolve(path)
+            if time.time() - os.path.getmtime(full) < ttl:
+                return FileManager.load_json_file(path) or {}
+    except (OSError, AttributeError):
+        pass
+    res = wrapper.get_url("map/village.txt") if wrapper is not None else None
+    text = getattr(res, "text", "") if res is not None else ""
+    villages = parse(text)
+    if len(villages) <= 100:
+        # Not the file - a redirect, an error page, or a world that has not
+        # published it. Whatever is on disk beats nothing.
+        return FileManager.load_json_file(path) or {}
+    FileManager.save_json_file(villages, path)
+    return villages

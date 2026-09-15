@@ -48,6 +48,7 @@ from game import dailybonus
 from game import events
 from game import markings
 from game import minter
+from game import reportanalysis
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
 from game.playerfarm import PlayerFarmManager
@@ -1279,6 +1280,19 @@ class TWB:
                 except Exception as exc:
                     logging.getLogger("Events").warning(
                         "Event pass failed: %s", exc)
+
+                # Read the reports back out and write what they mean onto the
+                # map. Off unless asked for: it writes to the game, and what it
+                # writes is a reading of a report rather than a fact the game
+                # states. Behind the event for the same reason as the Account
+                # Manager - it is not urgent, and a dead nuke stays dead.
+                try:
+                    reportanalysis.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config)
+                except Exception as exc:
+                    logging.getLogger("ReportAnalysis").warning(
+                        "Report analysis pass failed: %s", exc)
 
                 # Re-apply the in-game Account Manager templates. The daily
                 # pass inside run() is gated on active hours for the same

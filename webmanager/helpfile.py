@@ -53,6 +53,12 @@ help_file = {
     'events': 'The rotating in-game events (the weekly themed mini-game). The bot notices whichever event is running from a page it already loads, and can play it for you - see the Events page.',
     'events.auto_play': 'Let the bot play the running event. Its energy bar refills on a timer and stops refilling once full, so every hour it sits capped is an action thrown away - this spends the bar down every cycle. Off by default; nothing is ever played until you switch it on.',
     'events.option': 'Which choice to make: "auto" picks whichever option is worth the most right now (the jackpots move, so the best choice moves with them), or set a number to always take that one.',
+    'report_analysis': 'ALPHA. Reads your reports back out and writes what they mean onto the map. An attack that dies takes the attacker\'s nuke with it and rebuilding one takes weeks, so every defence that held is a fact about his next wave - that village cannot be in it. This finds those villages and writes the date onto each one as the private note the game keeps on its info page, where it is on screen the moment you click an incoming. See Defense -> Dead clears to look before switching it on.',
+    'report_analysis.enabled': 'Let the bot write the notes on its own. Off by default and it never turns itself on. The Dead clears tab does the same thing on demand, which is the way to try it first.',
+    'report_analysis.min_units': 'How big an attack has to be before losing it counts as losing a clear. Below this it is a probe, a fake or snipe-bait rather than a nuke.',
+    'report_analysis.min_loss_pct': 'How much of that attack has to have died. In practice this is near-binary - an attack either breaks on the wall or walks through it - so anything from about 80 upwards picks out the same set.',
+    'report_analysis.note_prefix': 'What the note says, with the date of the kill added after it. "Clear dood" gives "Clear dood 12-09-2026".',
+    'report_analysis.max_per_run': 'How many villages to note in one cycle. Each one costs two requests (read the note, save it), so a first run on a long war is spread over several cycles instead of going out in a burst.',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
     'building.default': 'The default template to use, village configs override this variable',
@@ -196,6 +202,7 @@ section_labels = {
     'farms': 'Farms',
     'market': 'Market',
     'balancer': 'Resource balancing',
+    'report_analysis': 'Report analysis (alpha)',
     'world': 'World',
     'flags': 'Flags',
     'village_template': 'Default village template',
@@ -267,6 +274,10 @@ section_setup = {
 # for a section fall into an automatic "Other" group at the bottom, so missing or
 # newly added keys are never dropped.
 config_groups = {
+    'report_analysis': [
+        ('Dead clears', ['enabled', 'min_units', 'min_loss_pct',
+                         'note_prefix', 'max_per_run']),
+    ],
     'notifications': [
         ('Connection', ['enabled', 'token', 'channel_id']),
         ('Which messages to receive', ['notify_session', 'notify_captcha',
