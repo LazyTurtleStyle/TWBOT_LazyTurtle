@@ -56,6 +56,11 @@ except Exception:  # pragma: no cover - dashboard still works without notes
     villagenotes = None
 
 try:
+    from game import worldvillages
+except Exception:  # pragma: no cover - dashboard still works without the map file
+    worldvillages = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -1880,6 +1885,42 @@ class DataReader:
         except (OSError, ValueError):
             return None
 
+    @staticmethod
+    def world_villages():
+        """Every village on the world, from the public map file, cached.
+
+        The bot's own map cache only covers the ground around its villages, so
+        an enemy further out is a bare id to it. This is the world's own list
+        and it costs one unauthenticated request for all of them.
+        """
+        if worldvillages is None:
+            return {}
+        path = DataReader.data_path(*worldvillages.CACHE_REL)
+        try:
+            if os.path.exists(path) and \
+                    time.time() - os.path.getmtime(path) < worldvillages.TTL:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+        except (OSError, ValueError):
+            pass
+        session = DataReader.get_session() or {}
+        fresh = worldvillages.fetch(session.get("endpoint") or "")
+        if not fresh:
+            # Stale beats nothing: an old ownership reading still names the
+            # village, and the alternative is a column of ids.
+            try:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+            except (OSError, ValueError):
+                return {}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                json.dump(fresh, handle)
+        except OSError:
+            pass
+        return fresh
+
     # A nuke that dies is gone for weeks, so the village that sent it cannot
     # hit again until it is rebuilt. Anything under this is a probe or a
     # snipe-bait rather than a clear.
@@ -1899,20 +1940,28 @@ class DataReader:
         old and nobody remembers it.
 
         A report counts when the attacker sent a real stack and got it all
-        killed. Only attacks ON us are considered (ours are in the same cache),
-        and each origin village is reported once with its most recent kill.
+        killed. The test for "on us" is that the attacking village is not one
+        of ours - NOT that the attacked one still is. A village that held and
+        was taken later is exactly the case worth keeping: on this account that
+        was 13 of 53 dead nukes, all of them on villages since conquered, and
+        requiring the target to still be ours silently threw them away.
+
+        Each origin village is reported once, with its most recent kill.
         """
         min_units = int(min_units or DataReader.DEAD_CLEAR_MIN_UNITS)
         min_loss_pct = int(min_loss_pct if min_loss_pct is not None
                            else DataReader.DEAD_CLEAR_MIN_LOSS_PCT)
         managed = DataReader.cache_grab("managed") or {}
         village_db = DataReader.cache_grab("villages") or {}
+        # The world's own map file, so an attacker outside the bot's map cache
+        # is still named rather than listed as a bare id - 37 of 53 were, here.
+        world = DataReader.world_villages()
         by_village = {}
         for report in (DataReader.cache_grab("reports") or {}).values():
             if report.get("type") != "attack":
                 continue
             origin, dest = str(report.get("origin")), str(report.get("dest"))
-            if dest not in managed or origin in managed or not origin:
+            if origin in managed or not origin or origin == "None":
                 continue
             extra = report.get("extra") or {}
             sent = sum(OverviewBuilder._to_int(n)
@@ -1925,17 +1974,22 @@ class DataReader:
             if pct < min_loss_pct:
                 continue
             when = OverviewBuilder._to_int(extra.get("when"))
-            known = village_db.get(origin) or {}
             previous = by_village.get(origin)
             if previous and previous["when"] >= when:
                 continue
-            target = managed.get(dest) or {}
+            known = village_db.get(origin) or {}
+            out = world.get(origin) or {}
+            coords = known.get("location")
+            if not coords and out.get("x") is not None:
+                coords = [out["x"], out["y"]]
+            target = managed.get(dest) or village_db.get(dest) or {}
             by_village[origin] = {
                 "village_id": origin,
-                "name": known.get("name"),
-                "coords": known.get("location"),
-                "points": known.get("points"),
-                "owner": str(known.get("owner")) if known.get("owner") else None,
+                "name": out.get("name") or known.get("name"),
+                "coords": coords,
+                "points": out.get("points") or known.get("points"),
+                "owner": out.get("owner")
+                         or (str(known.get("owner")) if known.get("owner") else None),
                 "when": when,
                 "date": (datetime.datetime.fromtimestamp(when).strftime("%d-%m-%Y")
                          if when else ""),
@@ -1945,6 +1999,10 @@ class DataReader:
                 "target_id": dest,
                 "target_name": (target.get("name")
                                 or (target.get("public") or {}).get("name") or dest),
+                # Whether the village it died on is still ours. A dead nuke on
+                # a village since lost still counts, and saying which is which
+                # is the difference between a list and a story.
+                "target_held": dest in managed,
             }
         rows = sorted(by_village.values(), key=lambda r: r["when"], reverse=True)
         return rows

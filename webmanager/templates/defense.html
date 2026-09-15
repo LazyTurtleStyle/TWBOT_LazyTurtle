@@ -788,6 +788,12 @@
 					<div class="input-group-append"><span class="input-group-text">%</span></div>
 				</div>
 			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Attacker</label>
+				<select class="form-control form-control-sm" id="dc-owner" onchange="dcRender()">
+					<option value="">everyone</option>
+				</select>
+			</div>
 			<div class="form-group col-12 col-md-3 mb-1">
 				<label>Note to write <small class="text-muted">(the date is added)</small></label>
 				<input type="text" class="form-control form-control-sm" id="dc-prefix" value="Clear dood">
@@ -2320,7 +2326,20 @@ function dcLoad() {
 	fetch('/app/dead-clears?min_units=' + units + '&min_loss_pct=' + (isNaN(pct) ? 90 : pct))
 		.then(r => r.json()).then(function(res) {
 			DC_ROWS = res.rows || [];
-			document.getElementById('dc-write-all').disabled = !DC_ROWS.length;
+			// One entry per attacker actually present, so the filter offers only
+			// choices that mean something.
+			const sel = document.getElementById('dc-owner');
+			const seen = {};
+			DC_ROWS.forEach(function(r) {
+				if (r.owner && !seen[r.owner]) { seen[r.owner] = r.owner_name || ('#' + r.owner); }
+			});
+			const keep = sel.value;
+			sel.innerHTML = '<option value="">everyone (' + DC_ROWS.length + ')</option>' +
+				Object.keys(seen).map(function(id) {
+					const n = DC_ROWS.filter(function(r) { return String(r.owner) === id; }).length;
+					return '<option value="' + id + '">' + esc(seen[id]) + ' (' + n + ')</option>';
+				}).join('');
+			if (keep) sel.value = keep;
 			note.innerHTML = DC_ROWS.length
 				? '<span class="text-muted">from the reports already on disk — nothing was asked of the game</span>'
 				: '<span class="text-muted">no attack that big has died on you</span>';
@@ -2329,16 +2348,29 @@ function dcLoad() {
 		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; });
 }
 
+/* The rows on screen: everything found, or one attacker's share of it. Kept as
+   a view over DC_ROWS rather than a re-fetch, because the scan is free and the
+   filter is a question about the same answer. */
+function dcVisible() {
+	const owner = (document.getElementById('dc-owner') || {}).value || '';
+	return DC_ROWS.map(function(r, i) { return {row: r, i: i}; })
+		.filter(function(x) { return !owner || String(x.row.owner) === owner; });
+}
+
 function dcRender() {
 	const body = document.querySelector('#dc-table tbody');
-	document.getElementById('dc-count').textContent = DC_ROWS.length
-		? DC_ROWS.length + ' village' + (DC_ROWS.length === 1 ? '' : 's')
+	const shown = dcVisible();
+	document.getElementById('dc-count').textContent = shown.length
+		? shown.length + ' village' + (shown.length === 1 ? '' : 's') +
+		  (shown.length === DC_ROWS.length ? '' : ' of ' + DC_ROWS.length)
 		: '';
-	if (!DC_ROWS.length) {
+	document.getElementById('dc-write-all').disabled = !shown.length;
+	if (!shown.length) {
 		body.innerHTML = '<tr><td colspan="8" class="text-muted small">Nothing matches.</td></tr>';
 		return;
 	}
-	body.innerHTML = DC_ROWS.map(function(r, i) {
+	body.innerHTML = shown.map(function(x) {
+		const r = x.row, i = x.i;
 		// Most enemy villages are outside the bot's map cache, so the name is
 		// often unknown until the note is read - which fetches the info page
 		// anyway. Until then the id is what there is, and saying so is better
@@ -2354,7 +2386,9 @@ function dcRender() {
 			'<td class="text-right mono">' + r.sent.toLocaleString() + '</td>' +
 			'<td class="text-right mono">' + r.lost.toLocaleString() +
 				' <small class="text-muted">' + r.loss_pct + '%</small></td>' +
-			'<td><small class="text-muted">' + esc(r.target_name || '') + '</small></td>' +
+			'<td><small class="text-muted">' + esc(r.target_name || '') +
+				// A nuke that died on a village you have since lost still died.
+				(r.target_held ? '' : ' <span class="text-warning">(since lost)</span>') + '</small></td>' +
 			'<td class="small dc-note" id="dc-note-' + i + '"></td>' +
 			'<td class="text-right"><button class="btn btn-sm btn-outline-warning py-0" ' +
 				'id="dc-btn-' + i + '" onclick="dcWrite(' + i + ')">note it</button></td></tr>';
@@ -2401,17 +2435,19 @@ function dcWriteAll() {
 	const button = document.getElementById('dc-write-all');
 	const note = document.getElementById('dc-note');
 	button.disabled = true;
+	// Only what is on screen: the filter is the selection.
+	const shown = dcVisible();
 	let done = 0;
-	const step = function(i) {
-		if (i >= DC_ROWS.length) {
-			note.innerHTML = '<span class="text-success">' + done + ' of ' + DC_ROWS.length + ' written</span>';
+	const step = function(n) {
+		if (n >= shown.length) {
+			note.innerHTML = '<span class="text-success">' + done + ' of ' + shown.length + ' written</span>';
 			button.disabled = false;
 			return;
 		}
-		note.innerHTML = '<span class="text-muted">writing ' + (i + 1) + ' of ' + DC_ROWS.length + '…</span>';
-		dcWrite(i).then(function(ok) {
+		note.innerHTML = '<span class="text-muted">writing ' + (n + 1) + ' of ' + shown.length + '…</span>';
+		dcWrite(shown[n].i).then(function(ok) {
 			if (ok) done++;
-			setTimeout(function() { step(i + 1); }, 400);
+			setTimeout(function() { step(n + 1); }, 400);
 		});
 	};
 	step(0);
