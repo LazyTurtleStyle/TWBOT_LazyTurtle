@@ -396,9 +396,11 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
         aim = int(clock.server_now_ms() + 3000)
         clock.sleep_until(aim, network_lead)
         ok, _ = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
-                                             expect="support")
-        if not ok:
-            break
+                                             expect="attack")
+        # Look for the command even when the launch reported failure: a probe
+        # that WAS created and is then abandoned walks to the barb and back
+        # with the village's spear, which is how a "failed calibration" left
+        # troops in the air. Only the measurement is skipped, never the cancel.
         _, arrival, cancel_url = _locate_outgoing(
             wrapper, clock, village_id, tx, ty, aim + duration * 1000)
         cancelled_at = clock.server_now_ms()
@@ -406,10 +408,15 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
             wrapper.get_url(cancel_url)
             # a cancelled probe walks home for as long as it was under way
             home_ms = max(home_ms, cancelled_at + (cancelled_at - aim) + 3000)
-        else:
-            # no cancel link: the probe lands on the barb and walks back on
-            # its own; travel there and back plus slack
+        elif ok:
+            # sent, but the command could not be found to cancel: it lands on
+            # the barb and walks back on its own; travel there and back plus
+            # slack. Only when it really was sent - charging the caller a
+            # multi-hour wait for a launch that created nothing would hold the
+            # real send until long after the gap it was aimed at.
             home_ms = max(home_ms, aim + 2000 * duration + 5000)
+        if not ok:
+            break
         if arrival is not None:
             offset = arrival - duration * 1000 - aim
             if abs(offset) <= 400:  # anything bigger is a mismeasurement
@@ -558,11 +565,26 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                % ((send_target - now) / 1000.0, send_target % 1000,
                   " - attempt %d" % attempt if attempt > 1 else ""), path=path)
         clock.sleep_until(send_target, network_lead)
+        # A c-snipe sends an ATTACK on a barbarian village - that is the whole
+        # mechanic, the troops are cancelled mid-flight and walk home. Checking
+        # the launch against "support" rejected every send the game made
+        # correctly, and since the check runs AFTER the request, the command was
+        # already standing in the rally point when the snipe reported failure.
         ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
-                                               expect="support")
+                                               expect="attack")
         if not ok:
-            return _finish(sid, "failed", "launch request failed - troops did NOT "
-                           "leave", path=path)
+            # The game may have made a command anyway (a launch can be refused
+            # for being the wrong kind only because it exists), and a failed
+            # snipe must never leave the village's defence walking to a barb.
+            # Pull it back if it is there; the cancel window is minutes wide
+            # and we are inside it by seconds.
+            _, _, stray_url = _locate_outgoing(
+                wrapper, clock, village_id, snipe.get("target_x"),
+                snipe.get("target_y"), send_target + duration * 1000)
+            recalled = bool(stray_url) and wrapper.get_url(stray_url) is not None
+            return _finish(sid, "failed", "%s%s" % (
+                msg, " - the command it made has been recalled" if recalled
+                else ""), path=path)
 
         # Measure the true send moment: the outgoing command's millisecond arrival
         # minus the (whole-second) server travel duration. Falls back to the aimed
