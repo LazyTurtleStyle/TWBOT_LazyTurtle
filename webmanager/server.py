@@ -783,7 +783,9 @@ def csnipe_arm():
     lead_min, target_x, target_y, units {unit: count}, test (dry run against a
     chosen return moment instead of an incoming), window_ms (optional: the
     return must land at most this many ms past the target - the engine
-    re-fires missed sends until one is inside the window)."""
+    re-fires missed sends until one is inside the window), support (send the
+    outgoing command as support rather than an attack - required for one of
+    your own villages, impossible for a barbarian)."""
     body = request.get_json(silent=True) or {}
     entry, error = DataReader.csnipe_arm(
         village_id=body.get("village_id"),
@@ -796,6 +798,7 @@ def csnipe_arm():
         units=body.get("units") or {},
         test=bool(body.get("test")),
         window_ms=body.get("window_ms"),
+        support=bool(body.get("support")),
     )
     if error:
         return jsonify({"ok": False, "error": error})

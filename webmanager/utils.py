@@ -1080,11 +1080,46 @@ class DataReader:
         return csnipe.load_snipes(path=DataReader.csnipe_path())
 
     @staticmethod
+    def _csnipe_target_kind(tx, ty):
+        """What kind of command can be sent at (tx|ty): ("attack"|"support"|
+        None, target_name).
+
+        The game decides this, not the user: a barbarian village cannot be
+        supported and one of your own cannot be attacked. None means the map
+        cache does not know the village, in which case whatever was asked for
+        is let through - refusing on missing cache data would block a target
+        the player can see perfectly well in game.
+        """
+        managed = set(str(v) for v in (DataReader.cache_grab("managed") or {}))
+        for vid, v in (DataReader.cache_grab("villages") or {}).items():
+            loc = v.get("location")
+            if not loc or len(loc) != 2:
+                continue
+            try:
+                if int(loc[0]) != tx or int(loc[1]) != ty:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            name = v.get("name")
+            name = name if isinstance(name, str) and name else None
+            if str(v.get("owner")) == "0":
+                return "attack", name
+            if str(vid) in managed:
+                return "support", name
+            return None, name          # somebody else's - either is possible
+        return None, None
+
+    @staticmethod
     def csnipe_arm(village_id, incoming_id, first_hit_ms, aim_ms, lead_min,
-                   target_x, target_y, units, test=False, window_ms=None):
+                   target_x, target_y, units, test=False, window_ms=None,
+                   support=False):
         """Arm a cancel snipe: the bot sends `units` from the attacked village
         toward (target_x|target_y) and cancels at the halfway moment so they
         land back home at first_hit_ms + aim_ms (epoch milliseconds).
+        With support=True the outgoing command is support rather than an
+        attack - the dodge is identical, but a cancel that never goes through
+        parks the troops in the target village instead of throwing them at a
+        barbarian that may well defend itself.
         With window_ms > 0 (alpha) the return must land within that many ms
         PAST the target: the engine aims mid-window and re-fires missed sends
         until one lands inside it. 0/None keeps the late-safe one-shot mode.
@@ -1145,13 +1180,18 @@ class DataReader:
                           "at the cancel moment" %
                           ("%d|%d" % (tx, ty), (lead_seconds // 2 + 120) // 60))
 
-        target_name = None
-        for v in DataReader.cache_grab("villages").values():
-            vloc = v.get("location")
-            if vloc and len(vloc) == 2 and int(vloc[0]) == tx and int(vloc[1]) == ty:
-                nm = v.get("name")
-                target_name = nm if isinstance(nm, str) and nm else None
-                break
+        # The game will not let you support a barbarian or attack your own
+        # village, and it refuses the whole command rather than adapting. Better
+        # to say so here than to have the send fail at the millisecond it was
+        # supposed to fire, with no second chance at that gap.
+        support = bool(support)
+        kind, target_name = DataReader._csnipe_target_kind(tx, ty)
+        if kind == "attack" and support:
+            return None, ("%d|%d is a barbarian village - it can be attacked, "
+                          "not supported" % (tx, ty))
+        if kind == "support" and not support:
+            return None, ("%d|%d is your own village - send support to it, "
+                          "you cannot attack it" % (tx, ty))
 
         entry = {
             "id": uuid.uuid4().hex[:12],
@@ -1167,6 +1207,7 @@ class DataReader:
             "target_name": target_name,
             "distance": round(distance, 1),
             "units": selected,
+            "support": support,
             "lead_seconds": lead_seconds,
             "window_ms": window_ms,
             "start_ts": int(max(now, return_ms / 1000.0 - lead_seconds)),
@@ -3404,23 +3445,30 @@ class CSnipeOverview:
     DEFAULT_AIM_MS = 150
 
     @staticmethod
-    def _suggest_barb(loc, barbs, speeds, world_speed, unit_speed, lead_seconds):
-        """Nearest barb whose travel time keeps the troops under way at the
-        cancel moment even for a pure-heavy send; slower units only add margin."""
+    def _suggest_target(loc, candidates, speeds, world_speed, unit_speed,
+                        lead_seconds, kind):
+        """Nearest of `candidates` whose travel time keeps the troops under way
+        at the cancel moment even for a pure-heavy send; slower units only add
+        margin. `kind` is the command such a target takes ("attack" for a
+        barbarian, "support" for one of your own), which the form needs because
+        the game refuses the other one outright."""
         if not (field_distance and unit_travel_seconds) or not loc:
             return None
         base = speeds.get("heavy") or 11
         required = lead_seconds / 2.0 + 180
         best = None
-        for barb in barbs:
-            distance = field_distance(loc, barb["location"])
+        for candidate in candidates:
+            distance = field_distance(loc, candidate["location"])
             travel = unit_travel_seconds(distance, base, world_speed, unit_speed)
             if travel < required:
                 continue
             if best is None or distance < best["distance"]:
                 best = {
-                    "x": int(barb["location"][0]), "y": int(barb["location"][1]),
-                    "name": barb.get("name"),
+                    "x": int(candidate["location"][0]),
+                    "y": int(candidate["location"][1]),
+                    "name": candidate.get("name"),
+                    "kind": kind,
+                    "support": kind == "support",
                     "distance": round(distance, 1),
                     "travel_min_heavy": int(travel // 60),
                 }
@@ -3466,6 +3514,7 @@ class CSnipeOverview:
             live = home_reading.get(str(vid))
             source = live if live is not None else avail
             name = vdata.get("name") or pub.get("name") or vid
+            lead = cls.DEFAULT_LEAD_MIN * 60
             villages[str(vid)] = {
                 "id": str(vid),
                 "name": name,
@@ -3475,8 +3524,17 @@ class CSnipeOverview:
                 # Whether that came from the live reading or from the village's
                 # own stale snapshot, so the form can say which it is showing.
                 "home_fresh": live is not None,
-                "barb": cls._suggest_barb(loc, barbs, speeds, ws, us,
-                                          cls.DEFAULT_LEAD_MIN * 60),
+                "barb": cls._suggest_target(loc, barbs, speeds, ws, us,
+                                            lead, "attack"),
+                # Somewhere to send that is not a fight. A cancel that never
+                # goes through throws the stack at the barb, and a grown barb
+                # defends; support that fails to cancel just parks it in your
+                # own village, alive, until you recall it. Offered always, not
+                # only when there is no barb - which of the two failure modes
+                # you want is the player's call, not the map's.
+                "friendly": cls._suggest_target(
+                    loc, [v for v in own_villages if v["id"] != str(vid)],
+                    speeds, ws, us, lead, "support"),
             }
         incomings = live_incomings(managed, village_db)
 

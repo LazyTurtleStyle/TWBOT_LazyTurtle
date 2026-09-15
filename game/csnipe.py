@@ -4,10 +4,18 @@ Cancel-snipe ("c-snipe") engine.
 A cancel snipe puts a village's defense back home inside the milliseconds-wide
 gap of an incoming noble train. The mechanic: troops whose command is cancelled
 walk home for exactly as long as they had been under way, so a command sent at
-S and cancelled at C returns at 2C - S. We send the defense out as an attack on
-a (far enough) barbarian village, measure S to the millisecond, cancel at
-C = (S + R) / 2, and the stack lands back home at the chosen return moment R -
-e.g. 25ms behind the first hit of the train, in front of the nobles.
+S and cancelled at C returns at 2C - S. We send the defense out at a (far
+enough) target, measure S to the millisecond, cancel at C = (S + R) / 2, and
+the stack lands back home at the chosen return moment R - e.g. 25ms behind the
+first hit of the train, in front of the nobles.
+
+The outgoing command is an attack on a barbarian village or support to one of
+your own; the dodge is identical either way and the choice is only about where
+the troops end up if the cancel never goes through. A barb bounces them back
+unattended but is a fight - a grown barb defends, and that is how a failed
+cancel eats a stack. Support parks them in the target village, alive, until you
+recall them by hand. The game settles the kind: a barbarian village cannot be
+supported and your own cannot be attacked.
 
 Constraints, and how they shape the flow:
 
@@ -399,14 +407,17 @@ def _plan_cancel(send_low_ms, send_high_ms, return_ms):
 
 
 def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
-                     network_lead=0.0):
+                     network_lead=0.0, support=False):
     """Measure today's send-timing bias with throwaway probes.
 
-    Fires up to PROBE_COUNT one-unit attacks at the snipe target, compares
+    Fires up to PROBE_COUNT one-unit commands at the snipe target, compares
     each processed send moment (ms arrival minus server travel time) against
     its aim, and cancels the probe right away. The probes use one unit of a
     type from the snipe's own selection, so the caller must wait until they
     are home again (second return value) before preparing the real send.
+    They must be the same KIND of command as the real send - the bias being
+    measured is this connection's send timing, but a probe of the wrong type
+    is simply refused by the game and measures nothing.
     Returns (offsets list in ms, epoch ms when all probe troops are back)."""
     unit = next(iter(units))
     offsets = []
@@ -416,13 +427,14 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
         if entry is None or entry.get("disarm_requested"):
             break
         confirm_data, duration, err = attack_scheduler.prepare_command(
-            wrapper, village_id, tx, ty, {unit: 1})
+            wrapper, village_id, tx, ty, {unit: 1}, support=support)
         if err:
             break
         aim = int(clock.server_now_ms() + 3000)
         clock.sleep_until(aim, network_lead)
-        ok, _ = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
-                                             expect="attack")
+        ok, _ = attack_scheduler.fire_command(
+            wrapper, village_id, confirm_data,
+            expect="support" if support else "attack")
         # Look for the command even when the launch reported failure: a probe
         # that WAS created and is then abandoned walks to the barb and back
         # with the village's spear, which is how a "failed calibration" left
@@ -481,6 +493,12 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     sid = snipe.get("id")
     village_id = snipe.get("village_id")
     return_ms = int(snipe.get("return_ms", 0))
+    # Barbarians can only be attacked and your own villages can only be
+    # supported, so the target decides this at arming time and the runner just
+    # honours it. The dodge itself is identical either way; what differs is
+    # where the troops end up if the cancel never goes through - bounced off a
+    # barb and walking home, or parked in the village they were sent to.
+    support = bool(snipe.get("support"))
 
     clock = _Clock()
     if clock.sync(wrapper, "game.php?village=%s&screen=overview" % village_id) is None \
@@ -514,7 +532,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         offsets, probes_home = _probe_send_bias(
             wrapper, clock, sid, village_id, snipe.get("target_x"),
             snipe.get("target_y"), snipe.get("units") or {}, path,
-            network_lead)
+            network_lead, support=support)
         if len(offsets) >= 2:
             send_bias = sum(offsets) // len(offsets)
             spread = max(offsets) - min(offsets)
@@ -550,7 +568,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         # every attempt needs a fresh confirm token.
         confirm_data, duration, err = attack_scheduler.prepare_command(
             wrapper, village_id, snipe.get("target_x"), snipe.get("target_y"),
-            snipe.get("units") or {})
+            snipe.get("units") or {}, support=support)
         if err:
             return _finish(sid, "failed", err, path=path)
 
@@ -590,13 +608,15 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                % ((send_target - now) / 1000.0, send_target % 1000,
                   " - attempt %d" % attempt if attempt > 1 else ""), path=path)
         clock.sleep_until(send_target, network_lead)
-        # A c-snipe sends an ATTACK on a barbarian village - that is the whole
-        # mechanic, the troops are cancelled mid-flight and walk home. Checking
-        # the launch against "support" rejected every send the game made
-        # correctly, and since the check runs AFTER the request, the command was
-        # already standing in the rally point when the snipe reported failure.
-        ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
-                                               expect="attack")
+        # The mechanic does not care which kind of command it is - troops
+        # cancelled mid-flight walk home either way - but the game does, and so
+        # must the check: verifying an attack on a barb against "support"
+        # rejected every send the game had made correctly, and since the check
+        # runs AFTER the request, the command was already standing in the rally
+        # point when the snipe reported failure.
+        ok, msg = attack_scheduler.fire_command(
+            wrapper, village_id, confirm_data,
+            expect="support" if support else "attack")
         if not ok:
             # The game may have made a command anyway (a launch can be refused
             # for being the wrong kind only because it exists), and a failed
@@ -634,9 +654,15 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                    "bounding the send -%d/+%dms around the aim (late-safe)"
                    % (UNMEASURED_SEND_EARLY_MS, int(clock.rtt * 1000)), path=path)
         if not cancel_url:
+            # Where an uncancellable command leaves the troops depends on what
+            # kind it is, and that is the difference between "they are late"
+            # and "go and fetch them".
             return _finish(sid, "failed", "no cancel link found on the outgoing "
-                           "command - troops will hit the target and return on "
-                           "their own", path=path, outgoing_id=command_id)
+                           "command - the troops %s" % (
+                               "will land as support in the target village and "
+                               "stay there until you recall them" if support else
+                               "will hit the target and return on their own"),
+                           path=path, outgoing_id=command_id)
 
         if not window_ms:
             break

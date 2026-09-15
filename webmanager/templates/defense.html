@@ -56,6 +56,12 @@
 	   marked rather than presented as an equal choice. */
 	.cs-gap-tight { border-style: dashed; }
 	.cs-gap-tight small { color: var(--warn, #d8a657); opacity: .9; }
+	.cs-target-strip { display: flex; flex-wrap: wrap; gap: .35rem; }
+	.cs-target { border: 1px solid var(--line, #3a2f26); background: var(--surface-2, #241d17);
+		color: inherit; font-size: .72rem; line-height: 1.15; padding: .2rem .45rem; text-align: left; }
+	.cs-target small { opacity: .65; }
+	.cs-target.active { border-color: var(--ember, #e07b2c); box-shadow: inset 0 0 0 1px var(--ember, #e07b2c); }
+	.cs-kind { font-size: .72rem; padding: 0 .25rem; height: auto; }
 </style>
 
 {% macro csnipe_rows(snipes, empty_text) %}
@@ -410,7 +416,7 @@
 		     actually produces is spelled out rather than left to be worked out
 		     from two boxes three columns apart. -->
 		<div class="small mb-2" id="cs-return-note"></div>
-		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
+		<div class="small mb-2" id="cs-barb-hint"></div>
 		<!-- Same facts as before, in the order you need them: what the two
 		     numbers you type mean, then what to type, then how close it lands.
 		     One twelve-line paragraph asked you to hold all three at once. -->
@@ -503,7 +509,7 @@
 				<input type="number" class="form-control form-control-sm" id="cst-ty">
 			</div>
 		</div>
-		<small class="text-muted d-block mb-2" id="cst-barb-hint"></small>
+		<div class="small mb-2" id="cst-barb-hint"></div>
 		<small class="text-muted d-block mb-2">The two fields together are the full return moment
 			HH:MM:SS<strong>:mmm</strong>. The ms field is <em>part of the time</em>, not a margin. A time in
 			the past means <strong>tomorrow</strong>. Aim at a non-zero millisecond (e.g. .250): an uncancelled
@@ -1101,20 +1107,83 @@ function csnipeUnitGrid(grid, v, unitClass) {
 	});
 }
 
-function csnipeBarbPrefill(v, txId, tyId, hintId) {
-	if (v.barb) {
-		document.getElementById(txId).value = v.barb.x;
-		document.getElementById(tyId).value = v.barb.y;
-		document.getElementById(hintId).textContent =
-			'Suggested barb: ' + (v.barb.name || '') + ' ' + v.barb.x + '|' + v.barb.y +
-			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav), ' +
-			'any target works as long as the troops are still under way at the cancel moment.';
-	} else {
-		document.getElementById(txId).value = '';
-		document.getElementById(tyId).value = '';
-		document.getElementById(hintId).textContent =
-			'No barb suggestion available (map cache empty?). Enter target coords manually.';
+/* ---------- where the troops go while they dodge ----------------------
+   Anywhere far enough that they are still under way at the cancel moment -
+   about half a field at spear pace for the default lead, so almost anything
+   qualifies. What the target changes is not the dodge, it is what happens when
+   the cancel does NOT go through:
+
+     a barbarian  - the command is an attack; the stack bounces back home
+                    unattended, but it has to fight whatever the barb has
+                    grown, and that is how a failed cancel eats a stack;
+     your own     - the command is support; the stack parks in that village,
+                    alive, until you recall it by hand.
+
+   The game decides the kind from the target: a barbarian cannot be supported
+   and your own village cannot be attacked, so picking the target picks the
+   command. Somebody else's village takes either, and the select says which. */
+const CS_TARGET = {};
+
+function csnipeTargetPicker(v, prefix) {
+	const box = document.getElementById(prefix + '-barb-hint');
+	const options = [v.barb, v.friendly].filter(Boolean);
+	if (!options.length) {
+		document.getElementById(prefix + '-tx').value = '';
+		document.getElementById(prefix + '-ty').value = '';
+		CS_TARGET[prefix] = {support: false};
+		box.innerHTML = '<span class="text-warning">No target far enough out in ' +
+			'the map cache. Enter coordinates by hand — anything whose travel ' +
+			'time is over half the engage lead will do.</span>';
+		return;
 	}
+	CS_OPTIONS[prefix] = options;
+	box.innerHTML = '<div class="cs-target-strip mb-1"></div>' +
+		'<span class="text-muted">Send as </span>' +
+		'<select class="form-control form-control-sm d-inline-block cs-kind" ' +
+			'style="width:auto" id="' + prefix + '-kind" ' +
+			'onchange="csnipeKindChanged(\'' + prefix + '\')">' +
+			'<option value="attack">attack</option>' +
+			'<option value="support">support</option></select> ' +
+		'<small class="text-muted" id="' + prefix + '-kind-note"></small>';
+	const strip = box.querySelector('.cs-target-strip');
+	options.forEach(function(o, i) {
+		strip.insertAdjacentHTML('beforeend',
+			'<button class="btn btn-sm cs-target" data-target="' + i + '" ' +
+			'onclick="csnipePickTarget(\'' + prefix + '\',' + i + ')">' +
+			(o.support ? 'your ' + esc(o.name || 'village')
+			           : 'barbarian' + (o.name ? ' ' + esc(o.name) : '')) +
+			' <span class="coord">' + o.x + '|' + o.y + '</span>' +
+			'<small class="d-block">' + o.distance + ' f · ~' +
+			o.travel_min_heavy + ' min heavy · ' + o.kind + '</small></button>');
+	});
+	// The barb stays the default, so nothing changes for anyone who was happy
+	// with it; the alternative is one click away.
+	csnipePickTarget(prefix, 0);
+}
+const CS_OPTIONS = {};
+
+function csnipePickTarget(prefix, i) {
+	const o = (CS_OPTIONS[prefix] || [])[i];
+	if (!o) return;
+	document.getElementById(prefix + '-tx').value = o.x;
+	document.getElementById(prefix + '-ty').value = o.y;
+	document.getElementById(prefix + '-kind').value = o.kind;
+	CS_TARGET[prefix] = {support: !!o.support};
+	document.querySelectorAll('#' + prefix + '-barb-hint .cs-target')
+		.forEach(function(b) {
+			b.classList.toggle('active', String(b.getAttribute('data-target')) === String(i));
+		});
+	csnipeKindChanged(prefix);
+}
+
+function csnipeKindChanged(prefix) {
+	const sel = document.getElementById(prefix + '-kind');
+	if (!sel) return;
+	const support = sel.value === 'support';
+	CS_TARGET[prefix] = {support: support};
+	document.getElementById(prefix + '-kind-note').innerHTML = support
+		? 'if the cancel fails the troops park there, alive, until you recall them'
+		: 'if the cancel fails the troops attack it and walk home on their own';
 }
 
 function csnipeCollectUnits(unitClass) {
@@ -1369,7 +1438,7 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	document.getElementById('cs-context').textContent =
 		'· ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
-	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
+	csnipeTargetPicker(v, 'cs');
 	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
 	CS_GAP_PICKED = null;
 	csnipeGapStrip(villageId);
@@ -1414,6 +1483,7 @@ function csnipeArm() {
 		lead_min: parseFloat(document.getElementById('cs-lead-min').value) || 18,
 		target_x: document.getElementById('cs-tx').value,
 		target_y: document.getElementById('cs-ty').value,
+		support: !!(CS_TARGET.cs || {}).support,
 		units: units,
 	};
 	fetch('/app/csnipe/arm', {
@@ -1464,7 +1534,7 @@ function csnipeDisarm(id) {
 function cstVillageChanged() {
 	const v = CSNIPE.villages[document.getElementById('cst-village').value];
 	if (!v) return;
-	csnipeBarbPrefill(v, 'cst-tx', 'cst-ty', 'cst-barb-hint');
+	csnipeTargetPicker(v, 'cst');
 	csnipeUnitGrid(document.getElementById('cst-units'), v, 'cst-unit');
 	document.getElementById('cst-troop-note').innerHTML = csnipeHomeNote(v);
 	delete CS_LIVE['cst'];
@@ -1494,6 +1564,7 @@ function cstArm() {
 		lead_min: parseFloat(document.getElementById('cst-lead').value) || 18,
 		target_x: document.getElementById('cst-tx').value,
 		target_y: document.getElementById('cst-ty').value,
+		support: !!(CS_TARGET.cst || {}).support,
 		units: units,
 		test: true,
 	};
