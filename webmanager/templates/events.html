@@ -175,8 +175,12 @@
 		{% if c.board %}
 		<div class="card mb-3">
 			<div class="card-header py-2"><strong>The board</strong>
-				<small class="text-muted ml-2">square {{ c.board.position if c.board.position is not none else '?' }},
-					board #{{ c.board.board_id }}{% if c.board.squares %} · {{ c.board.squares }} squares dealt{% endif %}</small></div>
+				{# The board's id is the game's own instance counter, not "your Nth
+				   board" - it jumped from 9 to 633 in an hour - so it is not shown.
+				   Dragons killed is the count that means something, and the tile
+				   above already has it. #}
+				<small class="text-muted ml-2">square {{ c.board.position if c.board.position is not none else '?' }}{%
+					if c.board.squares %} · {{ c.board.squares }} squares dealt{% endif %}</small></div>
 			<div class="card-body py-2">
 				{% if c.by_square %}
 				<div class="mb-2">
