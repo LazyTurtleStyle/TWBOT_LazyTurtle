@@ -2543,6 +2543,52 @@ class OverviewBuilder:
                 pass
         return OverviewBuilder._to_int(command.get("arrival")) * 1000
 
+    @staticmethod
+    def _with_attacked_targets(managed, village_db, incomings_by_target):
+        """`managed`, plus any village the poller sees attacks on that the bot
+        has not run yet.
+
+        A village only gets a managed snapshot when the bot's cycle reaches it,
+        and on a big account that is hours after it is conquered. Everything on
+        the Defense page is keyed off those snapshots, so a village taken this
+        afternoon was invisible on it while three attacks walked towards it -
+        precisely the case the page exists for, missed for the least
+        interesting possible reason.
+
+        The map cache knows the village (it is on the map whoever owns it), so
+        its name and coordinates stand in until the bot writes a real snapshot.
+        No troops are claimed for it: an empty available_troops reads as "not
+        known", which is the truth, rather than as a garrison.
+        """
+        if not incomings_by_target:
+            return managed
+        extra = {}
+        for target_id, commands in incomings_by_target.items():
+            if str(target_id) in managed or not commands:
+                continue
+            known = village_db.get(str(target_id)) or {}
+            extra[str(target_id)] = {
+                "name": known.get("name") or str(target_id),
+                "public": {"location": known.get("location"),
+                           "points": known.get("points")},
+                "available_troops": {},
+                "troops": {},
+                "building_queue": [],
+                # The dashboard's village table reads these per resource, so
+                # they are present and zero rather than absent: nothing is known
+                # about the village yet, and a missing key is a render error
+                # while a zero is merely an empty-looking row.
+                "resources": {"wood": 0, "stone": 0, "iron": 0, "pop": 0},
+                # Read by the page to explain the missing garrison rather than
+                # showing the village as empty.
+                "not_run_yet": True,
+            }
+        if not extra:
+            return managed
+        merged = dict(managed)
+        merged.update(extra)
+        return merged
+
     @classmethod
     def _build_incomings(cls, village_db):
         """Group tracked incoming commands by target village, enriched with
@@ -2618,6 +2664,11 @@ class OverviewBuilder:
         attacks = data.get("attacks", {}) or {}
         reports = data.get("reports", {}) or {}
         incomings_by_target = cls._build_incomings(data.get("villages", {}) or {})
+        # Same blind spot as the Defense page had: the "under attack now" card
+        # is built by walking the villages the bot has run, so attacks on one it
+        # has not reached yet never reached the card either.
+        managed = cls._with_attacked_targets(
+            managed, data.get("villages", {}) or {}, incomings_by_target)
 
         # Whether the incoming poller is currently logged out (cookie expired).
         # When true the incomings panel is blind, so the dashboard must show that
@@ -3224,6 +3275,10 @@ class DefenseOverview:
         managed = data.get("bot", {}) or {}
         village_db = data.get("villages", {}) or {}
         incomings_by_target = OverviewBuilder._build_incomings(village_db)
+        # A village under attack belongs on this page whether or not the bot has
+        # got round to running it yet.
+        managed = OverviewBuilder._with_attacked_targets(
+            managed, village_db, incomings_by_target)
         now = int(time.time())
         # Incoming support, cached whole by the poller. Deliberately kept out of
         # incomings_by_target: everything downstream of that decides whether a
@@ -3330,6 +3385,9 @@ class DefenseOverview:
                 "def_away": away_def,
                 "def_away_total": sum(away_def.values()),
                 "def_fresh": fresh,
+                # Under attack, but the bot's cycle has not reached it yet, so
+                # everything except the incomings themselves is unknown.
+                "not_run_yet": bool(vdata.get("not_run_yet")),
             })
 
         # Under-attack villages first (soonest arrival first), then strongest garrisons.
@@ -3400,6 +3458,8 @@ def live_incomings(managed, village_db):
     """Future incoming attacks as dashboard rows, soonest arrival first
     (shared by the C-snipe and Snipe tabs)."""
     incomings_by_target = OverviewBuilder._build_incomings(village_db)
+    managed = OverviewBuilder._with_attacked_targets(
+        managed, village_db, incomings_by_target)
     incomings = []
     for vid, vdata in managed.items():
         pub = vdata.get("public", {}) or {}

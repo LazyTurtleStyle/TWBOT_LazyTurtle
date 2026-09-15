@@ -253,6 +253,7 @@
 						<small class="d-block text-muted">+{{ v.def_away_total|comma }} out (supporting or in transit)</small>
 						{% endif %}
 						{% if not v.def_fresh %}<small class="d-block text-warning">snapshot only</small>{% endif %}
+						{% if v.not_run_yet %}<small class="d-block text-warning" title="The bot has not run this village yet, so only its incoming attacks are known">not run yet</small>{% endif %}
 					</td>
 				</tr>
 				{% else %}
