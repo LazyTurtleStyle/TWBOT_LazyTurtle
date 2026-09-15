@@ -818,8 +818,9 @@ def troops_live():
 
 @app.route('/app/dead-clears', methods=['GET'])
 def dead_clears():
-    """Enemy villages whose attack on us died, from the reports already cached.
-    Optional min_units / min_loss_pct narrow it."""
+    """Every enemy village that has thrown a stack at us and what became of its
+    clear, from the reports already cached. Each row carries "dead" or "alive";
+    optional min_units / min_loss_pct / alive_max_loss_pct narrow it."""
     def _int(name):
         raw = request.args.get(name)
         try:
@@ -828,7 +829,8 @@ def dead_clears():
             return None
     return jsonify({"ok": True,
                     "rows": DataReader.dead_clears(_int("min_units"),
-                                                   _int("min_loss_pct"))})
+                                                   _int("min_loss_pct"),
+                                                   _int("alive_max_loss_pct"))})
 
 
 @app.route('/app/village/note', methods=['GET', 'POST'])

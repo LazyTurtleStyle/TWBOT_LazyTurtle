@@ -125,7 +125,7 @@
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
-	<li class="nav-item"><a class="nav-link" href="#deadclears" data-pane="deadclears">Dead clears</a></li>
+	<li class="nav-item"><a class="nav-link" href="#deadclears" data-pane="deadclears">Clears</a></li>
 </ul>
 
 <div id="pane-overview">
@@ -792,14 +792,27 @@
 				</div>
 			</div>
 			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Clear</label>
+				<select class="form-control form-control-sm" id="dc-state" onchange="dcRender()">
+					<option value="dead">dead</option>
+					<option value="alive">still alive</option>
+					<option value="">both</option>
+				</select>
+			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
 				<label>Attacker</label>
 				<select class="form-control form-control-sm" id="dc-owner" onchange="dcRender()">
 					<option value="">everyone</option>
 				</select>
 			</div>
 			<div class="form-group col-12 col-md-3 mb-1">
-				<label>Note to write <small class="text-muted">(the date is added)</small></label>
-				<input type="text" class="form-control form-control-sm" id="dc-prefix" value="Clear dood">
+				<label>Note <small class="text-muted">(the date is added)</small></label>
+				<div class="input-group input-group-sm">
+					<input type="text" class="form-control form-control-sm" id="dc-prefix" value="Clear dood"
+						title="written on a village whose clear died">
+					<input type="text" class="form-control form-control-sm" id="dc-prefix-alive" value="Clear leeft"
+						title="written on a village whose clear is still alive">
+				</div>
 			</div>
 			<div class="form-group col-auto mb-1">
 				<button class="btn btn-sm btn-outline-secondary" onclick="dcLoad()">Find them</button>
@@ -821,11 +834,11 @@
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0" id="dc-table">
 			<thead><tr>
-				<th>When</th><th>Village</th><th>Owner</th>
+				<th>When</th><th></th><th>Village</th><th>Owner</th>
 				<th class="text-right">Sent</th><th class="text-right">Lost</th>
 				<th>Hit</th><th>Note</th><th></th>
 			</tr></thead>
-			<tbody><tr><td colspan="8" class="text-muted small">Press &ldquo;Find them&rdquo;.</td></tr></tbody>
+			<tbody><tr><td colspan="9" class="text-muted small">Press &ldquo;Find them&rdquo;.</td></tr></tbody>
 		</table>
 	</div>
 </div>
@@ -2317,7 +2330,11 @@ function snipeArm() {
 let DC_ROWS = [];
 
 function dcLine(row) {
-	const prefix = (document.getElementById('dc-prefix').value || '').trim();
+	// What became of this village's clear, and when - so the word follows the
+	// row rather than the panel, and a mixed list writes the right thing on
+	// each village.
+	const id = row.state === 'alive' ? 'dc-prefix-alive' : 'dc-prefix';
+	const prefix = ((document.getElementById(id) || {}).value || '').trim();
 	return (prefix ? prefix + ' ' : '') + row.date;
 }
 
@@ -2356,8 +2373,10 @@ function dcLoad() {
    filter is a question about the same answer. */
 function dcVisible() {
 	const owner = (document.getElementById('dc-owner') || {}).value || '';
+	const state = (document.getElementById('dc-state') || {}).value || '';
 	return DC_ROWS.map(function(r, i) { return {row: r, i: i}; })
-		.filter(function(x) { return !owner || String(x.row.owner) === owner; });
+		.filter(function(x) { return !owner || String(x.row.owner) === owner; })
+		.filter(function(x) { return !state || x.row.state === state; });
 }
 
 function dcRender() {
@@ -2365,11 +2384,13 @@ function dcRender() {
 	const shown = dcVisible();
 	document.getElementById('dc-count').textContent = shown.length
 		? shown.length + ' village' + (shown.length === 1 ? '' : 's') +
-		  (shown.length === DC_ROWS.length ? '' : ' of ' + DC_ROWS.length)
+		  (shown.length === DC_ROWS.length ? '' : ' of ' + DC_ROWS.length) +
+		  ' \u00b7 ' + DC_ROWS.filter(function(r) { return r.state === 'dead'; }).length +
+		  ' dead, ' + DC_ROWS.filter(function(r) { return r.state === 'alive'; }).length + ' alive'
 		: '';
 	document.getElementById('dc-write-all').disabled = !shown.length;
 	if (!shown.length) {
-		body.innerHTML = '<tr><td colspan="8" class="text-muted small">Nothing matches.</td></tr>';
+		body.innerHTML = '<tr><td colspan="9" class="text-muted small">Nothing matches.</td></tr>';
 		return;
 	}
 	body.innerHTML = shown.map(function(x) {
@@ -2383,6 +2404,9 @@ function dcRender() {
 			: (r.owner ? '<span class="text-muted">#' + r.owner + '</span>' : '<span class="text-muted">?</span>');
 		return '<tr id="dc-row-' + i + '">' +
 			'<td class="small">' + esc(r.date) + '</td>' +
+			'<td>' + (r.state === 'alive'
+				? '<span class="badge badge-danger">alive</span>'
+				: '<span class="badge badge-success">dead</span>') + '</td>' +
 			'<td><small>' + (r.name ? '<strong>' + esc(r.name) + '</strong> ' : '<span class="text-muted">#' + esc(r.village_id) + '</span> ') +
 				where + '</small></td>' +
 			'<td><small>' + who + '</small></td>' +

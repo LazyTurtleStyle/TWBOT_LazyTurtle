@@ -79,7 +79,10 @@
     "enabled": false,
     "min_units": 5000,
     "min_loss_pct": 90,
+    "alive_max_loss_pct": 50,
     "note_prefix": "Clear dood",
+    "note_alive": false,
+    "note_prefix_alive": "Clear leeft",
     "max_per_run": 10
   },
   "units": {

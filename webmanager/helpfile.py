@@ -57,7 +57,10 @@ help_file = {
     'report_analysis.enabled': 'Let the bot write the notes on its own. Off by default and it never turns itself on. The Dead clears tab does the same thing on demand, which is the way to try it first.',
     'report_analysis.min_units': 'How big an attack has to be before losing it counts as losing a clear. Below this it is a probe, a fake or snipe-bait rather than a nuke.',
     'report_analysis.min_loss_pct': 'How much of that attack has to have died. In practice this is near-binary - an attack either breaks on the wall or walks through it - so anything from about 80 upwards picks out the same set.',
-    'report_analysis.note_prefix': 'What the note says, with the date of the kill added after it. "Clear dood" gives "Clear dood 12-09-2026".',
+    'report_analysis.alive_max_loss_pct': 'How little an attack can have lost and still count as a nuke that walked through - proof the village HAS one. The middle ground, a stack that lost most of itself but not all, is deliberately left out of both piles: it is neither gone nor intact, and guessing would put a wrong word on the map.',
+    'report_analysis.note_prefix': 'What the note says about a village whose clear died, with the date added after it. "Clear dood" gives "Clear dood 12-09-2026".',
+    'report_analysis.note_alive': 'Also note the villages whose clear is still alive. A dead clear is the one that changes what you do about the next wave, so that is what gets noted by default; this marks out the rest of his hitting power as well. Which a village is follows the newest report of each kind, so one that lost a clear and later walked another through reads as alive again.',
+    'report_analysis.note_prefix_alive': 'What the note says about a village whose clear is still alive, with the date it was last seen walking through.',
     'report_analysis.max_per_run': 'How many villages to note in one cycle. Each one costs two requests (read the note, save it), so a first run on a long war is spread over several cycles instead of going out in a burst.',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
@@ -275,8 +278,9 @@ section_setup = {
 # newly added keys are never dropped.
 config_groups = {
     'report_analysis': [
-        ('Dead clears', ['enabled', 'min_units', 'min_loss_pct',
-                         'note_prefix', 'max_per_run']),
+        ('What counts', ['enabled', 'min_units', 'min_loss_pct',
+                         'alive_max_loss_pct', 'max_per_run']),
+        ('What to write', ['note_prefix', 'note_alive', 'note_prefix_alive']),
     ],
     'notifications': [
         ('Connection', ['enabled', 'token', 'channel_id']),

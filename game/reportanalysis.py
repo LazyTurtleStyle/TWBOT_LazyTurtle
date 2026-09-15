@@ -42,7 +42,14 @@ DEFAULT_MIN_UNITS = 5000
 # of the incoming attacks over 2000 units, 41 lost everything and 52 lost under
 # half, with a single 70% in between - so this only has to separate two piles.
 DEFAULT_MIN_LOSS_PCT = 90
+# And how little it can have lost to count as having walked through. The middle
+# ground - a nuke that lost most of itself but not all - is left out of both
+# piles on purpose: it is neither gone nor intact, and guessing which would put
+# a wrong word on the map. There was exactly one such report in the account
+# this was built against.
+DEFAULT_ALIVE_MAX_LOSS_PCT = 50
 DEFAULT_NOTE_PREFIX = "Clear dood"
+DEFAULT_NOTE_PREFIX_ALIVE = "Clear leeft"
 # Each note is two requests (read the page, save the note). A first run on a
 # long war is fifty of them, which is a lot of traffic in one burst, so a pass
 # takes a bounded bite and the next pass continues.
@@ -64,10 +71,26 @@ def save_state(state):
     FileManager.save_json_file_atomic(state, STATE_FILE)
 
 
-def find_dead_clears(reports, managed, village_db, world,
+def find_clear_states(reports, managed, village_db, world,
                      min_units=DEFAULT_MIN_UNITS,
-                     min_loss_pct=DEFAULT_MIN_LOSS_PCT):
-    """Enemy villages whose attack on us died, newest first.
+                     min_loss_pct=DEFAULT_MIN_LOSS_PCT,
+                     alive_max_loss_pct=DEFAULT_ALIVE_MAX_LOSS_PCT):
+    """Every enemy village that has thrown a real stack at us, and what became
+    of it, newest event first.
+
+    Each village gets one row carrying `state`:
+
+        "dead"  - its nuke broke on a wall and has to be rebuilt, which is
+                  weeks; that village cannot be in the next wave
+        "alive" - it has walked a nuke through and nothing has killed it since
+
+    Which one it is follows the reports rather than a guess: the newest death
+    is compared against the newest survival, so a village that lost a clear and
+    later rebuilt and attacked again reads as alive from the day it did. No
+    village on the account this was built against had both yet - 53 dead, 66
+    alive, none in between - but the first rebuild makes the comparison the
+    whole answer, and a note that says "dood" about a village that has since
+    walked a nuke through is worse than no note.
 
     "On us" is judged by the attacking village not being one of ours, NOT by
     the attacked one still being: a village that held and was taken later still
@@ -91,11 +114,20 @@ def find_dead_clears(reports, managed, village_db, world,
         if not sent or sent < min_units:
             continue
         pct = round(100.0 * lost / sent)
-        if pct < min_loss_pct:
-            continue
+        if pct >= min_loss_pct:
+            state = "dead"
+        elif pct <= alive_max_loss_pct:
+            state = "alive"
+        else:
+            continue            # neither gone nor intact; say nothing
         when = _int(extra.get("when"))
         previous = by_village.get(origin)
         if previous and previous["when"] >= when:
+            # An older report can still be the newest of ITS kind, and that is
+            # what decides the verdict, so the dates are kept either way.
+            previous["when_" + state] = max(previous.get("when_" + state, 0), when)
+            previous["state"] = ("dead" if previous.get("when_dead", 0)
+                                 > previous.get("when_alive", 0) else "alive")
             continue
         known = (village_db or {}).get(origin) or {}
         out = (world or {}).get(origin) or {}
@@ -122,12 +154,37 @@ def find_dead_clears(reports, managed, village_db, world,
             # Whether the village it died on is still ours. It counts either
             # way; saying which is the difference between a list and a story.
             "target_held": dest in (managed or {}),
+            "state": state,
+            "when_dead": when if state == "dead" else
+                         (by_village.get(origin, {}).get("when_dead", 0)),
+            "when_alive": when if state == "alive" else
+                          (by_village.get(origin, {}).get("when_alive", 0)),
         }
+        row = by_village[origin]
+        row["state"] = "dead" if row["when_dead"] > row["when_alive"] else "alive"
+    for row in by_village.values():
+        # The date on the note is the date of the event it describes, which is
+        # not always this row's newest report: a village that died and later
+        # walked one through is alive as of the survival, not of the death.
+        stamp = row["when_dead"] if row["state"] == "dead" else row["when_alive"]
+        row["date"] = (time.strftime("%d-%m-%Y", time.localtime(stamp))
+                       if stamp else row["date"])
     return sorted(by_village.values(), key=lambda r: r["when"], reverse=True)
 
 
-def note_line(row, prefix=DEFAULT_NOTE_PREFIX):
-    return ("%s %s" % ((prefix or "").strip(), row.get("date", ""))).strip()
+def find_dead_clears(reports, managed, village_db, world,
+                     min_units=DEFAULT_MIN_UNITS,
+                     min_loss_pct=DEFAULT_MIN_LOSS_PCT):
+    """Only the villages whose clear is currently dead."""
+    return [r for r in find_clear_states(reports, managed, village_db, world,
+                                         min_units, min_loss_pct)
+            if r["state"] == "dead"]
+
+
+def note_line(row, prefix=DEFAULT_NOTE_PREFIX, prefix_alive=DEFAULT_NOTE_PREFIX_ALIVE):
+    """What to write on the village: what became of its clear, and when."""
+    word = prefix_alive if row.get("state") == "alive" else prefix
+    return ("%s %s" % ((word or "").strip(), row.get("date", ""))).strip()
 
 
 # -- writing, through the bot's own wrapper ---------------------------------
@@ -194,13 +251,22 @@ def run(wrapper, home_village, config):
     if not settings.get("enabled", False) or not home_village:
         return 0
     prefix = settings.get("note_prefix", DEFAULT_NOTE_PREFIX)
-    rows = find_dead_clears(
+    prefix_alive = settings.get("note_prefix_alive", DEFAULT_NOTE_PREFIX_ALIVE)
+    rows = find_clear_states(
         _load_cache_dir("cache/reports"),
         config.get("villages", {}) or {},
         _load_cache_dir("cache/villages"),
         worldvillages.cached(wrapper),
         _int(settings.get("min_units")) or DEFAULT_MIN_UNITS,
-        _int(settings.get("min_loss_pct")) or DEFAULT_MIN_LOSS_PCT)
+        _int(settings.get("min_loss_pct")) or DEFAULT_MIN_LOSS_PCT,
+        _int(settings.get("alive_max_loss_pct"))
+        or DEFAULT_ALIVE_MAX_LOSS_PCT)
+    # Which of the two the module writes. A dead clear is the one that changes
+    # what you do about the next wave, so it is the one that is on by default;
+    # noting the living ones marks out the rest of his hitting power and is
+    # asked for separately.
+    if not settings.get("note_alive", False):
+        rows = [r for r in rows if r["state"] == "dead"]
     if not rows:
         return 0
     cap = _int(settings.get("max_per_run")) or DEFAULT_MAX_PER_RUN
@@ -210,7 +276,7 @@ def run(wrapper, home_village, config):
     for row in rows:
         if done >= cap:
             break
-        line = note_line(row, prefix)
+        line = note_line(row, prefix, prefix_alive)
         # Remembered rather than re-checked: the check itself costs a page.
         if noted.get(row["village_id"]) == line:
             continue

@@ -1927,8 +1927,9 @@ class DataReader:
         return fresh
 
     @staticmethod
-    def dead_clears(min_units=None, min_loss_pct=None):
-        """Enemy villages whose attack on us died, newest first.
+    def dead_clears(min_units=None, min_loss_pct=None, alive_max_loss_pct=None):
+        """Every enemy village that has thrown a stack at us, and what became
+        of its clear - newest event first, each row carrying "dead" or "alive".
 
         The scan is the bot module's (game/reportanalysis); this only gathers
         the world-aware caches it reads, so the dashboard and the module can
@@ -1936,14 +1937,16 @@ class DataReader:
         """
         if reportanalysis is None:
             return []
-        return reportanalysis.find_dead_clears(
+        return reportanalysis.find_clear_states(
             DataReader.cache_grab("reports") or {},
             DataReader.cache_grab("managed") or {},
             DataReader.cache_grab("villages") or {},
             DataReader.world_villages(),
             int(min_units or reportanalysis.DEFAULT_MIN_UNITS),
             int(min_loss_pct if min_loss_pct is not None
-                else reportanalysis.DEFAULT_MIN_LOSS_PCT))
+                else reportanalysis.DEFAULT_MIN_LOSS_PCT),
+            int(alive_max_loss_pct if alive_max_loss_pct is not None
+                else reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT))
 
     @staticmethod
     def village_note_read(village_id):
