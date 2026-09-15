@@ -400,6 +400,11 @@
 			offset minus a margin), the bot then aims the middle of that window and, when a measured send
 			would miss it, cancels the attempt immediately and re-fires on a later 2-second slot until one
 			lands inside (needs a few minutes of lead; ~10–15&nbsp;s per retry, up to 8 tries).</small>
+		<div class="d-flex align-items-center flex-wrap mb-1">
+			<button class="btn btn-sm btn-outline-info py-0"
+				onclick="csnipeCheckTroops('cs', csForm.village_id)">Check troops now</button>
+			<small class="ml-2" id="cs-troop-note"></small>
+		</div>
 		<div class="form-row" id="cs-units"></div>
 		<div class="text-danger small mb-2" id="cs-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="csnipeArm()">Arm snipe</button>
@@ -463,6 +468,11 @@
 			the target: the bot aims mid-window and re-fires missed sends (cancel, wait home, next 2-second
 			slot) until one is inside, the result line then reports window HIT or MISSED. Try +100 to see the
 			retry loop work.</small>
+		<div class="d-flex align-items-center flex-wrap mb-1">
+			<button class="btn btn-sm btn-outline-info py-0"
+				onclick="csnipeCheckTroops('cst', document.getElementById('cst-village').value)">Check troops now</button>
+			<small class="ml-2" id="cst-troop-note"></small>
+		</div>
 		<div class="form-row" id="cst-units"></div>
 		<div class="text-danger small mb-2" id="cst-error"></div>
 		<button class="btn btn-sm btn-info" onclick="cstArm()">Arm test snipe</button>
@@ -1069,6 +1079,91 @@ function csnipeCollectUnits(unitClass) {
 	return units;
 }
 
+/* Read what is standing in the village *this second*.
+
+   Everything the form prefills with is a reading from some minutes ago - the
+   account-wide troop sweep at best, that village's own snapshot at worst, and
+   on a village the bot has not run yet there is no snapshot at all, which is
+   how a garrisoned village came up reading "/0" on every unit. This asks the
+   game directly, the same rally point the send itself will open, and reports
+   what it saw. It costs one request, so it is a button rather than something
+   the page does on its own. Filling the boxes is a second, separate click:
+   what is at home and what you want to send are not the same decision. */
+const CS_LIVE = {};      // prefix -> the last live reading, for the fill link
+function csnipeCheckTroops(prefix, villageId) {
+	const note = document.getElementById(prefix + '-troop-note');
+	if (!villageId) { note.innerHTML = '<span class="text-danger">pick a village first</span>'; return; }
+	note.innerHTML = '<span class="text-muted">reading the rally point…</span>';
+	fetch('/app/troops/live?village_id=' + encodeURIComponent(villageId))
+		.then(r => r.json()).then(function(res) {
+			if (!res.ok) {
+				// The reasons mean different things to do about them, so they
+				// are not collapsed into "failed".
+				const why = {
+					no_session: 'the bot has no valid session cookie - reconnect it on the Overview page',
+					logged_out: 'the session is dead or bot protection is in the way - reconnect it',
+					no_form: 'the game did not return the rally point (redirect? wrong village?)',
+					request_failed: 'could not reach the game: ' + (res.error || ''),
+					bad_village: 'unknown village',
+					unavailable: 'the live reader is not available in this build',
+				}[res.reason] || (res.reason || 'failed');
+				note.innerHTML = '<span class="text-danger">' + esc(why) + '</span>';
+				return;
+			}
+			CS_LIVE[prefix] = res.units;
+			const held = Object.keys(res.units).filter(function(u) { return res.units[u] > 0; });
+			// Update the "/N at home" labels in place: they are what the boxes
+			// are read against, so leaving them stale would make the fresh
+			// reading look like a contradiction.
+			document.querySelectorAll('#' + prefix + '-units .unit-input').forEach(function(box) {
+				const inp = box.querySelector('input[data-unit]');
+				const lbl = box.querySelector('label small');
+				if (inp && lbl) lbl.textContent = '/' + (res.units[inp.getAttribute('data-unit')] || 0);
+			});
+			note.innerHTML = '<span class="text-success">read just now:</span> ' +
+				(held.length
+					? held.map(function(u) { return esc(unitLabel(u)) + ' ' + res.units[u]; }).join(', ')
+					: '<span class="text-warning">nothing at home</span>') +
+				(held.length ? ' · <a href="#" onclick="csnipeFillLive(\'' + prefix +
+					'\');return false">fill these in</a>' : '');
+		})
+		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; });
+}
+
+/* Put the live counts into the boxes: the defensive set at full strength, the
+   rest back to zero. Every box stays editable afterwards. */
+function csnipeFillLive(prefix) {
+	const units = CS_LIVE[prefix];
+	if (!units) return;
+	document.querySelectorAll('.' + prefix + '-unit').forEach(function(inp) {
+		const u = inp.getAttribute('data-unit');
+		inp.value = CSNIPE.prefill_units.indexOf(u) >= 0 ? (units[u] || 0) : 0;
+	});
+	document.getElementById(prefix + '-troop-note').innerHTML +=
+		' <span class="text-success">· filled</span>';
+}
+/* Where the prefilled counts came from and how old they are. The figures are
+   good enough to plan with and are not what you want to stake a send on, so
+   the form says which reading it is showing rather than presenting either as
+   the truth of the moment. */
+function csnipeHomeNote(v) {
+	if (!v.home_fresh) {
+		return '<span class="text-warning">prefilled from this village\u2019s own snapshot' +
+			' - the bot has not read it in the account-wide sweep yet</span>';
+	}
+	const age = CSNIPE.home_age;
+	return '<span class="text-muted">prefilled from the account-wide reading' +
+		(age == null ? '' : ', ' + fmtAge(age) + ' old') + '</span>';
+}
+
+function fmtAge(seconds) {
+	seconds = Math.max(0, Math.round(seconds));
+	if (seconds < 90) return seconds + ' s';
+	const m = Math.round(seconds / 60);
+	if (m < 90) return m + ' min';
+	return Math.round(m / 60) + ' h';
+}
+
 function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	const v = CSNIPE.villages[String(villageId)];
 	if (!v) return;
@@ -1079,6 +1174,8 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
 	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
+	document.getElementById('cs-troop-note').innerHTML = csnipeHomeNote(v);
+	delete CS_LIVE['cs'];
 	document.getElementById('cs-error').textContent = '';
 	const form = document.getElementById('csnipe-form');
 	form.style.display = '';
@@ -1163,6 +1260,8 @@ function cstVillageChanged() {
 	if (!v) return;
 	csnipeBarbPrefill(v, 'cst-tx', 'cst-ty', 'cst-barb-hint');
 	csnipeUnitGrid(document.getElementById('cst-units'), v, 'cst-unit');
+	document.getElementById('cst-troop-note').innerHTML = csnipeHomeNote(v);
+	delete CS_LIVE['cst'];
 	document.getElementById('cst-error').textContent = '';
 }
 

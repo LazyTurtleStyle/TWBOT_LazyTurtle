@@ -802,6 +802,17 @@ def csnipe_arm():
     return jsonify({"ok": True, "entry": entry})
 
 
+@app.route('/app/troops/live', methods=['GET'])
+def troops_live():
+    """What is standing in one village this second, read off the live rally
+    point with the bot's session. One request to the game per call, so it is
+    driven by a button rather than by rendering the page."""
+    village_id = request.args.get("village_id") or ""
+    if not village_id:
+        return jsonify({"ok": False, "reason": "bad_village"})
+    return jsonify(DataReader.live_home_troops(village_id))
+
+
 @app.route('/app/csnipe/cancel', methods=['GET', 'POST'])
 def csnipe_cancel():
     sid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")

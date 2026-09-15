@@ -46,6 +46,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     game_events = None
 
 try:
+    from game.livetroops import read_home_troops
+except Exception:  # pragma: no cover - dashboard still works without live reads
+    read_home_troops = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -282,6 +287,32 @@ class DataReader:
         except Exception:
             pass
         return {}
+
+    @staticmethod
+    def home_troop_reading():
+        """Units standing in each village, from the account-wide reading.
+
+        Returns ({village_id: {unit: count}}, age_seconds) - the "own" figures
+        of cache/troops_moving.json, which the bot refreshes every few minutes
+        for the whole account in one pass. A village missing from it has no
+        reading at all (rather than an empty garrison), so callers can fall
+        back to that village's own snapshot and say which one they are showing.
+        """
+        locations = DataReader.troop_locations()
+        if not isinstance(locations, dict):
+            return {}, None
+        by_village = locations.get("by_village") or {}
+        # A partial write carries the previous breakdown forward, so age the
+        # figures by when that breakdown was actually read, not by the file.
+        when = (OverviewBuilder._to_int(locations.get("complete_when"))
+                or OverviewBuilder._to_int(locations.get("when")))
+        age = (int(time.time()) - when) if when else None
+        reading = {}
+        for vid, entry in by_village.items():
+            own = (entry or {}).get("own")
+            if isinstance(own, dict):
+                reading[str(vid)] = own
+        return reading, age
 
     @staticmethod
     def troop_templates():
@@ -1793,6 +1824,37 @@ class DataReader:
         return True
 
     @staticmethod
+    def _bot_user_agent():
+        """The user agent the bot browses with, so a request the web process
+        makes on its behalf looks like the same client rather than a second one
+        appearing on the account from nowhere."""
+        try:
+            with open(DataReader.data_path("config.json")) as handle:
+                return json.load(handle).get("bot", {}).get("user_agent")
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def live_home_troops(village_id):
+        """What is standing in a village this second, off the live rally point.
+
+        Every cached figure the forms prefill from is a reading from some
+        minutes ago; this is the one the send itself would get. Returns the
+        reader's status dict ({"ok": True, "units": {...}} or a reason), never
+        raises, and writes nothing.
+        """
+        if read_home_troops is None:
+            return {"ok": False, "reason": "unavailable"}
+        village_id = str(village_id)
+        if not village_id.isdigit():
+            return {"ok": False, "reason": "bad_village"}
+        session = DataReader.get_session() or {}
+        return read_home_troops(village_id,
+                                session.get("cookies") or {},
+                                session.get("endpoint") or "",
+                                DataReader._bot_user_agent())
+
+    @staticmethod
     def incoming_rename_ingame(command_id, label):
         """Push a tag to TribalWars as the incoming attack's in-game label.
 
@@ -1807,13 +1869,7 @@ class DataReader:
         session = DataReader.get_session()
         cookies = (session or {}).get("cookies") or {}
         endpoint = (session or {}).get("endpoint") or ""
-        user_agent = None
-        try:
-            cfg_path = DataReader.data_path("config.json")
-            with open(cfg_path, 'r') as cf:
-                user_agent = json.load(cf).get("bot", {}).get("user_agent")
-        except (OSError, ValueError):
-            pass
+        user_agent = DataReader._bot_user_agent()
         # Load the captured rename endpoint world-aware: the game module's own
         # load_label_endpoint resolves against the bot's FileManager data root,
         # which the web process does not have, so it would read the default
@@ -3385,18 +3441,40 @@ class CSnipeOverview:
             and isinstance(v.get("location"), list) and len(v["location"]) == 2
         ]
 
+        # Garrisons from the account-wide troop-location reading the bot
+        # refreshes every few minutes, not from each village's own
+        # available_troops snapshot: that snapshot is only rewritten when the
+        # bot next runs the village, so it is routinely an hour old and is
+        # simply EMPTY for a village the bot has not run yet - which is how a
+        # village holding a stack came up as "/0" on every unit in this form.
+        home_reading, reading_age = DataReader.home_troop_reading()
+
+        own_villages = []
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            oloc = pub.get("location")
+            if isinstance(oloc, list) and len(oloc) == 2:
+                own_villages.append({
+                    "id": str(vid), "location": oloc,
+                    "name": vdata.get("name") or pub.get("name") or str(vid)})
+
         villages = {}
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
             loc = pub.get("location")
             avail = vdata.get("available_troops", {}) or {}
+            live = home_reading.get(str(vid))
+            source = live if live is not None else avail
             name = vdata.get("name") or pub.get("name") or vid
             villages[str(vid)] = {
                 "id": str(vid),
                 "name": name,
                 "coords": loc,
-                "home": {u: OverviewBuilder._to_int(avail.get(u))
+                "home": {u: OverviewBuilder._to_int(source.get(u))
                          for u in cls.FORM_UNITS},
+                # Whether that came from the live reading or from the village's
+                # own stale snapshot, so the form can say which it is showing.
+                "home_fresh": live is not None,
                 "barb": cls._suggest_barb(loc, barbs, speeds, ws, us,
                                           cls.DEFAULT_LEAD_MIN * 60),
             }
@@ -3421,6 +3499,9 @@ class CSnipeOverview:
             "cancel_seconds": cancel_seconds,
             "default_lead_min": cls.DEFAULT_LEAD_MIN,
             "default_aim_ms": cls.DEFAULT_AIM_MS,
+            # How old the prefilled troop counts are, so the form can say so
+            # instead of presenting a reading from ten minutes ago as fact.
+            "home_age": reading_age,
             "now": now,
         }
 
@@ -3449,16 +3530,24 @@ class SnipeOverview:
         managed = data.get("bot", {}) or {}
         village_db = data.get("villages", {}) or {}
 
+        # Same live reading the Defense table and the c-snipe form use; a
+        # village's own available_troops snapshot is too old to decide which
+        # villages can still reach a landing.
+        home_reading, reading_age = DataReader.home_troop_reading()
+
         villages = {}
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
             avail = vdata.get("available_troops", {}) or {}
+            live = home_reading.get(str(vid))
+            source = live if live is not None else avail
             villages[str(vid)] = {
                 "id": str(vid),
                 "name": vdata.get("name") or pub.get("name") or vid,
                 "coords": pub.get("location"),
-                "home": {u: OverviewBuilder._to_int(avail.get(u))
+                "home": {u: OverviewBuilder._to_int(source.get(u))
                          for u in cls.SNIPE_UNITS},
+                "home_fresh": live is not None,
             }
 
         ws, us, speeds = DataReader.world_speeds()
@@ -3487,6 +3576,7 @@ class SnipeOverview:
             "unit_speed": us,
             "default_offset_ms": cls.DEFAULT_OFFSET_MS,
             "default_min_pct": cls.DEFAULT_MIN_PCT,
+            "home_age": reading_age,
             "now": int(time.time()),
         }
 
