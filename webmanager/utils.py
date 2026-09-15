@@ -3932,8 +3932,10 @@ class EventOverview:
         for action in log:
             if previous and action.get("currency") is not None \
                     and previous.get("currency") is not None:
-                gap = (action["currency"] - previous["currency"]
-                       - int(action.get("reward") or 0))
+                # "reward" on the horse race, "scales" on the dragons board -
+                # the same thing under the name its own driver writes.
+                paid = int(action.get("reward") or action.get("scales") or 0)
+                gap = (action["currency"] - previous["currency"] - paid)
                 if gap > 0:
                     other += gap
                     # Big enough to be a payout rather than a few hand-clicks.
@@ -3946,12 +3948,22 @@ class EventOverview:
 
         # What is still to come: every hour left is one more unit of energy,
         # plus whatever is already in the bar.
+        # What an action is worth: the best option's rated value where the event
+        # has options to choose between, otherwise what the actions actually
+        # taken have averaged. The dragons board has nothing to choose - one
+        # button - so its own record is the only estimate there is.
+        per_action = None
+        if best:
+            per_action = best["value"]
+        elif totals.get("actions"):
+            per_action = earned / float(totals["actions"])
+
         forecast = None
         ends = state.get("ends_ts")
-        if ends and best and energy is not None and not state.get("finished"):
+        if ends and per_action and energy is not None and not state.get("finished"):
             hours_left = max(0.0, (ends - time.time()) / 3600.0)
             actions_left = int(hours_left + energy)
-            cheering = int(actions_left * best["value"])
+            cheering = int(actions_left * per_action)
             # Nearest, not floor: the payout lands at a fixed hour each day, so
             # 47 hours left spans two of them, and flooring lost a whole one -
             # which on this event is a bigger error than everything the
@@ -3984,10 +3996,22 @@ class EventOverview:
             "ranks_best": snapshot.get("ranks_best") or [],
             "ranks_unluckiest": snapshot.get("ranks_unluckiest") or [],
             "group": snapshot.get("group") or {},
+            "currency_name": snapshot.get("currency_name") or "",
+            # The dragons board: where the coin stands, what the log says, and
+            # what the squares have handed over. Empty on events that have no
+            # board, which is what the page keys its panels off.
+            "board": snapshot.get("board") or {},
+            "logs": snapshot.get("logs") or [],
+            "by_square": state.get("by_square") or {},
+            "items_won": state.get("items_won") or {},
             "totals": {"actions": int(totals.get("actions") or 0),
                        "jackpots": int(totals.get("jackpots") or 0),
                        "reward": earned,
-                       "expected": int(expected)},
+                       "expected": int(expected),
+                       "rolls": int(totals.get("rolls") or 0),
+                       "pips": int(totals.get("pips") or 0),
+                       "dragons": int(totals.get("dragons") or 0),
+                       "items": int(totals.get("items") or 0)},
             "luck": None if luck is None else round(luck, 2),
             "other": other,
             "spent": spent,

@@ -241,6 +241,19 @@ def option_values(options, jackpots):
     return sorted(rated, key=lambda o: o["value"], reverse=True)
 
 
+def _horse_snapshot(state, poll):
+    """The race-specific half of the picture: where the teams stand, who is
+    winning, and what each option is worth at the jackpots showing right now."""
+    return {
+        "ranks_best": poll.get("ranks_best"),
+        "ranks_unluckiest": poll.get("ranks_unluckiest"),
+        "group": poll.get("player_group"),
+        "options": option_values(
+            state.get("options"),
+            ((poll.get("player_group") or {}).get("race") or {}).get("jackpots")),
+    }
+
+
 def _horse_play(wrapper, village_id, screen, state, poll, choice="auto"):
     """Spend the bar down, on the best option available at each click."""
     energy, _top = energy_now(poll.get("player_energies"))
@@ -289,6 +302,251 @@ def _horse_play(wrapper, village_id, screen, state, poll, choice="auto"):
     return done
 
 
+# -- here be dragons -------------------------------------------------------
+#
+# A board game. One throw of the dice moves a coin around a 38-square track;
+# the squares hand out dragon scales (the event currency), item-shop boosters,
+# extra or fewer rolls, a reversed direction, or send the coin back to the
+# start. Reach the end and the dragon dies, a fresh board is dealt, and the
+# board's squares are re-dealt with it.
+#
+# So there is no decision to make, which is exactly why it wants a bot: the
+# whole game is "throw whenever a throw is available", and the bar refills one
+# throw an hour to a cap of ten. Ten hours asleep is ten throws thrown away.
+#
+# Unlike the horse race there is no poll endpoint - `&ajax=poll` answers
+# `response: false` - so the page itself is the reading, and it has to be
+# re-read every cycle rather than daily, because the board changes under you
+# every time a dragon dies.
+
+# The event's two setup blobs sit in a <script> at the end of the page:
+#   DragonsEvent.initEnergy({"dice_throw": {...}}, "dice_throw", {...})
+#   DragonsEvent.init({"id":9,"position":22,"status":"playing",...}, "", [logs])
+#   DragonsEvent.initRanking("<icon url>", [{rank, player_name, score}, ...])
+_DRAGONS_ENERGY_KEY = "dice_throw"
+
+
+def _json_after(text, marker, skip=0):
+    """The JSON value that follows `marker`, or None.
+
+    These blobs are deeply nested objects inside a script tag, so a regex that
+    stops at the first '}' truncates them. raw_decode walks the real structure
+    and reports where it ended, which also lets us step over leading arguments
+    (`skip`) to reach the one we want.
+    """
+    at = text.find(marker)
+    if at < 0:
+        return None
+    at += len(marker)
+    decoder = json.JSONDecoder()
+    for _ in range(skip + 1):
+        while at < len(text) and text[at] in " \t\r\n,":
+            at += 1
+        try:
+            value, at = decoder.raw_decode(text, at)
+        except ValueError:
+            return None
+    return value
+
+
+def _dragons_read_page(wrapper, village_id, screen):
+    """The part that does not move: when the event ends, and who is playing."""
+    res = wrapper.get_url(f"game.php?village={village_id}&screen={screen}")
+    text = getattr(res, "text", "") if res is not None else ""
+    if not text:
+        return None
+    ends_text = ""
+    described = _RE_DESCRIPTION.search(text)
+    if described:
+        ends_text = re.sub(r"\s+", " ", html_module.unescape(
+            re.sub(r"<[^>]+>", " ", described.group(1)))).strip()
+    board = _json_after(text, "DragonsEvent.init(") or {}
+    me = _RE_PLAYER.search(text)
+    return {
+        # Never empty when the page parsed at all: this is the key that says
+        # "the daily read has happened", so a blank would re-read every cycle.
+        "ends_text": ends_text or "event running",
+        "ends_ts": _parse_ends(ends_text or text),
+        "player_id": board.get("player") or (int(me.group(1)) if me else None),
+        "player_name": html_module.unescape(me.group(2)) if me else "",
+    }
+
+
+def _dragons_poll(wrapper, village_id, screen):
+    """Energy, scales, the board and the daily ranking - off the page itself.
+
+    Shaped like the horse race's poll so run() can treat them alike: the
+    energies come back under `player_energies` whatever the event calls its
+    bar.
+    """
+    res = wrapper.get_url(f"game.php?village={village_id}&screen={screen}")
+    text = getattr(res, "text", "") if res is not None else ""
+    if not text:
+        return None
+    energies = _json_after(text, "DragonsEvent.initEnergy(")
+    board = _json_after(text, "DragonsEvent.init(")
+    logs = _json_after(text, "DragonsEvent.init(", skip=2)
+    ranking = _json_after(text, "DragonsEvent.initRanking(", skip=1)
+    currency = 0
+    shown = re.search(r'class="event-currency-display">(.{0,120}?)</span>\s*</span>',
+                      text, re.S)
+    if shown:
+        currency = _num(shown.group(1))
+    if energies is None and board is None:
+        return None
+    return {
+        "player_energies": energies or {},
+        "currency": currency,
+        "board": board or {},
+        "logs": logs if isinstance(logs, list) else [],
+        "ranks_best": ranking if isinstance(ranking, list) else [],
+    }
+
+
+# What the squares do, in words, so the log reads as a game rather than as a
+# list of PHP class names.
+_DRAGONS_SQUARES = {
+    "CurrencyEarn": "scales",
+    "ItemShopEarn": "item",
+    "RollMore": "roll more",
+    "RollLess": "roll less",
+    "ReverseRoll": "reversed",
+    "MoveForwards": "move on",
+    "StartOver": "back to start",
+    "EnergyExtra": "extra throw",
+}
+
+
+def _dragons_square(action):
+    """A board event's short name and what it paid, from the action the roll
+    came back with."""
+    data = action.get("data") or {}
+    kind = str(data.get("type") or "").rsplit("\\", 1)[-1]
+    args = data.get("args") or {}
+    amount = 0
+    item = None
+    if isinstance(args, dict):
+        amount = int(args.get("amount") or 0)
+        item = ((args.get("item") or {}) or {}).get("name")
+    return _DRAGONS_SQUARES.get(kind, kind or "square"), amount, item
+
+
+def _dragons_play(wrapper, village_id, screen, state, poll, choice="auto"):
+    """Throw the dice while there are throws, and write down what happened.
+
+    There is nothing to choose - the button is the game - so the only judgement
+    here is when to stop: at an empty bar, or at the pass cap if the energy
+    accounting ever stops making sense.
+    """
+    energy, _top = energy_now(poll.get("player_energies"), _DRAGONS_ENERGY_KEY)
+    done = []
+    while int(energy) >= 1 and len(done) < MAX_ACTIONS_PER_CYCLE:
+        result = wrapper.get_api_action(
+            village_id=village_id, action="roll",
+            params={"screen": screen}, data={})
+        if not isinstance(result, dict):
+            logger.warning("Dice throw did not go through, stopping this pass")
+            break
+        response = result.get("response") or result
+        rolls = [int(r) for r in (response.get("rolls") or []) if str(r).isdigit()]
+        # What the throw paid comes from the game's own currency_won, NOT from
+        # adding up the CurrencyEarn squares: a live throw of 6+6 paid 1200
+        # scales with no CurrencyEarn square in its actions at all, so scales
+        # are earned for crossing the board and the squares are a bonus on top.
+        # Counting the squares would have under-reported nearly every throw.
+        scales = int(response.get("currency_won") or 0)
+        # rolls_total is the game's own sum of the dice, which is the number of
+        # spaces moved; the faces are kept for the log.
+        moved = int(response.get("rolls_total") or sum(rolls))
+        squares, items, killed = [], [], False
+        for action in (response.get("actions") or []):
+            kind = action.get("type")
+            if kind == "event_triggered":
+                name, _amount, item = _dragons_square(action)
+                squares.append(name)
+                if item:
+                    items.append(item)
+            elif kind == "new_board":
+                # The end of the track: the dragon is dead and a fresh board
+                # with freshly dealt squares is put down.
+                killed = True
+            elif kind in ("burned", "start_over"):
+                squares.append("burned" if kind == "burned" else "back to start")
+        done.append({
+            "ts": int(time.time()),
+            "rolls": rolls,
+            "moved": moved,
+            "position": ((response.get("board") or {}).get("position")),
+            "squares": squares,
+            "scales": scales,
+            "items": items,
+            "killed": killed,
+            "currency": response.get("currency"),
+        })
+        logger.info("Dragons: rolled %s%s%s%s",
+                    "+".join(str(r) for r in rolls) or "?",
+                    " -> %d scales" % scales if scales else "",
+                    " -> %s" % ", ".join(items) if items else "",
+                    " - DRAGON KILLED" if killed else "")
+        if response.get("energy"):
+            poll["player_energies"] = response["energy"]
+            energy, _top = energy_now(response["energy"], _DRAGONS_ENERGY_KEY)
+        else:
+            energy -= 1
+        if response.get("currency") is not None:
+            poll["currency"] = response["currency"]
+        if response.get("board"):
+            poll["board"] = response["board"]
+        if response.get("ranking"):
+            poll["ranks_best"] = response["ranking"]
+        if response.get("logs"):
+            poll["logs"] = response["logs"]
+    return done
+
+
+def _dragons_snapshot(state, poll):
+    """What the dashboard shows about the board itself."""
+    board = poll.get("board") or {}
+    return {
+        "ranks_best": poll.get("ranks_best"),
+        "board": {
+            "position": board.get("position"),
+            "status": board.get("status"),
+            "board_id": board.get("id"),
+            "squares": len(board.get("events") or {}),
+        },
+        # The dragonslayer's log, as the page shows it - wiped by the game
+        # every time a dragon dies, so it is "what happened on this board".
+        "logs": poll.get("logs") or [],
+    }
+
+
+def _dragons_record(state, actions):
+    """Fold a pass's throws into the running totals and the visible log."""
+    totals = state.setdefault("totals", {
+        "actions": 0, "rolls": 0, "pips": 0, "reward": 0,
+        "dragons": 0, "items": 0})
+    squares = state.setdefault("by_square", {})
+    items = state.setdefault("items_won", {})
+    for throw in actions:
+        totals["actions"] += 1
+        totals["rolls"] += 1
+        totals["pips"] += throw.get("moved") or 0
+        # "reward" is the shared name the archive line and the totals row
+        # already use for what an event paid, so scales go under it rather
+        # than inventing a second word for the same thing.
+        totals["reward"] += throw.get("scales") or 0
+        if throw.get("killed"):
+            totals["dragons"] += 1
+        for name in throw.get("squares") or []:
+            squares[name] = squares.get(name, 0) + 1
+        for item in throw.get("items") or []:
+            items[item] = items.get(item, 0) + 1
+            totals["items"] += 1
+    if actions:
+        state["log"] = (actions + state.get("log", []))[:MAX_LOG]
+
+
 DRIVERS = {
     "event_horse_race": {
         "label": "Horse race",
@@ -296,6 +554,21 @@ DRIVERS = {
         "read": _horse_read_page,
         "poll": _horse_poll,
         "play": _horse_play,
+        "snapshot": _horse_snapshot,
+        # What the daily page read fills in; missing means "read it now".
+        "static_key": "options",
+        "currency": "trophies",
+    },
+    "event_dragons": {
+        "label": "Here be dragons",
+        "energy_key": _DRAGONS_ENERGY_KEY,
+        "read": _dragons_read_page,
+        "poll": _dragons_poll,
+        "play": _dragons_play,
+        "snapshot": _dragons_snapshot,
+        "record": _dragons_record,
+        "static_key": "ends_text",
+        "currency": "scales",
     },
 }
 
@@ -392,7 +665,7 @@ def run(wrapper, village_id, config, overview_html=None):
     # taken after a real page has been read this pass, rather than trusting
     # whatever token some earlier screen happened to leave on the wrapper.
     stale_token = auto and not getattr(wrapper, "last_h", None)
-    if (not state.get("options") or stale_token
+    if (not state.get(driver.get("static_key", "options")) or stale_token
             or now - int(state.get("read_at") or 0) > 86400):
         static = driver["read"](wrapper, village_id, screen)
         if static:
@@ -403,29 +676,28 @@ def run(wrapper, village_id, config, overview_html=None):
     if poll is None:
         save_state(state)
         return
-    energy, top = energy_now(poll.get("player_energies"),
-                             driver.get("energy_key", "fodder"))
-    state["snapshot"] = {
+    key = driver.get("energy_key", "fodder")
+    energy, top = energy_now(poll.get("player_energies"), key)
+    # The half every event has - a bar and a currency - is built here; what the
+    # event is actually about is the driver's own business.
+    snapshot = {
         "at": now,
         "energy": round(energy, 2),
         "energy_max": top,
-        "energy_rate": energy_rate(poll.get("player_energies"),
-                                   driver.get("energy_key", "fodder")),
+        "energy_rate": energy_rate(poll.get("player_energies"), key),
         "currency": poll.get("currency"),
-        "ranks_best": poll.get("ranks_best"),
-        "ranks_unluckiest": poll.get("ranks_unluckiest"),
-        "group": poll.get("player_group"),
-        "options": option_values(
-            state.get("options"),
-            ((poll.get("player_group") or {}).get("race") or {}).get("jackpots")),
+        "currency_name": driver.get("currency", ""),
     }
+    extra = driver.get("snapshot")
+    if extra:
+        snapshot.update(extra(state, poll) or {})
+    state["snapshot"] = snapshot
     if auto:
         actions = driver["play"](wrapper, village_id, screen, state, poll,
                                  choice=settings.get("option", "auto"))
-        _record(state, actions)
+        (driver.get("record") or _record)(state, actions)
         if actions:
-            energy, top = energy_now(poll.get("player_energies"),
-                                     driver.get("energy_key", "fodder"))
+            energy, top = energy_now(poll.get("player_energies"), key)
             state["snapshot"]["energy"] = round(energy, 2)
             state["snapshot"]["currency"] = poll.get("currency", state["snapshot"]["currency"])
             state["snapshot"]["at"] = int(time.time())
