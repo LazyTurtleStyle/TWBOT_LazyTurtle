@@ -37,6 +37,10 @@
 	   can - but it is only out of reach for this landing, so it is folded away
 	   rather than dropped, and comes back when the hit time or boost changes. */
 	#sn-options-body.hide-unreachable .sn-row.sn-unreachable { display: none; }
+	/* An option already armed against this incoming stays listed - a village can
+	   send a second wave - but it reads as spent rather than as a fresh choice. */
+	#sn-launch-table tr.sn-armed { opacity: .72; }
+	#sn-launch-table tr.sn-armed td:first-child { box-shadow: inset 2px 0 0 var(--ok, #4f9d69); }
 </style>
 
 {% macro csnipe_rows(snipes, empty_text) %}
@@ -654,9 +658,12 @@
 		     this is for answering the only two questions that matter when a
 		     train is inbound: what do I send, and when do I press it. -->
 		<div class="card mb-2" id="sn-launch-card">
-			<div class="card-header py-1 d-flex align-items-center">
+			<div class="card-header py-1 d-flex align-items-center flex-wrap">
 				<strong class="small">Snipe options</strong>
 				<small class="text-muted ml-2" id="sn-launch-note"></small>
+				<button class="btn btn-sm btn-warning py-0 ml-2" id="sn-arm-ticked"
+					onclick="snipeArmTicked()" disabled>Arm ticked</button>
+				<small class="ml-2" id="sn-launch-result"></small>
 				<span class="ml-auto small">
 					<span class="custom-control custom-checkbox custom-control-inline">
 						<input type="checkbox" class="custom-control-input" id="sn-def-only" checked>
@@ -670,6 +677,8 @@
 			<div class="table-responsive" style="max-height:26rem">
 				<table class="table table-sm def-table mb-0" id="sn-launch-table">
 					<thead><tr>
+						<th style="width:2rem"><input type="checkbox" id="sn-pick-all"
+							title="tick every option listed"></th>
 						<th>Launch in</th><th>Send at</th><th>Source</th><th>Send</th>
 						<th>Pace</th><th class="text-right">Travel</th><th></th>
 					</tr></thead>
@@ -686,6 +695,7 @@
 		<div class="small mb-2" id="sn-unreachable-note"></div>
 		<div class="text-danger small mb-2" id="sn-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="snipeArm()">Arm selected snipes</button>
+		<small class="ml-2" id="sn-arm-result"></small>
 		<button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('snipe-options').style.display='none'">Close</button>
 	</div>
 </div>
@@ -1228,12 +1238,20 @@ function snipeLandMs() {
 function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 	const v = SNIPE.villages[String(villageId)];
 	if (!v) return;
+	// A different incoming is a different landing: the amounts typed for the
+	// last one, and the record of what was already armed against it, do not
+	// carry over.
+	if (snForm.incoming_id !== commandId) { SN_EDITS = {}; SN_ARMED = {}; }
 	snForm = { incoming_id: commandId, target_id: String(villageId), arrival: arrival };
 	const d = new Date(arrival * 1000);
 	document.getElementById('sn-context').textContent =
 		'· support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('sn-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	document.getElementById('sn-error').textContent = '';
+	const res = document.getElementById('sn-launch-result');
+	if (res) res.innerHTML = '';
+	const armRes = document.getElementById('sn-arm-result');
+	if (armRes) armRes.innerHTML = '';
 	snipeBuildRows();
 	const panel = document.getElementById('snipe-options');
 	panel.style.display = '';
@@ -1420,6 +1438,51 @@ function snipeOptionsFor(v, target) {
 	return out;
 }
 
+/* Amounts typed into the launch list, kept across a rebuild.
+
+   Every shared field - the hit millisecond, the offset, the boost, the cap -
+   redraws this table from each village's full home count. With nowhere to keep
+   them, a stack cut back to 500 spear by hand silently went back to all 1808
+   the moment the offset was nudged, and the row still read "arm". Keyed by
+   village and pace so an edit follows its own row rather than a position in a
+   list that reorders itself every second. */
+let SN_EDITS = {};
+/* Which options have already been armed for the incoming on screen, so a
+   redraw still shows what has gone out. */
+let SN_ARMED = {};
+function snEditKey(o, unit) { return o.village.id + '|' + o.paceUnit + '|' + unit; }
+function snArmKey(o) { return o.village.id + '|' + o.paceUnit; }
+
+/* What one box means. The pace unit is floored at one: take the last of it out
+   and the command travels at the next unit's speed, landing somewhere other
+   than where the row says. Everything else may go to zero - emptying a box is
+   how a unit is dropped from the send, so a blank reads as nothing rather than
+   as "leave it as it was". Reading a blank as "no change" is exactly how a
+   stack the screen showed as trimmed left as the whole garrison. */
+function snipeClampAmount(o, unit, raw) {
+	const floor = (unit === o.paceUnit) ? 1 : 0;
+	let n = parseInt(raw, 10);
+	if (isNaN(n)) n = floor;
+	return Math.max(floor, Math.min(n, o.max[unit]));
+}
+
+/* What this option will send, read off its boxes at the moment of arming
+   rather than off what they held when the row was drawn. */
+function snipeReadAmounts(i) {
+	const o = SNIPE_OPTIONS[i];
+	if (!o) return null;
+	document.querySelectorAll('.sn-amt[data-opt="' + i + '"]').forEach(function(inp) {
+		const u = inp.getAttribute('data-unit');
+		o.units[u] = snipeClampAmount(o, u, inp.value);
+		SN_EDITS[snEditKey(o, u)] = o.units[u];
+		// Leave the row showing exactly what was sent - a box still blank at
+		// the moment of arming (the pace unit floors at one) otherwise reads
+		// as a unit dropped when it was not.
+		inp.value = o.units[u];
+	});
+	return o.units;
+}
+
 function snipeBuildLaunchList() {
 	const target = SNIPE.villages[snForm.target_id];
 	const body = document.querySelector('#sn-launch-table tbody');
@@ -1431,6 +1494,13 @@ function snipeBuildLaunchList() {
 	});
 	// Soonest launch first: the top row is the one about to expire.
 	all.sort((a, b) => a.send - b.send);
+	// Hand-typed amounts win over the full home count this was rebuilt from.
+	all.forEach(function(o) {
+		Object.keys(o.units).forEach(function(u) {
+			const edit = SN_EDITS[snEditKey(o, u)];
+			if (edit !== undefined) o.units[u] = snipeClampAmount(o, u, edit);
+		});
+	});
 	SNIPE_OPTIONS = all;
 	document.getElementById('sn-launch-note').textContent = all.length
 		? all.length + ' option' + (all.length === 1 ? '' : 's') + ' across ' +
@@ -1438,11 +1508,7 @@ function snipeBuildLaunchList() {
 		: 'nothing can reach this landing in time';
 	body.innerHTML = all.map(function(o, i) {
 		// Editable, because the listed amount is everything the village holds
-		// and you rarely want to send all of it. The unit setting the pace is
-		// floored at one: take the last of it out and the command travels at
-		// the next unit's speed, which lands it somewhere other than where the
-		// row says - so that box refuses to go below 1 rather than silently
-		// re-timing the snipe.
+		// and you rarely want to send all of it.
 		const stack = Object.keys(o.units).map(function(u) {
 			const paced = (u === o.paceUnit);
 			return '<span class="sn-unit-edit' + (paced ? ' paced' : '') + '">' +
@@ -1451,7 +1517,10 @@ function snipeBuildLaunchList() {
 				'value="' + o.units[u] + '"' + (paced ? ' title="sets the pace - cannot go below 1"' : '') +
 				'></span>';
 		}).join(' ');
-		return '<tr><td><span class="def-eta text-warning" data-arrival="' +
+		const armed = SN_ARMED[snArmKey(o)];
+		return '<tr' + (armed ? ' class="sn-armed"' : '') + '>' +
+			'<td><input type="checkbox" class="sn-pick" data-opt="' + i + '"></td>' +
+			'<td><span class="def-eta text-warning" data-arrival="' +
 				Math.round(o.send / 1000) + '">\u2026</span></td>' +
 			'<td class="ms" data-ms="' + Math.round(o.send) + '"></td>' +
 			'<td><small><strong>' + esc(o.village.name) + '</strong> ' +
@@ -1460,9 +1529,12 @@ function snipeBuildLaunchList() {
 			'<td><small>' + stack + '</small></td>' +
 			'<td><span class="badge badge-secondary">' + unitLabel(o.paceUnit) + '</span></td>' +
 			'<td class="text-right"><small>' + fmtDur(o.travel / 1000) + '</small></td>' +
-			'<td class="text-right"><button class="btn btn-sm btn-warning py-0" ' +
+			'<td class="text-right">' +
+				(armed ? '<span class="badge badge-success mr-1" title="already armed for this incoming">armed' +
+					(armed > 1 ? ' \u00d7' + armed : '') + '</span>' : '') +
+				'<button class="btn btn-sm btn-warning py-0" ' +
 				'onclick="snipeArmOption(' + i + ')">arm</button></td></tr>';
-	}).join('') || '<tr><td colspan="7" class="text-muted small">No option reaches this landing in time.</td></tr>';
+	}).join('') || '<tr><td colspan="8" class="text-muted small">No option reaches this landing in time.</td></tr>';
 	body.querySelectorAll('.ms[data-ms]').forEach(function(el) {
 		const ms = parseInt(el.getAttribute('data-ms'), 10);
 		const d = new Date(ms);
@@ -1474,19 +1546,60 @@ function snipeBuildLaunchList() {
 			const o = SNIPE_OPTIONS[parseInt(inp.getAttribute('data-opt'), 10)];
 			if (!o) return;
 			const u = inp.getAttribute('data-unit');
-			const floor = (u === o.paceUnit) ? 1 : 0;
-			let n = parseInt(inp.value, 10);
-			if (isNaN(n)) return;                 // mid-typing, leave it alone
-			n = Math.max(floor, Math.min(n, o.max[u]));
-			if (String(n) !== inp.value) inp.value = n;
+			const n = snipeClampAmount(o, u, inp.value);
+			// Mid-typing the box may be empty; the stack it describes is not
+			// left at the old figure, it is that unit gone. Only a value that
+			// was actually over the maximum is written back, so typing is not
+			// fought with.
+			if (inp.value !== '' && String(n) !== inp.value) inp.value = n;
 			o.units[u] = n;
+			SN_EDITS[snEditKey(o, u)] = n;
 			// Removing troops can only ever make a stack faster, and the pace
 			// unit can never reach zero, so the slowest unit - and with it the
 			// launch moment this row is showing - does not move.
 		});
+		inp.addEventListener('blur', function() {
+			const o = SNIPE_OPTIONS[parseInt(inp.getAttribute('data-opt'), 10)];
+			if (!o) return;
+			// Leave the box showing what will actually be sent.
+			if (inp.value === '') inp.value = o.units[inp.getAttribute('data-unit')];
+		});
 	});
+	body.querySelectorAll('.sn-pick').forEach(function(cb) {
+		cb.addEventListener('change', snipePickChanged);
+	});
+	snipePickChanged();
 	tickSnipe();
 }
+
+/* Several options, one arming. A train is answered with more than one snipe -
+   different villages, different paces - and picking them off one at a time
+   used to mean re-finding the incoming after every single one. */
+function snipePickChanged() {
+	const picks = document.querySelectorAll('#sn-launch-table .sn-pick');
+	const n = document.querySelectorAll('#sn-launch-table .sn-pick:checked').length;
+	const btn = document.getElementById('sn-arm-ticked');
+	if (btn) {
+		btn.disabled = !n;
+		btn.textContent = n ? 'Arm ' + n + ' ticked' : 'Arm ticked';
+	}
+	const all = document.getElementById('sn-pick-all');
+	if (all) {
+		all.checked = picks.length > 0 && n === picks.length;
+		all.indeterminate = n > 0 && n < picks.length;
+	}
+}
+(function() {
+	const all = document.getElementById('sn-pick-all');
+	if (!all) return;
+	all.addEventListener('change', function() {
+		document.querySelectorAll('#sn-launch-table .sn-pick').forEach(function(cb) {
+			cb.checked = all.checked;
+		});
+		snipePickChanged();
+	});
+})();
+
 let SNIPE_OPTIONS = [];
 /* The game's internal unit codes are cryptic in a couple of places; the rest
    read fine as they are. */
@@ -1504,28 +1617,92 @@ function fmtDur(s) {
 	const only = document.getElementById('sn-def-only');
 	if (only) only.addEventListener('change', snipeBuildLaunchList);
 })();
-function snipeArmOption(i) {
-	const o = SNIPE_OPTIONS[i];
-	if (!o) return;
+/* Arming does not reload the page.
+
+   The reload was what made a second snipe cost a second search: it threw away
+   the chosen incoming, the open panel and the village list, and the only way
+   back to the same attack was to find the village again. The armed snipes live
+   on the bot's side of this, so nothing is lost by leaving the page where it
+   is - only the table at the top of the tab is a few seconds old, which is what
+   the refresh link is for. */
+function snipePostArm(options, noteEl, onArmed, skipped) {
 	const err = document.getElementById('sn-error');
 	err.textContent = '';
-	fetch('/app/snipe/arm', {
+	if (noteEl) noteEl.innerHTML = '<span class="text-muted">arming\u2026</span>';
+	return fetch('/app/snipe/arm', {
 		method: 'POST', headers: {'Content-Type': 'application/json'},
 		body: JSON.stringify({
 			incoming_id: snForm.incoming_id,
 			target_village_id: snForm.target_id,
 			land_ms: snipeLandMs(),
-			options: [{village_id: o.village.id, pace_unit: o.paceUnit,
-				units: Object.fromEntries(Object.entries(o.units).filter(x => x[1] > 0))}],
+			options: options,
 			shortfall: document.getElementById('sn-shortfall').value,
 			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
 			boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
 			max_delta_ms: parseInt(document.getElementById('sn-maxdelta').value, 10) || 0,
 		}),
 	}).then(r => r.json()).then(function(res) {
-		if (res.errors && res.errors.length) { err.textContent = res.errors.join(' \u00b7 '); if (!res.armed) return; }
-		location.hash = '#snipe'; location.reload();
-	}).catch(function(e) { err.textContent = String(e); });
+		const problems = (skipped || []).concat(res.errors || []);
+		err.textContent = problems.join(' \u00b7 ');
+		if (res.armed && onArmed) onArmed(res);
+		if (noteEl) {
+			noteEl.innerHTML = res.armed
+				? '<span class="text-success">' + res.armed + ' armed</span> \u00b7 ' +
+				  '<a href="#snipe" onclick="location.reload();return false">refresh the list above</a>'
+				: '<span class="text-danger">nothing armed</span>';
+		}
+	}).catch(function(e) {
+		err.textContent = String(e);
+		if (noteEl) noteEl.innerHTML = '';
+	});
+}
+
+/* One option, or every ticked one, in a single arming. */
+function snipeArmOption(i) { snipeArmOptions([i]); }
+
+function snipeArmTicked() {
+	const picked = [];
+	document.querySelectorAll('#sn-launch-table .sn-pick:checked').forEach(function(cb) {
+		picked.push(parseInt(cb.getAttribute('data-opt'), 10));
+	});
+	if (!picked.length) {
+		document.getElementById('sn-error').textContent = 'tick at least one option';
+		return;
+	}
+	snipeArmOptions(picked);
+}
+
+function snipeArmOptions(indexes) {
+	const options = [], keys = [], skipped = [];
+	indexes.forEach(function(i) {
+		const o = SNIPE_OPTIONS[i];
+		if (!o) return;
+		const amounts = snipeReadAmounts(i);
+		const units = {};
+		Object.keys(amounts).forEach(function(u) { if (amounts[u] > 0) units[u] = amounts[u]; });
+		// The row's whole timing rests on its pace unit; without it this is a
+		// different, faster command landing somewhere else, so it is not sent
+		// under this row's numbers.
+		if (!units[o.paceUnit]) {
+			skipped.push(o.village.name + ': no ' + unitLabel(o.paceUnit) +
+				' left in the stack, and that is what sets this row\u2019s timing');
+			return;
+		}
+		options.push({village_id: o.village.id, pace_unit: o.paceUnit, units: units});
+		keys.push(snArmKey(o));
+	});
+	if (!options.length) {
+		document.getElementById('sn-error').textContent =
+			skipped.join(' \u00b7 ') || 'nothing to arm';
+		return;
+	}
+	snipePostArm(options, document.getElementById('sn-launch-result'), function() {
+		keys.forEach(function(k) { SN_ARMED[k] = (SN_ARMED[k] || 0) + 1; });
+		document.querySelectorAll('#sn-launch-table .sn-pick').forEach(function(cb) {
+			cb.checked = false;
+		});
+		snipeBuildLaunchList();
+	}, skipped);
 }
 
 function snipeRecalcAll() {
@@ -1680,30 +1857,11 @@ function snipeArm() {
 		});
 	});
 	if (!options.length) { err.textContent = 'tick at least one village with units entered'; return; }
-	const body = {
-		incoming_id: snForm.incoming_id,
-		target_village_id: snForm.target_id,
-		land_ms: snipeLandMs(),
-		options: options,
-		shortfall: document.getElementById('sn-shortfall').value,
-		min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
-		boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
-		max_delta_ms: parseInt(document.getElementById('sn-maxdelta').value, 10) || 0,
-	};
-	fetch('/app/snipe/arm', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-	}).then(r => r.json()).then(function(res) {
-		if (res.errors && res.errors.length) {
-			err.textContent = (res.armed ? res.armed + ' armed; ' : '') + res.errors.join(' · ');
-			if (!res.armed) return;
-			setTimeout(function() { location.hash = '#snipe'; location.reload(); }, 2500);
-			return;
-		}
-		location.hash = '#snipe';
-		location.reload();
-	}).catch(function(e) { err.textContent = String(e); });
+	// Same no-reload arming as the launch list: the panel, the incoming and the
+	// village list all stay put, so the next snipe does not start with a search.
+	snipePostArm(options, document.getElementById('sn-arm-result'), function() {
+		document.querySelectorAll('.sn-row .sn-opt').forEach(function(cb) { cb.checked = false; });
+	});
 }
 
 function snipeCancel(id) {
