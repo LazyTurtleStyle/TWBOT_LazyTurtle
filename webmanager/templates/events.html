@@ -78,7 +78,9 @@
 			<div class="stat"><div class="v gold">{{ c.totals.dragons }}</div>
 				<div class="k">Dragons killed</div>
 				<div class="sub">square {{ c.board.position if c.board.position is not none else '?' }} of the
-					board{% if c.totals.items %} · {{ c.totals.items }} item{{ '' if c.totals.items == 1 else 's' }} won{% endif %}</div></div>
+					board{# .items on a dict is the built-in method, which is always truthy and
+					       renders as "<built-in method items ...>" - subscript, do not attribute #}
+					{%- if c.totals['items'] %} · {{ c.totals['items'] }} item{{ '' if c.totals['items'] == 1 else 's' }} won{% endif %}</div></div>
 			{% endif %}
 			{% if c.luck %}
 			<div class="stat"><div class="v {{ 'gold' if c.luck >= 1 else '' }}">{{ (c.luck * 100)|round(0)|int }}%</div>
