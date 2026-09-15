@@ -33,6 +33,13 @@ app = Flask(__name__)
 # so it must never be on when the panel is reachable off-host - the dashboard
 # has no authentication.
 app.config["DEBUG"] = False
+# Template auto-reload, which Flask otherwise ties to DEBUG. Turning the
+# debugger off for an off-host bind (above) also stopped Jinja re-reading its
+# templates, so the panel went on serving whatever HTML it had cached since its
+# first render - an edited page looked like an edit that had not worked, and the
+# only way to see it was to restart the panel. This is a stat() per template per
+# render and nothing else; it does not bring the debugger back.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # Cookie holding the selected world ("" / absent = the default world).
 WORLD_COOKIE = "twb_world"
