@@ -9,12 +9,59 @@
 	.ms { font-variant-numeric: tabular-nums; }
 	.ms small { opacity: .65; }
 	.snipe-log { max-height: 9rem; overflow-y: auto; font-size: .75rem; white-space: pre-line; }
+	.def-filters { display: inline-flex; align-items: center; gap: .4rem; }
+	.def-filters .form-control-sm { font-size: .78rem; }
+	.inc-list { font-size: .72rem; line-height: 1.5; max-height: 14rem; overflow-y: auto; }
+	.inc-list .badge { font-size: .62rem; }
+	/* One command per line, columns lining up down the list so a village taking
+	   nine of them still reads as a list rather than a paragraph. */
+	.inc-row { display: grid; grid-template-columns: 4.2rem 11rem 5.5rem auto;
+		align-items: center; gap: .3rem; padding: .1rem 0; }
+	.inc-row .inc-player { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.inc-row .tag-cell { flex-wrap: nowrap; }
+	.inc-row .tag-cell input { width: 4.6rem; }
+	.inc-row .tag-status { flex-basis: auto; margin-left: .25rem; white-space: nowrap; }
+	.sn-unit-edit { white-space: nowrap; margin-right: .5rem; }
+	.sn-unit-edit input { width: 4.6rem; font-size: .72rem; padding: 0 .2rem; margin-left: .15rem;
+		background: var(--surface-2, #241d17); color: inherit; border: 1px solid var(--line, #3a2f26);
+		border-radius: 3px; }
+	/* The one box that must not be emptied is marked, not just validated. */
+	.sn-unit-edit.paced input { border-color: var(--ember, #e07b2c); }
+	.tag-cell { display: flex; align-items: center; gap: .25rem; flex-wrap: wrap; }
+	.tag-cell input { width: 5.5rem; font-size: .72rem; padding: 0 .25rem; }
+	.tag-cell .btn { font-size: .68rem; }
+	.tag-cell .tag-status { flex-basis: 100%; font-size: .66rem; }
 	#csnipe-form label, #csnipe-test-form label { font-size: .8rem; margin-bottom: .1rem; }
 	#csnipe-form .unit-input, #csnipe-test-form .unit-input { max-width: 7rem; }
 	/* A village nothing can reach in time from is noise between the ones that
 	   can - but it is only out of reach for this landing, so it is folded away
 	   rather than dropped, and comes back when the hit time or boost changes. */
 	#sn-options-body.hide-unreachable .sn-row.sn-unreachable { display: none; }
+	/* An option already armed against this incoming stays listed - a village can
+	   send a second wave - but it reads as spent rather than as a fresh choice. */
+	#sn-launch-table tr.sn-armed { opacity: .72; }
+	#sn-launch-table tr.sn-armed td:first-child { box-shadow: inset 2px 0 0 var(--ok, #4f9d69); }
+	/* The c-snipe explainer: a definition list reads as "field -> what to type",
+	   which is the shape of the question, and stays compact on one screen. */
+	.cs-explain dl { display: grid; grid-template-columns: max-content 1fr;
+		gap: .1rem .75rem; margin: 0; }
+	.cs-explain dt { font-weight: 600; color: var(--ink, inherit); white-space: nowrap; }
+	.cs-explain dd { margin: 0; }
+	.cs-gap-strip { display: flex; flex-wrap: wrap; gap: .35rem; }
+	.cs-gap { border: 1px solid var(--line, #3a2f26); background: var(--surface-2, #241d17);
+		color: inherit; font-size: .72rem; line-height: 1.15; padding: .2rem .45rem; }
+	.cs-gap small { opacity: .65; }
+	.cs-gap.active { border-color: var(--ember, #e07b2c); box-shadow: inset 0 0 0 1px var(--ember, #e07b2c); }
+	/* Tight enough that the engine's own +30-90ms spread decides it, so it is
+	   marked rather than presented as an equal choice. */
+	.cs-gap-tight { border-style: dashed; }
+	.cs-gap-tight small { color: var(--warn, #d8a657); opacity: .9; }
+	.cs-target-strip { display: flex; flex-wrap: wrap; gap: .35rem; }
+	.cs-target { border: 1px solid var(--line, #3a2f26); background: var(--surface-2, #241d17);
+		color: inherit; font-size: .72rem; line-height: 1.15; padding: .2rem .45rem; text-align: left; }
+	.cs-target small { opacity: .65; }
+	.cs-target.active { border-color: var(--ember, #e07b2c); box-shadow: inset 0 0 0 1px var(--ember, #e07b2c); }
+	.cs-kind { font-size: .72rem; padding: 0 .25rem; height: auto; }
 </style>
 
 {% macro csnipe_rows(snipes, empty_text) %}
@@ -68,6 +115,8 @@
 
 <ul class="nav nav-tabs mb-3" id="def-tabs">
 	<li class="nav-item"><a class="nav-link active" href="#overview" data-pane="overview">Overview</a></li>
+	<li class="nav-item"><a class="nav-link" href="#village" data-pane="village">Village
+		{% if defense.under_attack_count %}<span class="badge badge-danger">{{ defense.under_attack_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#csnipe" data-pane="csnipe">C-snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if csnipe.active_count %}<span class="badge badge-danger">{{ csnipe.active_count }}</span>{% endif %}</a></li>
@@ -114,7 +163,25 @@
 <!-- Per-village table -->
 <div class="card">
 	<div class="card-header py-2"><strong>Villages,</strong>
-		<small class="text-muted">under attack first</small></div>
+		<small class="text-muted">under attack first</small>
+		<span class="float-right def-filters">
+			<select id="dv_group" class="form-control form-control-sm d-inline-block" style="width:14rem">
+				<option value="">all villages ({{ defense.villages|length }})</option>
+				<option value="__attacked__">under attack only ({{ defense.under_attack_count }})</option>
+				{% for g in defense.groups %}
+				<option value="{{ g.id }}">{{ g.name }} ({{ g.count }}){% if g.type == 'dynamic' %} · dynamic{% endif %}</option>
+				{% endfor %}
+			</select>
+			<input id="dv_name" class="form-control form-control-sm d-inline-block" style="width:11rem"
+				placeholder="village name or coords…">
+			<input id="dv_label" class="form-control form-control-sm d-inline-block" style="width:11rem"
+				placeholder="incoming name…" list="dv_label_list"
+				title="The command name as it reads in game. Type Aanval to find everything not tagged yet.">
+			<datalist id="dv_label_list">
+				{% for lab in defense.incoming_labels %}<option value="{{ lab.name }}">{{ lab.count }}</option>{% endfor %}
+			</datalist>
+			<small id="dv_count" class="text-muted ml-1"></small>
+		</span></div>
 	<div class="table-responsive">
 		<table class="table table-sm def-table mb-0">
 			<thead><tr>
@@ -123,7 +190,11 @@
 			</tr></thead>
 			<tbody>
 				{% for v in defense.villages %}
-				<tr class="{% if v.incoming %}table-danger{% endif %}">
+				<tr class="{% if v.incoming %}table-danger{% endif %} dv-row"
+					data-groups="{{ v.groups|join(',') }}"
+					data-attacked="{{ 1 if v.incoming else 0 }}"
+					data-search="{{ ((v.name or '') ~ ' ' ~ (v.coords[0] ~ '|' ~ v.coords[1] if v.coords else '') ~ ' ' ~ v.id)|lower }}"
+					data-labels="{{ (v.commands | map(attribute='game_label') | select | join(' '))|lower }}">
 					<td>
 						<strong>{{ v.name }}</strong>
 						<small class="text-muted d-block coord">
@@ -141,7 +212,34 @@
 							<span class="badge badge-success">clear</span>
 						{% endif %}
 					</td>
-					<td class="text-right">{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>{% else %}—{% endif %}</td>
+					<td class="text-right">
+						{% if v.incoming %}<span class="badge badge-dark">{{ v.incoming }}</span>
+						{# Every command is listed, not only where there are several: the
+						   soonest arrival alone hides the shape of a train, and a village
+						   with one incoming still has one command that wants a tag. #}
+						<div class="inc-list small text-muted mt-1 text-left">
+							{% for c in v.commands[:10] %}
+							<div class="inc-row">
+								<span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
+								{% if c.game_label %}<span class="badge badge-secondary" title="{{ c.game_label }}">{{ c.game_label|truncate(22, True, '…') }}</span>{% endif %}
+								<span class="text-muted inc-player">{{ c.player_name }}</span>
+								<span class="tag-cell">
+									<input id="vtag-{{ c.command_id }}" class="form-control form-control-sm"
+										value="{{ c.tag_auto or '' }}" placeholder="tag">
+									{% if c.tag_auto %}
+									<button class="btn btn-sm btn-outline-warning py-0"
+										title="tag it as {{ c.tag_auto }} - the slowest unit still consistent with the flight time"
+										onclick="voTag('{{ c.command_id }}','{{ c.tag_auto }}')">{{ c.tag_auto }}</button>
+									{% endif %}
+									<button class="btn btn-sm btn-outline-secondary py-0"
+										onclick="voTag('{{ c.command_id }}')">save</button>
+									<span class="tag-status small text-muted" id="vtagst-{{ c.command_id }}"></span>
+								</span>
+							</div>
+							{% endfor %}
+							{% if v.incoming > 10 %}<div class="text-muted">+{{ v.incoming - 10 }} more — open the Village tab for the rest</div>{% endif %}
+						</div>
+						{% else %}—{% endif %}</td>
 					<td>
 						<strong>{{ v.def_total|comma }}</strong>
 						{% set parts = [] %}
@@ -180,6 +278,41 @@
 	</div>
 </div>
 </div><!-- /pane-overview -->
+
+<!-- One village at a time. With a hundred villages the account-wide table is
+     the wrong tool: you want everything landing on 022 and nothing else. -->
+<div id="pane-village" style="display:none">
+<div class="card">
+	<div class="card-header py-2"><strong>One village</strong>
+		<small class="text-muted">pick a group, then a village</small></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="form-group col-12 col-md-3 mb-2">
+				<label class="small mb-1">Group</label>
+				<select id="vo_group" class="form-control form-control-sm"></select>
+			</div>
+			<div class="form-group col-12 col-md-4 mb-2">
+				<label class="small mb-1">Village</label>
+				<select id="vo_village" class="form-control form-control-sm"></select>
+			</div>
+			<div class="form-group col-12 col-md-3 mb-2">
+				<label class="small mb-1">Incoming name</label>
+				<input id="vo_label" class="form-control form-control-sm" list="dv_label_list"
+					placeholder="e.g. Aanval"
+					title="The command name as it reads in game. Aanval is an attack nobody has tagged yet.">
+			</div>
+			<div class="form-group col-12 col-md-2 mb-2">
+				<label class="small mb-1">&nbsp;</label>
+				<div class="custom-control custom-checkbox mt-1">
+					<input type="checkbox" class="custom-control-input" id="vo_only_attacked">
+					<label class="custom-control-label small" for="vo_only_attacked">only under attack</label>
+				</div>
+			</div>
+		</div>
+		<div id="vo_body"></div>
+	</div>
+</div>
+</div><!-- /pane-village -->
 
 <div id="pane-csnipe" style="display:none">
 <p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
@@ -246,15 +379,17 @@
 	<div class="card-header py-2"><strong>Arm cancel snipe</strong>
 		<small class="text-muted" id="cs-context"></small></div>
 	<div class="card-body py-2">
+		<div class="mb-2" id="cs-gaps"></div>
 		<div class="form-row">
 			<div class="form-group col-6 col-md-2">
 				<label>First hit ms <small class="text-muted">(.000–.999)</small></label>
-				<input type="number" class="form-control form-control-sm" id="cs-hit-ms" min="0" max="999" value="0">
+				<input type="number" class="form-control form-control-sm" id="cs-hit-ms" min="0" max="999" value="0"
+					oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>Land +ms after it</label>
 				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="1" max="5000"
-					value="{{ csnipe.default_aim_ms }}">
+					value="{{ csnipe.default_aim_ms }}" oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
 				<label>No later than +ms <small class="text-muted">(alpha)</small></label>
@@ -275,19 +410,54 @@
 				<input type="number" class="form-control form-control-sm" id="cs-ty">
 			</div>
 		</div>
-		<small class="text-muted d-block mb-2" id="cs-barb-hint"></small>
-		<small class="text-muted d-block mb-2">The troops below dodge out and land back <strong>no earlier than</strong>
-			first hit + aim, typically 30–90&nbsp;ms after it: the server credits a cancelled command's travel
-			in whole seconds, so the return keeps the <em>send's</em> millisecond, the bot fires throwaway
-			one-unit probes at the barb first to measure today's send timing, then aims the real send just past
-			your target (without probe time it falls back to a blind +150&nbsp;ms buffer, achieving
-			150–400&nbsp;ms). A badly-jittered send costs +2&nbsp;s (late, never early). <strong>Lone incoming:
-			use 300–500&nbsp;ms.</strong> Noble train: aim just past the first hit; 100&nbsp;ms gaps are
-			makeable when calibration succeeds. Check the log's "send bias" line.
-			<strong>Tight gap (both sides fatal):</strong> also fill "no later than +ms" (e.g. the next hit's
-			offset minus a margin), the bot then aims the middle of that window and, when a measured send
-			would miss it, cancels the attempt immediately and re-fires on a later 2-second slot until one
-			lands inside (needs a few minutes of lead; ~10–15&nbsp;s per retry, up to 8 tries).</small>
+		<!-- The arithmetic of the two ms fields, on screen. "Land +ms after it"
+		     reads to a lot of people as "before the hit" - the dodge is the one
+		     thing in this panel where that would be fatal, so the moment it
+		     actually produces is spelled out rather than left to be worked out
+		     from two boxes three columns apart. -->
+		<div class="small mb-2" id="cs-return-note"></div>
+		<div class="small mb-2" id="cs-barb-hint"></div>
+		<!-- Same facts as before, in the order you need them: what the two
+		     numbers you type mean, then what to type, then how close it lands.
+		     One twelve-line paragraph asked you to hold all three at once. -->
+		<div class="cs-explain small mb-2">
+			<p class="mb-1">The troops below leave for the target above and are cancelled
+				mid-flight, so they walk back in and are home at
+				<strong>first hit + aim</strong> &mdash; <strong>never before it</strong>, which is
+				the whole point: home early means home for the hit you were dodging.</p>
+			<dl class="mb-1">
+				<dt>First hit ms</dt>
+				<dd>The <em>.mmm</em> of the attack you are sniping. Filled in for you.</dd>
+				<dt>Land +ms after it</dt>
+				<dd>How far into the gap to come home &mdash; <strong>after</strong> the hit,
+					always. This counts the opposite way to the Snipe tab next door, whose
+					offset is negative because support has to be standing there <em>before</em>
+					the command it is meeting; here the stack has to be out when the hit lands.
+					<strong>Lone incoming: 300&ndash;500.</strong>
+					Noble train: just past the first hit &mdash; 100&nbsp;ms gaps are makeable.</dd>
+				<dt>No later than +ms <span class="badge badge-warning">alpha</span></dt>
+				<dd>Only for a gap that is fatal on <em>both</em> sides. Set it to the next
+					hit's offset minus a margin: the bot aims the middle of that window and,
+					when a send would miss it, cancels and re-fires on a later 2-second slot
+					until one lands inside. Needs a few minutes of lead, ~10&ndash;15&nbsp;s
+					per retry, 8 tries. Leave empty otherwise.</dd>
+				<dt>Engage (min before)</dt>
+				<dd>When the bot starts. It must be able to send and still be under way at
+					the halfway moment, which is where the cancel goes.</dd>
+			</dl>
+			<p class="mb-0">How close it lands: <strong>+30&ndash;90&nbsp;ms</strong> once the
+				throwaway one-unit probes have measured today's send timing,
+				<strong>+150&ndash;400&nbsp;ms</strong> without them, and <strong>+2&nbsp;s</strong>
+				on a badly jittered send. Late, never early &mdash; the server credits a cancelled
+				command's flight in whole seconds, so the return carries the <em>send's</em>
+				millisecond and a send that slips only rolls it one 2-second slot later. The log's
+				"send bias" line says which of the three you are getting.</p>
+		</div>
+		<div class="d-flex align-items-center flex-wrap mb-1">
+			<button class="btn btn-sm btn-outline-info py-0"
+				onclick="csnipeCheckTroops('cs', csForm.village_id)">Check troops now</button>
+			<small class="ml-2" id="cs-troop-note"></small>
+		</div>
 		<div class="form-row" id="cs-units"></div>
 		<div class="text-danger small mb-2" id="cs-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="csnipeArm()">Arm snipe</button>
@@ -339,7 +509,7 @@
 				<input type="number" class="form-control form-control-sm" id="cst-ty">
 			</div>
 		</div>
-		<small class="text-muted d-block mb-2" id="cst-barb-hint"></small>
+		<div class="small mb-2" id="cst-barb-hint"></div>
 		<small class="text-muted d-block mb-2">The two fields together are the full return moment
 			HH:MM:SS<strong>:mmm</strong>. The ms field is <em>part of the time</em>, not a margin. A time in
 			the past means <strong>tomorrow</strong>. Aim at a non-zero millisecond (e.g. .250): an uncancelled
@@ -351,6 +521,11 @@
 			the target: the bot aims mid-window and re-fires missed sends (cancel, wait home, next 2-second
 			slot) until one is inside, the result line then reports window HIT or MISSED. Try +100 to see the
 			retry loop work.</small>
+		<div class="d-flex align-items-center flex-wrap mb-1">
+			<button class="btn btn-sm btn-outline-info py-0"
+				onclick="csnipeCheckTroops('cst', document.getElementById('cst-village').value)">Check troops now</button>
+			<small class="ml-2" id="cst-troop-note"></small>
+		</div>
 		<div class="form-row" id="cst-units"></div>
 		<div class="text-danger small mb-2" id="cst-error"></div>
 		<button class="btn btn-sm btn-info" onclick="cstArm()">Arm test snipe</button>
@@ -419,9 +594,15 @@
 						{% else %}est. <span class="ms" data-ms="{{ (s.send_est_ts or 0) * 1000 }}">…</span>{% endif %}
 					</td>
 					<td class="small">
+						{% if s.status == 'missed' %}<span class="badge badge-secondary">recalled</span> {% endif %}
 						{{ s.result or '—' }}
 						{% if s.delta_ms is defined and s.delta_ms is not none %}
-							<span class="badge badge-{{ 'success' if s.delta_ms|abs <= 100 else 'warning' }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{# Judged against the limit that was set for this snipe, not a
+							   fixed number: the whole point is that you choose what counts
+							   as close enough. #}
+							{% set cap = s.max_delta_ms or 100 %}
+							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('success' if s.delta_ms|abs <= cap else 'warning') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
 						{% endif %}
 					</td>
 					<td class="text-right">
@@ -514,6 +695,12 @@
 				<input type="number" class="form-control form-control-sm" id="sn-minpct" min="0" max="100"
 					value="{{ snipe.default_min_pct }}">
 			</div>
+			<div class="form-group col-6 col-md-3">
+				<label>Keep only within <small class="text-muted">(ms, 0 = keep all)</small></label>
+				<input type="number" class="form-control form-control-sm" id="sn-maxdelta" min="0" max="5000"
+					value="0" title="After firing, the bot reads back where the command actually lands. Outside this many milliseconds it is recalled straight away.">
+				<small class="text-muted">Arm several and keep the ones that land inside it.</small>
+			</div>
 		</div>
 		<div class="form-row align-items-end" id="sn-template-row" style="display:none">
 			<div class="form-group col-6 col-md-3">
@@ -530,6 +717,39 @@
 				<small class="text-muted d-block" id="sn-template-note"></small>
 			</div>
 		</div>
+		<!-- Launch list. The per-village grid below is for hand-tuning a send;
+		     this is for answering the only two questions that matter when a
+		     train is inbound: what do I send, and when do I press it. -->
+		<div class="card mb-2" id="sn-launch-card">
+			<div class="card-header py-1 d-flex align-items-center flex-wrap">
+				<strong class="small">Snipe options</strong>
+				<small class="text-muted ml-2" id="sn-launch-note"></small>
+				<button class="btn btn-sm btn-warning py-0 ml-2" id="sn-arm-ticked"
+					onclick="snipeArmTicked()" disabled>Arm ticked</button>
+				<small class="ml-2" id="sn-launch-result"></small>
+				<span class="ml-auto small">
+					<span class="custom-control custom-checkbox custom-control-inline">
+						<input type="checkbox" class="custom-control-input" id="sn-def-only" checked>
+						<label class="custom-control-label text-muted" for="sn-def-only">defensive units only</label>
+					</span>
+					<label class="text-muted mb-0 mr-1">cap per unit</label>
+					<input id="sn-cap" type="number" min="0" class="form-control form-control-sm d-inline-block"
+						style="width:6.5rem" placeholder="all home">
+				</span>
+			</div>
+			<div class="table-responsive" style="max-height:26rem">
+				<table class="table table-sm def-table mb-0" id="sn-launch-table">
+					<thead><tr>
+						<th style="width:2rem"><input type="checkbox" id="sn-pick-all"
+							title="tick every option listed"></th>
+						<th>Launch in</th><th>Send at</th><th>Source</th><th>Send</th>
+						<th>Pace</th><th class="text-right">Travel</th><th></th>
+					</tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</div>
+
 		<p class="text-muted small mb-2">Pick which villages send support and type the exact counts yourself,
 			pace is whichever unit you enter is slowest, so mixing in a ram or axe makes the whole send walk at
 			that pace. A template fills the boxes and nothing more - every one of them is still editable.
@@ -538,6 +758,7 @@
 		<div class="small mb-2" id="sn-unreachable-note"></div>
 		<div class="text-danger small mb-2" id="sn-error"></div>
 		<button class="btn btn-sm btn-warning" onclick="snipeArm()">Arm selected snipes</button>
+		<small class="ml-2" id="sn-arm-result"></small>
 		<button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('snipe-options').style.display='none'">Close</button>
 	</div>
 </div>
@@ -549,7 +770,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'csnipe', 'csnipetest', 'snipe'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -566,6 +787,279 @@ document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 	});
 });
 if (PANES.indexOf(location.hash.slice(1)) > 0) showPane(location.hash.slice(1));
+
+/* ---------- one village at a time ------------------------------------
+   The account-wide table answers "where am I being hit". This answers "what
+   exactly is landing on 022", which is the question once there are a hundred
+   villages and eight commands on one of them. Everything here is rendered from
+   data already on the page - no extra request to open it. */
+const DEF_VILLAGES = {{ defense.villages|tojson }};
+const DEF_GROUPS = {{ defense.groups|tojson }};
+const DEF_NOW = {{ defense.now or 0 }};
+const DEF_UNITS = {{ defense.defensive_units|tojson }};
+
+/* Write the tag to the game. Same endpoint the Overview page uses, so a tag
+   set here is the command's name in TribalWars, not a note that only this
+   dashboard can see - which is the whole point: the game's own incoming list
+   is what gets read when it matters. */
+function voTag(commandId, preset) {
+	const box = document.getElementById('vtag-' + commandId);
+	const st = document.getElementById('vtagst-' + commandId);
+	if (preset !== undefined && box) box.value = preset;
+	const value = box ? box.value : (preset || '');
+	if (st) st.textContent = 'saving…';
+	fetch('/app/incoming/tag', {
+		method: 'POST',
+		headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+		body: 'command_id=' + encodeURIComponent(commandId) + '&tag=' + encodeURIComponent(value),
+	}).then(r => r.json()).then(function(res) {
+		if (!st) return;
+		if (!res || !res.ok) { st.textContent = 'failed'; st.title = 'the dashboard could not save the tag';
+			st.className = 'tag-status small text-danger'; return; }
+		const ig = res.ingame || {};
+		// Saying where it landed matters: a tag the game never received looks
+		// identical to one it did, right up until you go and read the game. The
+		// short form keeps the row a row; the long form is the tooltip, because
+		// these sit forty to a screen on the overview.
+		if (ig.ok) {
+			st.textContent = '\u2713 in game';
+			st.title = 'renamed in TribalWars';
+			st.className = 'tag-status small text-success';
+		} else {
+			st.textContent = '\u2713 local';
+			st.title = ig.reason === 'no_endpoint_yet'
+				? 'saved here, but not renamed in game yet - the bot has not scraped a live incomings page'
+				: (ig.reason === 'no_session'
+					? 'saved here, but the in-game rename needs a fresh session'
+					: 'saved here, but the in-game rename did not go through');
+			st.className = 'tag-status small text-warning';
+		}
+	}).catch(function() {
+		if (st) { st.textContent = 'failed'; st.className = 'tag-status small text-danger'; }
+	});
+}
+
+/* When a command lands, to the millisecond. A train puts several commands
+   inside the same second, so ordering on the whole second alone leaves them in
+   whatever order they came out of the cache - and which one lands first is the
+   entire question when you are picking a gap to snipe into. Falls back to the
+   second (as .000) while the poller has not read a millisecond off the arrival
+   column yet. */
+function defArrivalMs(c) {
+	if (c.arrival_ms) return c.arrival_ms;
+	if (c.arrival) return c.arrival * 1000;
+	return (DEF_NOW + (c.eta || 0)) * 1000;
+}
+
+/* Hand the command straight to the snipe tab with the village and the hit
+   already filled in - the whole point of having the button here is not typing
+   a coordinate and a millisecond back in by hand. */
+function voSnipe(villageId, commandId, arrival, arrivalMs) {
+	showPane('snipe');
+	history.replaceState(null, '', '#snipe');
+	snipeOpenOptions(villageId, commandId, arrival, arrivalMs);
+}
+
+function voFill() {
+	const g = document.getElementById('vo_group');
+	if (!g.options.length) {
+		g.innerHTML = '<option value="">all groups (' + DEF_VILLAGES.length + ')</option>' +
+			DEF_GROUPS.map(x => '<option value="' + x.id + '">' + esc(x.name) + ' (' + x.count + ')' +
+				(x.type === 'dynamic' ? ' \u00b7 dynamic' : '') + '</option>').join('');
+	}
+	const gid = g.value;
+	const onlyAttacked = document.getElementById('vo_only_attacked').checked;
+	const want = (document.getElementById('vo_label').value || '').trim().toLowerCase();
+	const list = DEF_VILLAGES.filter(v =>
+		(!gid || (v.groups || []).indexOf(gid) >= 0) && (!onlyAttacked || v.incoming) &&
+		(!want || (v.commands || []).some(c => (c.game_label || '').toLowerCase().indexOf(want) >= 0)));
+	const sel = document.getElementById('vo_village');
+	const keep = sel.value;
+	// Under attack first, soonest first - the same ordering as the main table,
+	// so the village you are looking for is at the top when it matters.
+	list.sort((a, b) => (b.incoming ? 1 : 0) - (a.incoming ? 1 : 0) ||
+		(a.soonest_eta || 1e9) - (b.soonest_eta || 1e9) ||
+		String(a.name).localeCompare(String(b.name)));
+	sel.innerHTML = list.length
+		? list.map(v => {
+			const sup = (v.supports || []).length;
+			const bits = [];
+			if (v.incoming) bits.push(v.incoming + ' attack' + (v.incoming === 1 ? '' : 's'));
+			if (sup) bits.push(sup + ' support');
+			return '<option value="' + v.id + '">' + esc(v.name) +
+				(bits.length ? ' \u2014 ' + bits.join(', ') : '') + '</option>';
+		}).join('')
+		: '<option value="">no villages in this group</option>';
+	if (keep && list.some(v => String(v.id) === keep)) sel.value = keep;
+	voRender();
+}
+
+function voRender() {
+	const id = document.getElementById('vo_village').value;
+	const v = DEF_VILLAGES.find(x => String(x.id) === String(id));
+	const body = document.getElementById('vo_body');
+	if (!v) { body.innerHTML = '<p class="text-muted small mb-0">Nothing to show.</p>'; return; }
+	const chips = DEF_UNITS.filter(u => v.def_troops[u])
+		.map(u => '<span class="unit-chip">' + u + ' <strong>' + v.def_troops[u].toLocaleString() +
+			'</strong></span>').join('');
+	let html = '<div class="mb-2"><strong>' + esc(v.name) + '</strong> ' +
+		'<span class="coord text-muted">' + (v.coords ? v.coords[0] + '|' + v.coords[1] : '') +
+		' \u00b7 #' + v.id + '</span>' +
+		(v.points ? ' <span class="text-muted">' + v.points.toLocaleString() + ' points</span>' : '') + '</div>' +
+		'<div class="mb-2"><span class="text-muted small">defending at home:</span> ' +
+		'<strong>' + (v.def_total || 0).toLocaleString() + '</strong> ' + chips +
+		(v.def_away_total ? ' <small class="text-muted">+' + v.def_away_total.toLocaleString() +
+			' out (supporting or in transit)</small>' : '') +
+		(v.def_fresh ? '' : ' <small class="text-warning">snapshot only</small>') + '</div>';
+	// Attacks and support together, the way the village's own "Binnenkomende
+	// troepen" panel shows them - soonest first regardless of which it is,
+	// because what matters is the order things land in.
+	const want = (document.getElementById('vo_label').value || '').trim().toLowerCase();
+	let rows = (v.commands || []).map(c => ({c: c, attack: true}))
+		.concat((v.supports || []).map(c => ({c: c, attack: false})))
+		.sort((a, b) => defArrivalMs(a.c) - defArrivalMs(b.c));
+	// Filtering by command name is about finding attacks, so it drops support
+	// rather than asking why a reinforcement has no attack tag.
+	const total = rows.length;
+	if (want) rows = rows.filter(r => r.attack &&
+		(r.c.game_label || '').toLowerCase().indexOf(want) >= 0);
+	if (!rows.length) {
+		// Bootstrap's alert-success is near-white on near-white under this
+		// theme; the badge the main table already uses reads properly.
+		html += want && total
+			? '<div class="small text-muted">none of the ' + total +
+			  ' inbound here match \u201c' + esc(want) + '\u201d</div>'
+			: '<div class="small"><span class="badge badge-success">clear</span> ' +
+			  '<span class="text-muted">nothing incoming</span></div>';
+		body.innerHTML = html; return;
+	}
+	if (want) html += '<div class="small text-muted mb-1">' + rows.length + ' of ' +
+		total + ' inbound match \u201c' + esc(want) + '\u201d</div>';
+	html += '<table class="table table-sm def-table mb-0"><thead><tr>' +
+		'<th></th><th>Lands in</th><th>At</th><th>Looks like</th><th>From</th>' +
+		'<th>Player</th><th class="text-right">Fields</th><th>Tag</th><th></th>' +
+		'</tr></thead><tbody>' +
+		rows.map(r => {
+			const c = r.c, at = DEF_NOW + c.eta;
+			const kind = r.attack
+				? '<span class="badge badge-danger">attack</span>'
+				: '<span class="badge badge-info">support</span>';
+			// The command name as it reads in game. That is the field that says
+			// "Aanval" until somebody tags it, so it is the one worth showing -
+			// the bot's own classification is empty on almost everything.
+			const label = c.game_label || c.tag || '';
+			const looks = r.attack
+				? (label ? '<span class="badge badge-secondary" title="' + esc(label) + '">' +
+					esc(label.length > 30 ? label.slice(0, 30) + '\u2026' : label) + '</span>'
+				         : '<span class="text-muted">?</span>')
+				: '<span class="text-muted">\u2014</span>';
+			// Only an attack can be sniped, and only one that has not landed.
+			const snipe = r.attack
+				? '<button class="btn btn-sm btn-outline-warning py-0" ' +
+				  'onclick=\'voSnipe(' + JSON.stringify(String(v.id)) + ',' +
+				      JSON.stringify(String(c.command_id)) + ',' + at + ',' +
+				      (c.arrival_ms || at * 1000) + ')\'>snipe</button>'
+				: '';
+			// What the flight time says it can still be. Anything faster has
+			// already been ruled out by how long it has been in the air, so
+			// this is a measurement rather than a guess - it is the suggestion
+			// worth having one click away.
+			const guess = c.tag_auto || '';
+			const tagCell = r.attack
+				? '<div class="tag-cell">' +
+				  '<input id="vtag-' + c.command_id + '" class="form-control form-control-sm" ' +
+				      'value="' + esc(guess) + '" placeholder="tag">' +
+				  // Single-quoted attribute: JSON.stringify emits double quotes,
+				  // which close a double-quoted onclick and leave the handler
+				  // truncated to "voTag(".
+				  (guess ? '<button class="btn btn-sm btn-outline-warning py-0" title="tag it as ' +
+				      esc(guess) + ' - the slowest unit still consistent with the flight time" ' +
+				      'onclick=\'voTag(' + JSON.stringify(String(c.command_id)) + ',' +
+				          JSON.stringify(guess) + ')\'>' + esc(guess) + '</button>' : '') +
+				  '<button class="btn btn-sm btn-outline-secondary py-0" ' +
+				      'onclick=\'voTag(' + JSON.stringify(String(c.command_id)) + ')\'>save</button>' +
+				  '<span class="tag-status small text-muted" id="vtagst-' + c.command_id + '"></span>' +
+				  '</div>'
+				: '';
+			return '<tr' + (r.attack ? ' class="table-danger"' : '') + '>' +
+				'<td>' + kind + '</td>' +
+				'<td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
+				'<td class="ms" data-ms="' + (c.arrival_ms || at * 1000) + '"></td>' +
+				'<td>' + looks + '</td>' +
+				'<td><small>' + esc(c.origin_name || '') + ' <span class="coord text-muted">' +
+					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
+				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
+				'<td class="text-right">' + (c.distance != null ? Number(c.distance).toFixed(1) : '') + '</td>' +
+				'<td>' + tagCell + '</td>' +
+				'<td class="text-right">' + snipe + '</td></tr>';
+		}).join('') + '</tbody></table>';
+	body.innerHTML = html;
+	// The shared renderers do not know about rows created after page load.
+	body.querySelectorAll('.ms[data-ms]').forEach(function(el) {
+		const ms = parseInt(el.getAttribute('data-ms'), 10);
+		if (!ms) { el.textContent = '\u2014'; return; }
+		const d = new Date(ms);
+		el.innerHTML = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+			'.<small>' + pad(ms % 1000, 3) + '</small>';
+	});
+	tickDefense();
+}
+(function() {
+	const g = document.getElementById('vo_group'), v = document.getElementById('vo_village'),
+	      a = document.getElementById('vo_only_attacked');
+	if (!g) return;
+	g.addEventListener('change', voFill);
+	a.addEventListener('change', voFill);
+	const lab = document.getElementById('vo_label');
+	if (lab) lab.addEventListener('input', voFill);
+	v.addEventListener('change', voRender);
+	voFill();
+})();
+
+/* ---------- cutting the village table down ---------------------------
+   58 rows is a list you scroll past; the front is a list you act on. The
+   groups are the ones already kept in the game, so the question asked here is
+   the same one asked there - plus "under attack only", which is the reason
+   this page gets opened in a hurry.
+
+   Filtering is display-only: the counters above the table stay account-wide
+   on purpose, because "24 under attack" is the number you want even while
+   looking at one group. */
+function defFilter() {
+	var gid = document.getElementById('dv_group').value;
+	var text = (document.getElementById('dv_name').value || '').trim().toLowerCase();
+	var label = (document.getElementById('dv_label').value || '').trim().toLowerCase();
+	var shown = 0, hiddenAttacked = 0;
+	document.querySelectorAll('tr.dv-row').forEach(function(tr) {
+		var groups = (tr.getAttribute('data-groups') || '').split(',');
+		var attacked = tr.getAttribute('data-attacked') === '1';
+		var okGroup = !gid || (gid === '__attacked__' ? attacked : groups.indexOf(gid) >= 0);
+		var okText = !text || (tr.getAttribute('data-search') || '').indexOf(text) >= 0;
+		// The in-game command name. "Aanval" is what an untagged attack is
+		// called, so typing it lists exactly the ones still waiting for a tag.
+		var okLabel = !label || (tr.getAttribute('data-labels') || '').indexOf(label) >= 0;
+		var show = okGroup && okText && okLabel;
+		tr.style.display = show ? '' : 'none';
+		if (show) shown++;
+		else if (attacked) hiddenAttacked++;
+	});
+	var total = document.querySelectorAll('tr.dv-row').length;
+	var el = document.getElementById('dv_count');
+	if (!gid && !text && !label) { el.textContent = ''; el.classList.remove('text-danger'); return; }
+	// A village under attack that the filter is hiding is the one thing this
+	// page must not let you miss.
+	el.textContent = shown + ' of ' + total +
+		(hiddenAttacked ? ' · ' + hiddenAttacked + ' under attack hidden' : '');
+	el.classList.toggle('text-danger', hiddenAttacked > 0);
+	el.classList.toggle('text-muted', hiddenAttacked === 0);
+}
+(function() {
+	var g = document.getElementById('dv_group'), n = document.getElementById('dv_name');
+	if (g) g.addEventListener('change', defFilter);
+	if (n) n.addEventListener('input', defFilter);
+	var lab = document.getElementById('dv_label');
+	if (lab) lab.addEventListener('input', defFilter);
+})();
 
 // --- time rendering ---
 function pad(n, w) { return String(n).padStart(w || 2, '0'); }
@@ -613,20 +1107,83 @@ function csnipeUnitGrid(grid, v, unitClass) {
 	});
 }
 
-function csnipeBarbPrefill(v, txId, tyId, hintId) {
-	if (v.barb) {
-		document.getElementById(txId).value = v.barb.x;
-		document.getElementById(tyId).value = v.barb.y;
-		document.getElementById(hintId).textContent =
-			'Suggested barb: ' + (v.barb.name || '') + ' ' + v.barb.x + '|' + v.barb.y +
-			' (' + v.barb.distance + ' fields, ~' + v.barb.travel_min_heavy + ' min for heavy cav), ' +
-			'any target works as long as the troops are still under way at the cancel moment.';
-	} else {
-		document.getElementById(txId).value = '';
-		document.getElementById(tyId).value = '';
-		document.getElementById(hintId).textContent =
-			'No barb suggestion available (map cache empty?). Enter target coords manually.';
+/* ---------- where the troops go while they dodge ----------------------
+   Anywhere far enough that they are still under way at the cancel moment -
+   about half a field at spear pace for the default lead, so almost anything
+   qualifies. What the target changes is not the dodge, it is what happens when
+   the cancel does NOT go through:
+
+     a barbarian  - the command is an attack; the stack bounces back home
+                    unattended, but it has to fight whatever the barb has
+                    grown, and that is how a failed cancel eats a stack;
+     your own     - the command is support; the stack parks in that village,
+                    alive, until you recall it by hand.
+
+   The game decides the kind from the target: a barbarian cannot be supported
+   and your own village cannot be attacked, so picking the target picks the
+   command. Somebody else's village takes either, and the select says which. */
+const CS_TARGET = {};
+
+function csnipeTargetPicker(v, prefix) {
+	const box = document.getElementById(prefix + '-barb-hint');
+	const options = [v.barb, v.friendly].filter(Boolean);
+	if (!options.length) {
+		document.getElementById(prefix + '-tx').value = '';
+		document.getElementById(prefix + '-ty').value = '';
+		CS_TARGET[prefix] = {support: false};
+		box.innerHTML = '<span class="text-warning">No target far enough out in ' +
+			'the map cache. Enter coordinates by hand — anything whose travel ' +
+			'time is over half the engage lead will do.</span>';
+		return;
 	}
+	CS_OPTIONS[prefix] = options;
+	box.innerHTML = '<div class="cs-target-strip mb-1"></div>' +
+		'<span class="text-muted">Send as </span>' +
+		'<select class="form-control form-control-sm d-inline-block cs-kind" ' +
+			'style="width:auto" id="' + prefix + '-kind" ' +
+			'onchange="csnipeKindChanged(\'' + prefix + '\')">' +
+			'<option value="attack">attack</option>' +
+			'<option value="support">support</option></select> ' +
+		'<small class="text-muted" id="' + prefix + '-kind-note"></small>';
+	const strip = box.querySelector('.cs-target-strip');
+	options.forEach(function(o, i) {
+		strip.insertAdjacentHTML('beforeend',
+			'<button class="btn btn-sm cs-target" data-target="' + i + '" ' +
+			'onclick="csnipePickTarget(\'' + prefix + '\',' + i + ')">' +
+			(o.support ? 'your ' + esc(o.name || 'village')
+			           : 'barbarian' + (o.name ? ' ' + esc(o.name) : '')) +
+			' <span class="coord">' + o.x + '|' + o.y + '</span>' +
+			'<small class="d-block">' + o.distance + ' f · ~' +
+			o.travel_min_heavy + ' min heavy · ' + o.kind + '</small></button>');
+	});
+	// The barb stays the default, so nothing changes for anyone who was happy
+	// with it; the alternative is one click away.
+	csnipePickTarget(prefix, 0);
+}
+const CS_OPTIONS = {};
+
+function csnipePickTarget(prefix, i) {
+	const o = (CS_OPTIONS[prefix] || [])[i];
+	if (!o) return;
+	document.getElementById(prefix + '-tx').value = o.x;
+	document.getElementById(prefix + '-ty').value = o.y;
+	document.getElementById(prefix + '-kind').value = o.kind;
+	CS_TARGET[prefix] = {support: !!o.support};
+	document.querySelectorAll('#' + prefix + '-barb-hint .cs-target')
+		.forEach(function(b) {
+			b.classList.toggle('active', String(b.getAttribute('data-target')) === String(i));
+		});
+	csnipeKindChanged(prefix);
+}
+
+function csnipeKindChanged(prefix) {
+	const sel = document.getElementById(prefix + '-kind');
+	if (!sel) return;
+	const support = sel.value === 'support';
+	CS_TARGET[prefix] = {support: support};
+	document.getElementById(prefix + '-kind-note').innerHTML = support
+		? 'if the cancel fails the troops park there, alive, until you recall them'
+		: 'if the cancel fails the troops attack it and walk home on their own';
 }
 
 function csnipeCollectUnits(unitClass) {
@@ -638,6 +1195,241 @@ function csnipeCollectUnits(unitClass) {
 	return units;
 }
 
+/* Read what is standing in the village *this second*.
+
+   Everything the form prefills with is a reading from some minutes ago - the
+   account-wide troop sweep at best, that village's own snapshot at worst, and
+   on a village the bot has not run yet there is no snapshot at all, which is
+   how a garrisoned village came up reading "/0" on every unit. This asks the
+   game directly, the same rally point the send itself will open, and reports
+   what it saw. It costs one request, so it is a button rather than something
+   the page does on its own. Filling the boxes is a second, separate click:
+   what is at home and what you want to send are not the same decision. */
+const CS_LIVE = {};      // prefix -> the last live reading, for the fill link
+function csnipeCheckTroops(prefix, villageId) {
+	const note = document.getElementById(prefix + '-troop-note');
+	if (!villageId) { note.innerHTML = '<span class="text-danger">pick a village first</span>'; return; }
+	note.innerHTML = '<span class="text-muted">reading the rally point…</span>';
+	fetch('/app/troops/live?village_id=' + encodeURIComponent(villageId))
+		.then(r => r.json()).then(function(res) {
+			if (!res.ok) {
+				// The reasons mean different things to do about them, so they
+				// are not collapsed into "failed".
+				const why = {
+					no_session: 'the bot has no valid session cookie - reconnect it on the Overview page',
+					logged_out: 'the session is dead or bot protection is in the way - reconnect it',
+					no_form: 'the game did not return the rally point (redirect? wrong village?)',
+					request_failed: 'could not reach the game: ' + (res.error || ''),
+					bad_village: 'unknown village',
+					unavailable: 'the live reader is not available in this build',
+				}[res.reason] || (res.reason || 'failed');
+				note.innerHTML = '<span class="text-danger">' + esc(why) + '</span>';
+				return;
+			}
+			CS_LIVE[prefix] = res.units;
+			const held = Object.keys(res.units).filter(function(u) { return res.units[u] > 0; });
+			// Update the "/N at home" labels in place: they are what the boxes
+			// are read against, so leaving them stale would make the fresh
+			// reading look like a contradiction.
+			document.querySelectorAll('#' + prefix + '-units .unit-input').forEach(function(box) {
+				const inp = box.querySelector('input[data-unit]');
+				const lbl = box.querySelector('label small');
+				if (inp && lbl) lbl.textContent = '/' + (res.units[inp.getAttribute('data-unit')] || 0);
+			});
+			note.innerHTML = '<span class="text-success">read just now:</span> ' +
+				(held.length
+					? held.map(function(u) { return esc(unitLabel(u)) + ' ' + res.units[u]; }).join(', ')
+					: '<span class="text-warning">nothing at home</span>') +
+				(held.length ? ' · <a href="#" onclick="csnipeFillLive(\'' + prefix +
+					'\');return false">fill these in</a>' : '');
+		})
+		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; });
+}
+
+/* Put the live counts into the boxes: the defensive set at full strength, the
+   rest back to zero. Every box stays editable afterwards. */
+function csnipeFillLive(prefix) {
+	const units = CS_LIVE[prefix];
+	if (!units) return;
+	document.querySelectorAll('.' + prefix + '-unit').forEach(function(inp) {
+		const u = inp.getAttribute('data-unit');
+		inp.value = CSNIPE.prefill_units.indexOf(u) >= 0 ? (units[u] || 0) : 0;
+	});
+	document.getElementById(prefix + '-troop-note').innerHTML +=
+		' <span class="text-success">· filled</span>';
+}
+
+/* ---------- picking the gap, not the command ---------------------------
+   A train is a nuke and then nobles a hundred milliseconds apart, and the
+   stack has to come home in one of the gaps between them - usually the one
+   after the first noble, because that is the noble the attacker loads.
+
+   Naming that gap by one of its ends is what made this form hard to use. It
+   asks for "first hit + how long after", so it anchors on the command you land
+   AFTER; anyone thinking about the deadline instead picks the command they
+   want to land BEFORE and is then a whole noble late. The gap has two ends and
+   only one of them is the dangerous one, so neither end is the right thing to
+   ask for: this asks for the gap itself and fills in both.
+
+   Only the earlier end anchors the aim - the later one becomes "no later than",
+   which is what turns the send into fire-measure-refire rather than one shot at
+   the jitter. */
+function csnipeVillageIncomings(villageId) {
+	return (CSNIPE.incomings || [])
+		.filter(function(c) { return String(c.village_id) === String(villageId); })
+		.map(function(c) {
+			return {c: c, ms: c.arrival_ms || (c.arrival || 0) * 1000};
+		})
+		.sort(function(a, b) { return a.ms - b.ms; });
+}
+
+/* A margin at each end so the aim is not sitting on a hit. The 100ms gap of an
+   ordinary train is the normal case and is makeable once the probes calibrate,
+   so it is NOT flagged - marking every train tight would be crying wolf. Below
+   about 80ms the engine's own +30-90ms spread is wider than the room the
+   window leaves it, and retries are re-rolling the same jitter, so that is
+   where the strip says so. */
+const CS_GAP_EDGE_MS = 25;
+const CS_GAP_TIGHT_MS = 80;
+
+function csnipeGapStrip(villageId) {
+	const el = document.getElementById('cs-gaps');
+	if (!el) return;
+	const list = csnipeVillageIncomings(villageId);
+	if (list.length < 2) {
+		// One command, so there is no gap to choose - it is the lone-incoming
+		// case the "land +ms after it" default already covers.
+		el.innerHTML = '';
+		return;
+	}
+	CS_GAPS = list;
+	el.innerHTML = '<div class="small text-muted mb-1">' + list.length +
+		' commands land on this village. Pick the gap to come home in — ' +
+		'usually the one after the first noble, since that is the one the ' +
+		'attacker loads:</div><div class="cs-gap-strip"></div>';
+	const strip = el.querySelector('.cs-gap-strip');
+	list.forEach(function(item, i) {
+		const next = list[i + 1];
+		const width = next ? (next.ms - item.ms) : null;
+		const tight = width !== null && width < CS_GAP_TIGHT_MS;
+		strip.insertAdjacentHTML('beforeend',
+			'<button class="btn btn-sm cs-gap' + (tight ? ' cs-gap-tight' : '') +
+			'" data-gap="' + i + '" onclick="csnipePickGap(' + i + ')">' +
+			'after <strong>.' + pad(item.ms % 1000, 3) + '</strong>' +
+			(next ? ' before <strong>.' + pad(next.ms % 1000, 3) + '</strong>' +
+				'<small class="d-block">' + width + ' ms' +
+				(tight ? ' · tight' : '') + '</small>'
+			      : '<small class="d-block">last · no deadline</small>') +
+			'</button>');
+	});
+	csnipeMarkGap();
+}
+
+let CS_GAPS = [];
+let CS_GAP_PICKED = null;
+
+function csnipeMarkGap() {
+	document.querySelectorAll('#cs-gaps .cs-gap').forEach(function(b) {
+		b.classList.toggle('active',
+			String(b.getAttribute('data-gap')) === String(CS_GAP_PICKED));
+	});
+}
+
+function csnipePickGap(i) {
+	const item = CS_GAPS[i];
+	if (!item) return;
+	CS_GAP_PICKED = i;
+	const next = CS_GAPS[i + 1];
+	// The gap's earlier end is the anchor: everything the form asks for is
+	// measured from the command the troops come home after.
+	csForm.incoming_id = item.c.command_id;
+	csForm.arrival = Math.floor(item.ms / 1000);
+	document.getElementById('cs-hit-ms').value = item.ms % 1000;
+	if (next) {
+		const width = next.ms - item.ms;
+		const aim = Math.max(1, Math.min(CS_GAP_EDGE_MS, Math.floor(width / 4)));
+		const latest = Math.max(aim + 1, width - CS_GAP_EDGE_MS);
+		document.getElementById('cs-aim-ms').value = aim;
+		document.getElementById('cs-latest-ms').value = latest;
+	} else {
+		// Nothing behind it, so there is no deadline to miss and no reason to
+		// crowd the hit: the lone-incoming advice applies.
+		document.getElementById('cs-aim-ms').value = 400;
+		document.getElementById('cs-latest-ms').value = '';
+	}
+	const d = new Date(item.ms);
+	document.getElementById('cs-context').textContent =
+		'· ' + (CSNIPE.villages[csForm.village_id] || {}).name +
+		', home after ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' +
+		pad(d.getSeconds()) + '.' + pad(item.ms % 1000, 3);
+	csnipeMarkGap();
+	csnipeReturnNote();
+}
+
+/* The moment the troops are actually home, spelled out from the two ms boxes.
+
+   A c-snipe is a dodge: the stack must be OUT when the hit lands and back
+   immediately after, so the return is always later than the hit. The Snipe tab
+   next door counts the other way - its offset is negative because support has
+   to be standing there BEFORE the command it is meeting - and reading one
+   convention onto the other is the one mistake here that costs a stack. */
+function csnipeReturnNote() {
+	const el = document.getElementById('cs-return-note');
+	if (!el || !csForm.arrival) { if (el) el.innerHTML = ''; return; }
+	const hit = parseInt(document.getElementById('cs-hit-ms').value, 10) || 0;
+	const aim = parseInt(document.getElementById('cs-aim-ms').value, 10) || 0;
+	const hitMs = csForm.arrival * 1000 + hit;
+	const back = hitMs + aim;
+	let html = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
+		'. Your troops are out for it and walk back in at </span><strong>' +
+		fmtMs(back) + '</strong><span class="text-muted"> \u2014 ' + aim +
+		' ms later. Earlier than the hit would mean home <em>for</em> it.</span>';
+	// The deadline is the end that decides whether this worked, so it is said
+	// in those words: the engine is never early and may be late, so the only
+	// way to miss is to drift past the next command.
+	const next = CS_GAP_PICKED === null ? null : CS_GAPS[CS_GAP_PICKED + 1];
+	if (next) {
+		const latest = parseInt(document.getElementById('cs-latest-ms').value, 10);
+		// Absolute moments throughout: a train usually sits inside one second,
+		// but it does not have to, and comparing bare ms offsets across a
+		// second boundary would read a safe deadline as a missed one.
+		const clear = isNaN(latest) ? null : next.ms - (hitMs + latest);
+		html += '<br><span class="text-muted">That is </span><strong>' +
+			(next.ms - back) + ' ms before</strong><span class="text-muted"> the ' +
+			'next command at ' + fmtMs(next.ms) + ', the one it must not be late ' +
+			'for. ' + (clear === null
+				? 'No deadline set, so a slow send can drift past it.'
+				: (clear > 0
+					? 'The deadline keeps it ' + clear + ' ms clear of that.'
+					: '<strong class="text-danger">The deadline is ' + (-clear) +
+					  ' ms past it - widen the gap or lower it.</strong>')) +
+			'</span>';
+	}
+	el.innerHTML = html;
+}
+
+/* Where the prefilled counts came from and how old they are. The figures are
+   good enough to plan with and are not what you want to stake a send on, so
+   the form says which reading it is showing rather than presenting either as
+   the truth of the moment. */
+function csnipeHomeNote(v) {
+	if (!v.home_fresh) {
+		return '<span class="text-warning">prefilled from this village\u2019s own snapshot' +
+			' - the bot has not read it in the account-wide sweep yet</span>';
+	}
+	const age = CSNIPE.home_age;
+	return '<span class="text-muted">prefilled from the account-wide reading' +
+		(age == null ? '' : ', ' + fmtAge(age) + ' old') + '</span>';
+}
+
+function fmtAge(seconds) {
+	seconds = Math.max(0, Math.round(seconds));
+	if (seconds < 90) return seconds + ' s';
+	const m = Math.round(seconds / 60);
+	if (m < 90) return m + ' min';
+	return Math.round(m / 60) + ' h';
+}
+
 function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	const v = CSNIPE.villages[String(villageId)];
 	if (!v) return;
@@ -646,8 +1438,19 @@ function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	document.getElementById('cs-context').textContent =
 		'· ' + v.name + ', first hit ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('cs-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
-	csnipeBarbPrefill(v, 'cs-tx', 'cs-ty', 'cs-barb-hint');
+	csnipeTargetPicker(v, 'cs');
 	csnipeUnitGrid(document.getElementById('cs-units'), v, 'cs-unit');
+	CS_GAP_PICKED = null;
+	csnipeGapStrip(villageId);
+	// The row you clicked names the command you want to come home AFTER, so it
+	// selects that gap; the strip is there to move to another one.
+	const at = CS_GAPS.findIndex(function(g) {
+		return String(g.c.command_id) === String(commandId);
+	});
+	if (at >= 0 && CS_GAPS.length > 1) csnipePickGap(at);
+	csnipeReturnNote();
+	document.getElementById('cs-troop-note').innerHTML = csnipeHomeNote(v);
+	delete CS_LIVE['cs'];
 	document.getElementById('cs-error').textContent = '';
 	const form = document.getElementById('csnipe-form');
 	form.style.display = '';
@@ -680,6 +1483,7 @@ function csnipeArm() {
 		lead_min: parseFloat(document.getElementById('cs-lead-min').value) || 18,
 		target_x: document.getElementById('cs-tx').value,
 		target_y: document.getElementById('cs-ty').value,
+		support: !!(CS_TARGET.cs || {}).support,
 		units: units,
 	};
 	fetch('/app/csnipe/arm', {
@@ -730,8 +1534,10 @@ function csnipeDisarm(id) {
 function cstVillageChanged() {
 	const v = CSNIPE.villages[document.getElementById('cst-village').value];
 	if (!v) return;
-	csnipeBarbPrefill(v, 'cst-tx', 'cst-ty', 'cst-barb-hint');
+	csnipeTargetPicker(v, 'cst');
 	csnipeUnitGrid(document.getElementById('cst-units'), v, 'cst-unit');
+	document.getElementById('cst-troop-note').innerHTML = csnipeHomeNote(v);
+	delete CS_LIVE['cst'];
 	document.getElementById('cst-error').textContent = '';
 }
 
@@ -758,6 +1564,7 @@ function cstArm() {
 		lead_min: parseFloat(document.getElementById('cst-lead').value) || 18,
 		target_x: document.getElementById('cst-tx').value,
 		target_y: document.getElementById('cst-ty').value,
+		support: !!(CS_TARGET.cst || {}).support,
 		units: units,
 		test: true,
 	};
@@ -807,12 +1614,20 @@ function snipeLandMs() {
 function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 	const v = SNIPE.villages[String(villageId)];
 	if (!v) return;
+	// A different incoming is a different landing: the amounts typed for the
+	// last one, and the record of what was already armed against it, do not
+	// carry over.
+	if (snForm.incoming_id !== commandId) { SN_EDITS = {}; SN_ARMED = {}; }
 	snForm = { incoming_id: commandId, target_id: String(villageId), arrival: arrival };
 	const d = new Date(arrival * 1000);
 	document.getElementById('sn-context').textContent =
 		'· support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('sn-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
 	document.getElementById('sn-error').textContent = '';
+	const res = document.getElementById('sn-launch-result');
+	if (res) res.innerHTML = '';
+	const armRes = document.getElementById('sn-arm-result');
+	if (armRes) armRes.innerHTML = '';
 	snipeBuildRows();
 	const panel = document.getElementById('snipe-options');
 	panel.style.display = '';
@@ -859,6 +1674,8 @@ const SN_LEAD_MS = 45000;
 // particular are the fastest thing most villages own, and judging by them would
 // keep every village in the world listed.
 const SN_NO_DEFENCE = ['spy', 'ram', 'catapult'];
+// What actually holds a wall, in the order the game lists them.
+const SN_DEFENSIVE = ['spear', 'sword', 'archer', 'marcher', 'heavy', 'knight'];
 // Which of the defensive units this village actually holds would still land in
 // time, fastest first. Empty means nothing useful it has can get there for this
 // landing; null means we have no troop count for it at all, which is missing
@@ -945,9 +1762,329 @@ function snipeRowRecalc(row) {
 	}
 }
 
+/* ---------- the launch list -------------------------------------------
+   A village does not offer one snipe, it offers one per speed tier it can
+   field. A command travels at the pace of its slowest unit, so sending spear
+   and archer together is quicker than adding sword to them - and quicker means
+   it may be launched later. Listing only the full stack hides every option
+   that is still launchable when the full stack's moment has already gone.
+
+   So each village contributes one option per distinct speed among the units it
+   holds, each option carrying everything at least that fast. What you read off
+   the row is the whole decision: what to send, and how long until you have to
+   send it.
+*/
+function snipeOptionsFor(v, target) {
+	const home = v.home || {};
+	const capBox = document.getElementById('sn-cap');
+	const cap = parseInt(capBox && capBox.value, 10);
+	// A snipe is a wall of defence landing in a gap. Axes and light cavalry can
+	// be sent, but they defend badly, and offering them as options buries the
+	// stacks that actually hold - so they are off by default rather than absent.
+	const defOnly = document.getElementById('sn-def-only');
+	const wanted = (defOnly && defOnly.checked) ? SN_DEFENSIVE : SNIPE.units;
+	const usable = wanted.filter(u => SNIPE.speeds[u] != null && (home[u] || 0) > 0
+		&& SN_NO_DEFENCE.indexOf(u) < 0);
+	if (!usable.length || !target || !target.coords || !v.coords) return [];
+	const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
+	const deadline = Date.now() + SN_LEAD_MS;
+	const paces = [...new Set(usable.map(u => SNIPE.speeds[u]))].sort((a, b) => a - b);
+	const out = [], seen = {};
+	paces.forEach(function(pace) {
+		const units = {};
+		usable.forEach(function(u) {
+			if (SNIPE.speeds[u] > pace) return;
+			const n = cap > 0 ? Math.min(cap, home[u]) : home[u];
+			if (n > 0) units[u] = n;
+		});
+		// Two tiers can describe the same stack when nothing sits between them.
+		const key = Object.keys(units).sort().map(u => u + ':' + units[u]).join(',');
+		if (!key || seen[key]) return;
+		seen[key] = 1;
+		const travel = snipeTravelMs(v, target, pace);
+		const send = snipeLandMs() - travel;
+		if (send < deadline) return;              // cannot be launched in time
+		const paceUnit = usable.filter(u => SNIPE.speeds[u] === pace)[0];
+		out.push({village: v, units: units, pace: pace, paceUnit: paceUnit,
+			travel: travel, send: send, dist: dist,
+			// What the village actually holds, so an edit cannot ask for more
+			// troops than exist.
+			max: Object.assign({}, units)});
+	});
+	return out;
+}
+
+/* Amounts typed into the launch list, kept across a rebuild.
+
+   Every shared field - the hit millisecond, the offset, the boost, the cap -
+   redraws this table from each village's full home count. With nowhere to keep
+   them, a stack cut back to 500 spear by hand silently went back to all 1808
+   the moment the offset was nudged, and the row still read "arm". Keyed by
+   village and pace so an edit follows its own row rather than a position in a
+   list that reorders itself every second. */
+let SN_EDITS = {};
+/* Which options have already been armed for the incoming on screen, so a
+   redraw still shows what has gone out. */
+let SN_ARMED = {};
+function snEditKey(o, unit) { return o.village.id + '|' + o.paceUnit + '|' + unit; }
+function snArmKey(o) { return o.village.id + '|' + o.paceUnit; }
+
+/* What one box means. The pace unit is floored at one: take the last of it out
+   and the command travels at the next unit's speed, landing somewhere other
+   than where the row says. Everything else may go to zero - emptying a box is
+   how a unit is dropped from the send, so a blank reads as nothing rather than
+   as "leave it as it was". Reading a blank as "no change" is exactly how a
+   stack the screen showed as trimmed left as the whole garrison. */
+function snipeClampAmount(o, unit, raw) {
+	const floor = (unit === o.paceUnit) ? 1 : 0;
+	let n = parseInt(raw, 10);
+	if (isNaN(n)) n = floor;
+	return Math.max(floor, Math.min(n, o.max[unit]));
+}
+
+/* What this option will send, read off its boxes at the moment of arming
+   rather than off what they held when the row was drawn. */
+function snipeReadAmounts(i) {
+	const o = SNIPE_OPTIONS[i];
+	if (!o) return null;
+	document.querySelectorAll('.sn-amt[data-opt="' + i + '"]').forEach(function(inp) {
+		const u = inp.getAttribute('data-unit');
+		o.units[u] = snipeClampAmount(o, u, inp.value);
+		SN_EDITS[snEditKey(o, u)] = o.units[u];
+		// Leave the row showing exactly what was sent - a box still blank at
+		// the moment of arming (the pace unit floors at one) otherwise reads
+		// as a unit dropped when it was not.
+		inp.value = o.units[u];
+	});
+	return o.units;
+}
+
+function snipeBuildLaunchList() {
+	const target = SNIPE.villages[snForm.target_id];
+	const body = document.querySelector('#sn-launch-table tbody');
+	if (!body) return;
+	let all = [];
+	document.querySelectorAll('.sn-row').forEach(function(row) {
+		const v = SNIPE.villages[row.getAttribute('data-village-id')];
+		if (v) all = all.concat(snipeOptionsFor(v, target));
+	});
+	// Soonest launch first: the top row is the one about to expire.
+	all.sort((a, b) => a.send - b.send);
+	// Hand-typed amounts win over the full home count this was rebuilt from.
+	all.forEach(function(o) {
+		Object.keys(o.units).forEach(function(u) {
+			const edit = SN_EDITS[snEditKey(o, u)];
+			if (edit !== undefined) o.units[u] = snipeClampAmount(o, u, edit);
+		});
+	});
+	SNIPE_OPTIONS = all;
+	document.getElementById('sn-launch-note').textContent = all.length
+		? all.length + ' option' + (all.length === 1 ? '' : 's') + ' across ' +
+		  new Set(all.map(o => o.village.id)).size + ' villages'
+		: 'nothing can reach this landing in time';
+	body.innerHTML = all.map(function(o, i) {
+		// Editable, because the listed amount is everything the village holds
+		// and you rarely want to send all of it.
+		const stack = Object.keys(o.units).map(function(u) {
+			const paced = (u === o.paceUnit);
+			return '<span class="sn-unit-edit' + (paced ? ' paced' : '') + '">' +
+				unitLabel(u) + ' <input type="number" class="sn-amt" data-opt="' + i + '" ' +
+				'data-unit="' + u + '" min="' + (paced ? 1 : 0) + '" max="' + o.max[u] + '" ' +
+				'value="' + o.units[u] + '"' + (paced ? ' title="sets the pace - cannot go below 1"' : '') +
+				'></span>';
+		}).join(' ');
+		const armed = SN_ARMED[snArmKey(o)];
+		return '<tr' + (armed ? ' class="sn-armed"' : '') + '>' +
+			'<td><input type="checkbox" class="sn-pick" data-opt="' + i + '"></td>' +
+			'<td><span class="def-eta text-warning" data-arrival="' +
+				Math.round(o.send / 1000) + '">\u2026</span></td>' +
+			'<td class="ms" data-ms="' + Math.round(o.send) + '"></td>' +
+			'<td><small><strong>' + esc(o.village.name) + '</strong> ' +
+				'<span class="coord text-muted">' + o.village.coords[0] + '|' + o.village.coords[1] +
+				'</span> <span class="text-muted">' + o.dist.toFixed(1) + ' f</span></small></td>' +
+			'<td><small>' + stack + '</small></td>' +
+			'<td><span class="badge badge-secondary">' + unitLabel(o.paceUnit) + '</span></td>' +
+			'<td class="text-right"><small>' + fmtDur(o.travel / 1000) + '</small></td>' +
+			'<td class="text-right">' +
+				(armed ? '<span class="badge badge-success mr-1" title="already armed for this incoming">armed' +
+					(armed > 1 ? ' \u00d7' + armed : '') + '</span>' : '') +
+				'<button class="btn btn-sm btn-warning py-0" ' +
+				'onclick="snipeArmOption(' + i + ')">arm</button></td></tr>';
+	}).join('') || '<tr><td colspan="8" class="text-muted small">No option reaches this landing in time.</td></tr>';
+	body.querySelectorAll('.ms[data-ms]').forEach(function(el) {
+		const ms = parseInt(el.getAttribute('data-ms'), 10);
+		const d = new Date(ms);
+		el.innerHTML = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+			'.<small>' + pad(ms % 1000, 3) + '</small>';
+	});
+	body.querySelectorAll('.sn-amt').forEach(function(inp) {
+		inp.addEventListener('input', function() {
+			const o = SNIPE_OPTIONS[parseInt(inp.getAttribute('data-opt'), 10)];
+			if (!o) return;
+			const u = inp.getAttribute('data-unit');
+			const n = snipeClampAmount(o, u, inp.value);
+			// Mid-typing the box may be empty; the stack it describes is not
+			// left at the old figure, it is that unit gone. Only a value that
+			// was actually over the maximum is written back, so typing is not
+			// fought with.
+			if (inp.value !== '' && String(n) !== inp.value) inp.value = n;
+			o.units[u] = n;
+			SN_EDITS[snEditKey(o, u)] = n;
+			// Removing troops can only ever make a stack faster, and the pace
+			// unit can never reach zero, so the slowest unit - and with it the
+			// launch moment this row is showing - does not move.
+		});
+		inp.addEventListener('blur', function() {
+			const o = SNIPE_OPTIONS[parseInt(inp.getAttribute('data-opt'), 10)];
+			if (!o) return;
+			// Leave the box showing what will actually be sent.
+			if (inp.value === '') inp.value = o.units[inp.getAttribute('data-unit')];
+		});
+	});
+	body.querySelectorAll('.sn-pick').forEach(function(cb) {
+		cb.addEventListener('change', snipePickChanged);
+	});
+	snipePickChanged();
+	tickSnipe();
+}
+
+/* Several options, one arming. A train is answered with more than one snipe -
+   different villages, different paces - and picking them off one at a time
+   used to mean re-finding the incoming after every single one. */
+function snipePickChanged() {
+	const picks = document.querySelectorAll('#sn-launch-table .sn-pick');
+	const n = document.querySelectorAll('#sn-launch-table .sn-pick:checked').length;
+	const btn = document.getElementById('sn-arm-ticked');
+	if (btn) {
+		btn.disabled = !n;
+		btn.textContent = n ? 'Arm ' + n + ' ticked' : 'Arm ticked';
+	}
+	const all = document.getElementById('sn-pick-all');
+	if (all) {
+		all.checked = picks.length > 0 && n === picks.length;
+		all.indeterminate = n > 0 && n < picks.length;
+	}
+}
+(function() {
+	const all = document.getElementById('sn-pick-all');
+	if (!all) return;
+	all.addEventListener('change', function() {
+		document.querySelectorAll('#sn-launch-table .sn-pick').forEach(function(cb) {
+			cb.checked = all.checked;
+		});
+		snipePickChanged();
+	});
+})();
+
+let SNIPE_OPTIONS = [];
+/* The game's internal unit codes are cryptic in a couple of places; the rest
+   read fine as they are. */
+const SN_UNIT_LABEL = {spy: 'scout', light: 'light cav', heavy: 'heavy cav',
+	marcher: 'm. archer', knight: 'paladin', catapult: 'cat'};
+function unitLabel(u) { return SN_UNIT_LABEL[u] || u; }
+function fmtDur(s) {
+	s = Math.max(0, Math.round(s));
+	const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+	return (h ? h + ':' + pad(m) : m) + ':' + pad(s % 60);
+}
+(function() {
+	const cap = document.getElementById('sn-cap');
+	if (cap) cap.addEventListener('input', snipeBuildLaunchList);
+	const only = document.getElementById('sn-def-only');
+	if (only) only.addEventListener('change', snipeBuildLaunchList);
+})();
+/* Arming does not reload the page.
+
+   The reload was what made a second snipe cost a second search: it threw away
+   the chosen incoming, the open panel and the village list, and the only way
+   back to the same attack was to find the village again. The armed snipes live
+   on the bot's side of this, so nothing is lost by leaving the page where it
+   is - only the table at the top of the tab is a few seconds old, which is what
+   the refresh link is for. */
+function snipePostArm(options, noteEl, onArmed, skipped) {
+	const err = document.getElementById('sn-error');
+	err.textContent = '';
+	if (noteEl) noteEl.innerHTML = '<span class="text-muted">arming\u2026</span>';
+	return fetch('/app/snipe/arm', {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({
+			incoming_id: snForm.incoming_id,
+			target_village_id: snForm.target_id,
+			land_ms: snipeLandMs(),
+			options: options,
+			shortfall: document.getElementById('sn-shortfall').value,
+			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
+			boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
+			max_delta_ms: parseInt(document.getElementById('sn-maxdelta').value, 10) || 0,
+		}),
+	}).then(r => r.json()).then(function(res) {
+		const problems = (skipped || []).concat(res.errors || []);
+		err.textContent = problems.join(' \u00b7 ');
+		if (res.armed && onArmed) onArmed(res);
+		if (noteEl) {
+			noteEl.innerHTML = res.armed
+				? '<span class="text-success">' + res.armed + ' armed</span> \u00b7 ' +
+				  '<a href="#snipe" onclick="location.reload();return false">refresh the list above</a>'
+				: '<span class="text-danger">nothing armed</span>';
+		}
+	}).catch(function(e) {
+		err.textContent = String(e);
+		if (noteEl) noteEl.innerHTML = '';
+	});
+}
+
+/* One option, or every ticked one, in a single arming. */
+function snipeArmOption(i) { snipeArmOptions([i]); }
+
+function snipeArmTicked() {
+	const picked = [];
+	document.querySelectorAll('#sn-launch-table .sn-pick:checked').forEach(function(cb) {
+		picked.push(parseInt(cb.getAttribute('data-opt'), 10));
+	});
+	if (!picked.length) {
+		document.getElementById('sn-error').textContent = 'tick at least one option';
+		return;
+	}
+	snipeArmOptions(picked);
+}
+
+function snipeArmOptions(indexes) {
+	const options = [], keys = [], skipped = [];
+	indexes.forEach(function(i) {
+		const o = SNIPE_OPTIONS[i];
+		if (!o) return;
+		const amounts = snipeReadAmounts(i);
+		const units = {};
+		Object.keys(amounts).forEach(function(u) { if (amounts[u] > 0) units[u] = amounts[u]; });
+		// The row's whole timing rests on its pace unit; without it this is a
+		// different, faster command landing somewhere else, so it is not sent
+		// under this row's numbers.
+		if (!units[o.paceUnit]) {
+			skipped.push(o.village.name + ': no ' + unitLabel(o.paceUnit) +
+				' left in the stack, and that is what sets this row\u2019s timing');
+			return;
+		}
+		options.push({village_id: o.village.id, pace_unit: o.paceUnit, units: units});
+		keys.push(snArmKey(o));
+	});
+	if (!options.length) {
+		document.getElementById('sn-error').textContent =
+			skipped.join(' \u00b7 ') || 'nothing to arm';
+		return;
+	}
+	snipePostArm(options, document.getElementById('sn-launch-result'), function() {
+		keys.forEach(function(k) { SN_ARMED[k] = (SN_ARMED[k] || 0) + 1; });
+		document.querySelectorAll('#sn-launch-table .sn-pick').forEach(function(cb) {
+			cb.checked = false;
+		});
+		snipeBuildLaunchList();
+	}, skipped);
+}
+
 function snipeRecalcAll() {
 	document.querySelectorAll('.sn-row').forEach(snipeRowRecalc);
 	snipeUpdateHidden();
+	snipeBuildLaunchList();
 }
 
 function snipeBuildRows() {
@@ -992,6 +2129,7 @@ function snipeBuildRows() {
 		snipeRowRecalc(row);
 	});
 	snipeUpdateHidden();
+	snipeBuildLaunchList();
 	tickSnipe();
 }
 
@@ -1095,29 +2233,11 @@ function snipeArm() {
 		});
 	});
 	if (!options.length) { err.textContent = 'tick at least one village with units entered'; return; }
-	const body = {
-		incoming_id: snForm.incoming_id,
-		target_village_id: snForm.target_id,
-		land_ms: snipeLandMs(),
-		options: options,
-		shortfall: document.getElementById('sn-shortfall').value,
-		min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
-		boost: parseFloat(document.getElementById('sn-boost').value) || 1.0,
-	};
-	fetch('/app/snipe/arm', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-	}).then(r => r.json()).then(function(res) {
-		if (res.errors && res.errors.length) {
-			err.textContent = (res.armed ? res.armed + ' armed; ' : '') + res.errors.join(' · ');
-			if (!res.armed) return;
-			setTimeout(function() { location.hash = '#snipe'; location.reload(); }, 2500);
-			return;
-		}
-		location.hash = '#snipe';
-		location.reload();
-	}).catch(function(e) { err.textContent = String(e); });
+	// Same no-reload arming as the launch list: the panel, the incoming and the
+	// village list all stay put, so the next snipe does not start with a search.
+	snipePostArm(options, document.getElementById('sn-arm-result'), function() {
+		document.querySelectorAll('.sn-row .sn-opt').forEach(function(cb) { cb.checked = false; });
+	});
 }
 
 function snipeCancel(id) {

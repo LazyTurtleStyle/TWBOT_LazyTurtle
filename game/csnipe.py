@@ -4,10 +4,18 @@ Cancel-snipe ("c-snipe") engine.
 A cancel snipe puts a village's defense back home inside the milliseconds-wide
 gap of an incoming noble train. The mechanic: troops whose command is cancelled
 walk home for exactly as long as they had been under way, so a command sent at
-S and cancelled at C returns at 2C - S. We send the defense out as an attack on
-a (far enough) barbarian village, measure S to the millisecond, cancel at
-C = (S + R) / 2, and the stack lands back home at the chosen return moment R -
-e.g. 25ms behind the first hit of the train, in front of the nobles.
+S and cancelled at C returns at 2C - S. We send the defense out at a (far
+enough) target, measure S to the millisecond, cancel at C = (S + R) / 2, and
+the stack lands back home at the chosen return moment R - e.g. 25ms behind the
+first hit of the train, in front of the nobles.
+
+The outgoing command is an attack on a barbarian village or support to one of
+your own; the dodge is identical either way and the choice is only about where
+the troops end up if the cancel never goes through. A barb bounces them back
+unattended but is a fight - a grown barb defends, and that is how a failed
+cancel eats a stack. Support parks them in the target village, alive, until you
+recall them by hand. The game settles the kind: a barbarian village cannot be
+supported and your own cannot be attacked.
 
 Constraints, and how they shape the flow:
 
@@ -21,13 +29,27 @@ Constraints, and how they shape the flow:
   authoritative check.
 - Return arithmetic (measured live on an NL world, 2026-07-08, via the test tab): the
   server credits a cancelled command's under-way time in WHOLE seconds - the
-  troops land back at S + 2k seconds (k = whole seconds under way at the
-  cancel), keeping the send's millisecond offset exactly. The ms-precise
-  "2C - S" arrival the cancel-response page displays is a rendering artifact;
-  the command list afterwards (and the troops) follow the quantized value, so
-  the achieved return is read back from the command list, never from the
-  cancel page. Natural (uncancelled) returns floor the turnaround at the
-  target to :000 - the same whole-second crediting.
+  troops land back at S + 2k seconds, keeping the send's millisecond offset
+  exactly. The ms-precise "2C - S" arrival the cancel-response page displays is
+  a rendering artifact; the command list afterwards (and the troops) follow the
+  quantized value, so the achieved return is read back from the command list,
+  never from the cancel page. Natural (uncancelled) returns floor the turnaround
+  at the target to :000 - the same whole-second crediting.
+- What k counts, resolved live 2026-09-15: k is the number of wall-clock second
+  BOUNDARIES crossed between the send and the cancel, NOT (C - S) / 1000. Two
+  real snipes settled it, both with the cancel a hair past its aim:
+
+      send .611, cancel .861 same second  -> k as planned, return .611  (+139ms)
+      send .950, cancel .100 next second  -> k+1,          return .950  (+2163ms)
+
+  The second one is the whole proof: under send-ms crediting it had been under
+  way k seconds and 150ms and should have returned on plan; it came back a full
+  2s later, which is only what crossing one extra :000 buys. So the cancel is
+  planned against a wall-clock second and fired in the MIDDLE of it, where half
+  a second of slack sits on either side. Aiming it at S + k*1000 + margin - as
+  this did - silently bought the extra boundary for every send whose ms landed
+  at .850 or later, 15% of them, and that is a 2s late return: harmless on a
+  lone dodge, fatal in a train's 100ms gap.
 - Consequences for accuracy: the send's ms IS the return's ms, so the send is
   aimed at R's ms offset plus a small late buffer on the correct 2-SECOND
   parity (return - send must be an even number of seconds), and S is
@@ -45,8 +67,9 @@ Constraints, and how they shape the flow:
   rolls the return a fatal 2s early - so k is sized from the earliest the
   send may have fired, the cancel fires a margin into the window with no
   latency lead, and overshooting the far edge merely costs 2s of lateness.
-  Whether the window is anchored to the send's ms or to wall-clock seconds is
-  unresolved; firing after the later of the two starts is safe under both.
+  The window is anchored to wall-clock seconds (see above), so the cancel goes
+  in the middle of the crediting second rather than a margin past the send's
+  own ms.
 
 Parsing notes: TW renders ms clocks split across markup
 ('14:26:49<span>:641</span>'), so clock regexes must run on tag-stripped
@@ -96,8 +119,12 @@ SEND_LATE_BUFFER_MS = 150
 # Fire the cancel this far into its one-second window (adaptive: rtt/2
 # clamped to this range). Before the window opens the return rolls 2s early
 # - fatal; past the far edge it slips 2s late - harmless.
-CANCEL_MARGIN_MIN_MS = 250
-CANCEL_MARGIN_MAX_MS = 600
+# Where in the crediting second to fire the cancel. The credit is the number of
+# wall-clock second boundaries crossed (see the module docstring), so the safest
+# place is the middle of that second: half a second of room on both sides, and
+# the one-way latency of the request itself only pushes it further from the
+# edge that matters. Firing near a boundary is what cost a live snipe 2s.
+CANCEL_MID_SECOND_MS = 500
 # An unmeasured send may have fired up to this much before the aimed moment;
 # k is sized from that early bound (a too-small k returns 2s early).
 UNMEASURED_SEND_EARLY_MS = 300
@@ -353,34 +380,44 @@ def _cancel_window_ms():
     return int(config.get("command_cancel_time") or DEFAULT_CANCEL_WINDOW) * 1000
 
 
-def _plan_cancel(send_low_ms, send_high_ms, return_ms, rtt):
-    """Cancel moment under the quantized-return model: the troops land back
-    at S + 2k seconds, so pick the smallest k whose return is not before
-    return_ms and fire a margin into the one-second window that credits it.
-    k is sized from the earliest the send may have fired and the window
-    start from the latest - an error in either direction would otherwise
-    pull the return a fatal 2s early (pass send_low == send_high for a
-    measured send). Returns (fire_at_ms, margin_ms, k)."""
+def _plan_cancel(send_low_ms, send_high_ms, return_ms):
+    """Cancel moment under the quantized-return model: the troops land back at
+    S + 2k seconds, so pick the smallest k whose return is not before return_ms
+    and fire in the middle of the wall-clock second that credits it.
+
+    The credit is the number of second BOUNDARIES crossed between the send and
+    the cancel, not (cancel - send) / 1000 - measured live, see the module
+    docstring. So the cancel is anchored to a wall-clock second, never to the
+    send's own millisecond: aiming it at S + k*1000 + margin put it in the next
+    second whenever the send's ms was late enough that frac + margin passed
+    :000, and the extra boundary is credited as k+1, which lands the troops a
+    silent 2 seconds late. On a lone dodge that is harmless. In a noble train's
+    100ms gap it is the difference between walling the nobles and walking home
+    to a conquered village.
+
+    k is sized from the EARLIEST the send may have fired so the return is never
+    before return_ms, and the crediting second from the LATEST, so a send that
+    turns out to have been in the previous second is credited k+1 (2s late,
+    safe) rather than k-1 (2s early, fatal). Pass send_low == send_high for a
+    measured send. Returns (fire_at_ms, margin_ms, k)."""
     k = max(1, -(-(return_ms - send_low_ms) // 2000))
-    margin = int(min(CANCEL_MARGIN_MAX_MS, max(CANCEL_MARGIN_MIN_MS, rtt * 500)))
-    # If the crediting window is anchored to wall-clock seconds instead of
-    # the send's ms, everything past the next :000 belongs to k+1 (harmless,
-    # +2s); stay under it when the send's ms offset leaves room.
-    frac = int(send_high_ms % 1000)
-    if frac + margin > 900:
-        margin = max(150, 900 - frac)
-    return int(send_high_ms + k * 1000 + margin), margin, k
+    crediting_second = send_high_ms // 1000 + k
+    margin = CANCEL_MID_SECOND_MS
+    return int(crediting_second * 1000 + margin), margin, k
 
 
 def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
-                     network_lead=0.0):
+                     network_lead=0.0, support=False):
     """Measure today's send-timing bias with throwaway probes.
 
-    Fires up to PROBE_COUNT one-unit attacks at the snipe target, compares
+    Fires up to PROBE_COUNT one-unit commands at the snipe target, compares
     each processed send moment (ms arrival minus server travel time) against
     its aim, and cancels the probe right away. The probes use one unit of a
     type from the snipe's own selection, so the caller must wait until they
     are home again (second return value) before preparing the real send.
+    They must be the same KIND of command as the real send - the bias being
+    measured is this connection's send timing, but a probe of the wrong type
+    is simply refused by the game and measures nothing.
     Returns (offsets list in ms, epoch ms when all probe troops are back)."""
     unit = next(iter(units))
     offsets = []
@@ -390,14 +427,18 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
         if entry is None or entry.get("disarm_requested"):
             break
         confirm_data, duration, err = attack_scheduler.prepare_command(
-            wrapper, village_id, tx, ty, {unit: 1})
+            wrapper, village_id, tx, ty, {unit: 1}, support=support)
         if err:
             break
         aim = int(clock.server_now_ms() + 3000)
         clock.sleep_until(aim, network_lead)
-        ok, _ = attack_scheduler.fire_command(wrapper, village_id, confirm_data)
-        if not ok:
-            break
+        ok, _ = attack_scheduler.fire_command(
+            wrapper, village_id, confirm_data,
+            expect="support" if support else "attack")
+        # Look for the command even when the launch reported failure: a probe
+        # that WAS created and is then abandoned walks to the barb and back
+        # with the village's spear, which is how a "failed calibration" left
+        # troops in the air. Only the measurement is skipped, never the cancel.
         _, arrival, cancel_url = _locate_outgoing(
             wrapper, clock, village_id, tx, ty, aim + duration * 1000)
         cancelled_at = clock.server_now_ms()
@@ -405,10 +446,15 @@ def _probe_send_bias(wrapper, clock, sid, village_id, tx, ty, units, path,
             wrapper.get_url(cancel_url)
             # a cancelled probe walks home for as long as it was under way
             home_ms = max(home_ms, cancelled_at + (cancelled_at - aim) + 3000)
-        else:
-            # no cancel link: the probe lands on the barb and walks back on
-            # its own; travel there and back plus slack
+        elif ok:
+            # sent, but the command could not be found to cancel: it lands on
+            # the barb and walks back on its own; travel there and back plus
+            # slack. Only when it really was sent - charging the caller a
+            # multi-hour wait for a launch that created nothing would hold the
+            # real send until long after the gap it was aimed at.
             home_ms = max(home_ms, aim + 2000 * duration + 5000)
+        if not ok:
+            break
         if arrival is not None:
             offset = arrival - duration * 1000 - aim
             if abs(offset) <= 400:  # anything bigger is a mismeasurement
@@ -447,6 +493,12 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     sid = snipe.get("id")
     village_id = snipe.get("village_id")
     return_ms = int(snipe.get("return_ms", 0))
+    # Barbarians can only be attacked and your own villages can only be
+    # supported, so the target decides this at arming time and the runner just
+    # honours it. The dodge itself is identical either way; what differs is
+    # where the troops end up if the cancel never goes through - bounced off a
+    # barb and walking home, or parked in the village they were sent to.
+    support = bool(snipe.get("support"))
 
     clock = _Clock()
     if clock.sync(wrapper, "game.php?village=%s&screen=overview" % village_id) is None \
@@ -480,7 +532,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         offsets, probes_home = _probe_send_bias(
             wrapper, clock, sid, village_id, snipe.get("target_x"),
             snipe.get("target_y"), snipe.get("units") or {}, path,
-            network_lead)
+            network_lead, support=support)
         if len(offsets) >= 2:
             send_bias = sum(offsets) // len(offsets)
             spread = max(offsets) - min(offsets)
@@ -516,7 +568,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         # every attempt needs a fresh confirm token.
         confirm_data, duration, err = attack_scheduler.prepare_command(
             wrapper, village_id, snipe.get("target_x"), snipe.get("target_y"),
-            snipe.get("units") or {})
+            snipe.get("units") or {}, support=support)
         if err:
             return _finish(sid, "failed", err, path=path)
 
@@ -536,8 +588,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         if send_target < earliest:
             send_target += 2000
 
-        cancel_at, _, _ = _plan_cancel(send_target, send_target, return_ms,
-                                       clock.rtt)
+        cancel_at, _, _ = _plan_cancel(send_target, send_target, return_ms)
         if duration * 1000 < (cancel_at - send_target) + MIN_CANCEL_MARGIN_MS:
             return _finish(
                 sid, "failed",
@@ -557,10 +608,28 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                % ((send_target - now) / 1000.0, send_target % 1000,
                   " - attempt %d" % attempt if attempt > 1 else ""), path=path)
         clock.sleep_until(send_target, network_lead)
-        ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data)
+        # The mechanic does not care which kind of command it is - troops
+        # cancelled mid-flight walk home either way - but the game does, and so
+        # must the check: verifying an attack on a barb against "support"
+        # rejected every send the game had made correctly, and since the check
+        # runs AFTER the request, the command was already standing in the rally
+        # point when the snipe reported failure.
+        ok, msg = attack_scheduler.fire_command(
+            wrapper, village_id, confirm_data,
+            expect="support" if support else "attack")
         if not ok:
-            return _finish(sid, "failed", "launch request failed - troops did NOT "
-                           "leave", path=path)
+            # The game may have made a command anyway (a launch can be refused
+            # for being the wrong kind only because it exists), and a failed
+            # snipe must never leave the village's defence walking to a barb.
+            # Pull it back if it is there; the cancel window is minutes wide
+            # and we are inside it by seconds.
+            _, _, stray_url = _locate_outgoing(
+                wrapper, clock, village_id, snipe.get("target_x"),
+                snipe.get("target_y"), send_target + duration * 1000)
+            recalled = bool(stray_url) and wrapper.get_url(stray_url) is not None
+            return _finish(sid, "failed", "%s%s" % (
+                msg, " - the command it made has been recalled" if recalled
+                else ""), path=path)
 
         # Measure the true send moment: the outgoing command's millisecond arrival
         # minus the (whole-second) server travel duration. Falls back to the aimed
@@ -585,9 +654,15 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                    "bounding the send -%d/+%dms around the aim (late-safe)"
                    % (UNMEASURED_SEND_EARLY_MS, int(clock.rtt * 1000)), path=path)
         if not cancel_url:
+            # Where an uncancellable command leaves the troops depends on what
+            # kind it is, and that is the difference between "they are late"
+            # and "go and fetch them".
             return _finish(sid, "failed", "no cancel link found on the outgoing "
-                           "command - troops will hit the target and return on "
-                           "their own", path=path, outgoing_id=command_id)
+                           "command - the troops %s" % (
+                               "will land as support in the target village and "
+                               "stay there until you recall them" if support else
+                               "will hit the target and return on their own"),
+                           path=path, outgoing_id=command_id)
 
         if not window_ms:
             break
@@ -629,8 +704,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                            "the outgoing command was already cancelled",
                            path=path, notify=False)
 
-    cancel_at, margin_ms, k = _plan_cancel(send_low, send_high, return_ms,
-                                           clock.rtt)
+    cancel_at, margin_ms, k = _plan_cancel(send_low, send_high, return_ms)
     return_planned = send_low + 2000 * k
     _patch(sid, path=path, send_ms=int(send_actual), outgoing_id=command_id,
            cancel_ms=int(cancel_at), return_planned_ms=int(return_planned))

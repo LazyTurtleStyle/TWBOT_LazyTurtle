@@ -33,6 +33,13 @@ app = Flask(__name__)
 # so it must never be on when the panel is reachable off-host - the dashboard
 # has no authentication.
 app.config["DEBUG"] = False
+# Template auto-reload, which Flask otherwise ties to DEBUG. Turning the
+# debugger off for an off-host bind (above) also stopped Jinja re-reading its
+# templates, so the panel went on serving whatever HTML it had cached since its
+# first render - an edited page looked like an edit that had not worked, and the
+# only way to see it was to restart the panel. This is a stat() per template per
+# render and nothing else; it does not bring the debugger back.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # Cookie holding the selected world ("" / absent = the default world).
 WORLD_COOKIE = "twb_world"
@@ -776,7 +783,9 @@ def csnipe_arm():
     lead_min, target_x, target_y, units {unit: count}, test (dry run against a
     chosen return moment instead of an incoming), window_ms (optional: the
     return must land at most this many ms past the target - the engine
-    re-fires missed sends until one is inside the window)."""
+    re-fires missed sends until one is inside the window), support (send the
+    outgoing command as support rather than an attack - required for one of
+    your own villages, impossible for a barbarian)."""
     body = request.get_json(silent=True) or {}
     entry, error = DataReader.csnipe_arm(
         village_id=body.get("village_id"),
@@ -789,10 +798,22 @@ def csnipe_arm():
         units=body.get("units") or {},
         test=bool(body.get("test")),
         window_ms=body.get("window_ms"),
+        support=bool(body.get("support")),
     )
     if error:
         return jsonify({"ok": False, "error": error})
     return jsonify({"ok": True, "entry": entry})
+
+
+@app.route('/app/troops/live', methods=['GET'])
+def troops_live():
+    """What is standing in one village this second, read off the live rally
+    point with the bot's session. One request to the game per call, so it is
+    driven by a button rather than by rendering the page."""
+    village_id = request.args.get("village_id") or ""
+    if not village_id:
+        return jsonify({"ok": False, "reason": "bad_village"})
+    return jsonify(DataReader.live_home_troops(village_id))
 
 
 @app.route('/app/csnipe/cancel', methods=['GET', 'POST'])
@@ -816,6 +837,7 @@ def snipe_arm():
         shortfall=body.get("shortfall"),
         min_pct=body.get("min_pct"),
         boost=body.get("boost"),
+        max_delta_ms=body.get("max_delta_ms"),
     )
     return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
 
@@ -1658,13 +1680,27 @@ def tw_cookies_export():
     return resp
 
 
-@app.route('/app/tw-extension.zip', methods=['GET'])
-def tw_extension_zip():
+def _build_extension_zip(flavour="chrome"):
+    """The session-restore extension, packed for one browser.
+
+    Chrome and Firefox disagree about exactly one line of the manifest and
+    agree about everything else - none of the JavaScript differs, because every
+    API it calls (cookies, storage, tabs, action, runtime) exists in both and
+    Firefox accepts the chrome.* alias. So the two downloads are the same files
+    with the background declaration swapped:
+
+        chrome   background.service_worker  - the only form Chrome accepts
+        firefox  background.scripts         - the only form Firefox accepts
+
+    Firefox also wants an add-on id of its own before it will take the folder,
+    which Chrome ignores and would reject in strict mode, so it is only added
+    where it belongs.
+    """
     import io
     import zipfile
     ext_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'browser-extension')
     if not os.path.isdir(ext_dir):
-        return "Extension folder not found on server.", 404
+        return None
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for fname in sorted(os.listdir(ext_dir)):
@@ -1698,13 +1734,44 @@ def tw_extension_zip():
                     manifest["name"] += " (%s)" % world
                     manifest["action"]["default_title"] = \
                         "Open TribalWars %s with bot session" % world
+                if flavour == "firefox":
+                    # Firefox has no service worker in MV3; it runs the same
+                    # file as an event page instead.
+                    manifest["background"] = {"scripts": ["background.js"]}
+                    # Without an id of its own Firefox refuses to load the
+                    # folder at all, and a signed build needs a stable one.
+                    manifest["browser_specific_settings"] = {
+                        "gecko": {
+                            "id": "twb-session-restore@%s" % (world or "local"),
+                            "strict_min_version": "115.0",
+                        }
+                    }
                 zf.writestr(fname, json.dumps(manifest, indent=2))
             else:
                 zf.write(fpath, fname)
     buf.seek(0)
-    zip_name = "twb-session-extension-%s.zip" % (DataReader.active_world() or "default")
-    return Response(buf.read(), content_type='application/zip',
+    return buf.read()
+
+
+def _extension_response(flavour):
+    blob = _build_extension_zip(flavour)
+    if blob is None:
+        return "Extension folder not found on server.", 404
+    suffix = "-firefox" if flavour == "firefox" else ""
+    zip_name = "twb-session-extension-%s%s.zip" % (
+        DataReader.active_world() or "default", suffix)
+    return Response(blob, content_type='application/zip',
                     headers={'Content-Disposition': 'attachment; filename="%s"' % zip_name})
+
+
+@app.route('/app/tw-extension.zip', methods=['GET'])
+def tw_extension_zip():
+    return _extension_response("chrome")
+
+
+@app.route('/app/tw-extension-firefox.zip', methods=['GET'])
+def tw_extension_firefox_zip():
+    return _extension_response("firefox")
 
 
 @app.route('/app/tw-proxy', methods=['GET'])

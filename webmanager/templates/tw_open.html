@@ -31,6 +31,12 @@
 		.btn-ember { background: var(--ember); color: #fff; }
 		.btn-ember:hover { background: var(--ember-dim); color: #fff; }
 		.btn-sm { padding: 5px 10px; font-size: 12px; }
+		/* The second download needs to read as a button without competing with
+		   the first, and this page had no variant for that. */
+		.btn-quiet { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
+		.btn-quiet:hover { border-color: var(--ember-dim); color: var(--ink); }
+		/* The browser default link blue is unreadable on this background. */
+		.note a, .step-body a:not(.btn) { color: var(--ember); text-decoration: underline; }
 		.pill { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 99px; }
 		.pill-moss { background: rgba(147,165,106,.15); color: var(--moss); border: 1px solid rgba(147,165,106,.4); }
 		.pill-dim { background: var(--surface-2); color: var(--ink-faint); border: 1px solid var(--line); }
@@ -65,17 +71,33 @@
 			<div class="step">
 				<div class="step-n">1</div>
 				<div class="step-body">
-					<a class="btn btn-ember btn-sm" href="/app/tw-extension.zip">Download extension</a>
-					<span style="margin-left:8px">and unzip it to a permanent folder on your PC (one-time).</span>
-					<br>The download is pre-configured for this server and world <strong>{{ active_world or 'default' }}</strong>, no setup needed.
+					<a class="btn btn-ember btn-sm" href="/app/tw-extension.zip">Download for Chrome/Edge</a>
+					<a class="btn btn-quiet btn-sm" style="margin-left:6px" href="/app/tw-extension-firefox.zip">Download for Firefox</a>
+					<span style="margin-left:8px">unzip it to a permanent folder on your PC (one-time).</span>
+					<br>Both are pre-configured for this server and world <strong>{{ active_world or 'default' }}</strong>, no setup needed.
+					The only difference is one line of the manifest: Chrome runs the extension as a service
+					worker, Firefox as an event page. The code is identical.
 				</div>
 			</div>
 			<div class="step">
 				<div class="step-n">2</div>
 				<div class="step-body">
-					In Chrome/Edge go to <code>chrome://extensions</code>, enable <strong>Developer mode</strong> (top right),
-					click <strong>Load unpacked</strong> and pick the unzipped folder (one-time).
+					<strong>Chrome/Edge:</strong> go to <code>chrome://extensions</code>, enable
+					<strong>Developer mode</strong> (top right), click <strong>Load unpacked</strong> and pick the
+					unzipped folder (one-time).
 					Updating later: download again, overwrite the folder, hit the reload arrow on the extension card.
+					<br><br>
+					<strong>Firefox:</strong> go to <code>about:debugging#/runtime/this-firefox</code>,
+					click <strong>Load Temporary Add-on</strong> and pick the <code>manifest.json</code> inside the folder.
+					<br><span class="note" style="display:inline">Read this bit: Firefox drops a temporary add-on
+					<strong>every time it restarts</strong> &mdash; which is exactly when you need it after a reboot.
+					To make it stick, upload the zip to
+					<a href="https://addons.mozilla.org/developers/addon/submit/distribution" target="_blank" rel="noopener">addons.mozilla.org</a>
+					as an <strong>unlisted</strong> add-on (free, not published or reviewed publicly). Mozilla signs it and
+					hands back an <code>.xpi</code> you install permanently like any other add-on. Alternatively, Firefox
+					Developer Edition, Nightly or ESR will keep an unsigned add-on if you set
+					<code>xpinstall.signatures.required</code> to <code>false</code> in <code>about:config</code>;
+					release Firefox will not.</span>
 				</div>
 			</div>
 			<div class="step">

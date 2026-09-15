@@ -46,6 +46,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     game_events = None
 
 try:
+    from game.livetroops import read_home_troops
+except Exception:  # pragma: no cover - dashboard still works without live reads
+    read_home_troops = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -282,6 +287,32 @@ class DataReader:
         except Exception:
             pass
         return {}
+
+    @staticmethod
+    def home_troop_reading():
+        """Units standing in each village, from the account-wide reading.
+
+        Returns ({village_id: {unit: count}}, age_seconds) - the "own" figures
+        of cache/troops_moving.json, which the bot refreshes every few minutes
+        for the whole account in one pass. A village missing from it has no
+        reading at all (rather than an empty garrison), so callers can fall
+        back to that village's own snapshot and say which one they are showing.
+        """
+        locations = DataReader.troop_locations()
+        if not isinstance(locations, dict):
+            return {}, None
+        by_village = locations.get("by_village") or {}
+        # A partial write carries the previous breakdown forward, so age the
+        # figures by when that breakdown was actually read, not by the file.
+        when = (OverviewBuilder._to_int(locations.get("complete_when"))
+                or OverviewBuilder._to_int(locations.get("when")))
+        age = (int(time.time()) - when) if when else None
+        reading = {}
+        for vid, entry in by_village.items():
+            own = (entry or {}).get("own")
+            if isinstance(own, dict):
+                reading[str(vid)] = own
+        return reading, age
 
     @staticmethod
     def troop_templates():
@@ -1049,11 +1080,46 @@ class DataReader:
         return csnipe.load_snipes(path=DataReader.csnipe_path())
 
     @staticmethod
+    def _csnipe_target_kind(tx, ty):
+        """What kind of command can be sent at (tx|ty): ("attack"|"support"|
+        None, target_name).
+
+        The game decides this, not the user: a barbarian village cannot be
+        supported and one of your own cannot be attacked. None means the map
+        cache does not know the village, in which case whatever was asked for
+        is let through - refusing on missing cache data would block a target
+        the player can see perfectly well in game.
+        """
+        managed = set(str(v) for v in (DataReader.cache_grab("managed") or {}))
+        for vid, v in (DataReader.cache_grab("villages") or {}).items():
+            loc = v.get("location")
+            if not loc or len(loc) != 2:
+                continue
+            try:
+                if int(loc[0]) != tx or int(loc[1]) != ty:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            name = v.get("name")
+            name = name if isinstance(name, str) and name else None
+            if str(v.get("owner")) == "0":
+                return "attack", name
+            if str(vid) in managed:
+                return "support", name
+            return None, name          # somebody else's - either is possible
+        return None, None
+
+    @staticmethod
     def csnipe_arm(village_id, incoming_id, first_hit_ms, aim_ms, lead_min,
-                   target_x, target_y, units, test=False, window_ms=None):
+                   target_x, target_y, units, test=False, window_ms=None,
+                   support=False):
         """Arm a cancel snipe: the bot sends `units` from the attacked village
         toward (target_x|target_y) and cancels at the halfway moment so they
         land back home at first_hit_ms + aim_ms (epoch milliseconds).
+        With support=True the outgoing command is support rather than an
+        attack - the dodge is identical, but a cancel that never goes through
+        parks the troops in the target village instead of throwing them at a
+        barbarian that may well defend itself.
         With window_ms > 0 (alpha) the return must land within that many ms
         PAST the target: the engine aims mid-window and re-fires missed sends
         until one lands inside it. 0/None keeps the late-safe one-shot mode.
@@ -1114,13 +1180,18 @@ class DataReader:
                           "at the cancel moment" %
                           ("%d|%d" % (tx, ty), (lead_seconds // 2 + 120) // 60))
 
-        target_name = None
-        for v in DataReader.cache_grab("villages").values():
-            vloc = v.get("location")
-            if vloc and len(vloc) == 2 and int(vloc[0]) == tx and int(vloc[1]) == ty:
-                nm = v.get("name")
-                target_name = nm if isinstance(nm, str) and nm else None
-                break
+        # The game will not let you support a barbarian or attack your own
+        # village, and it refuses the whole command rather than adapting. Better
+        # to say so here than to have the send fail at the millisecond it was
+        # supposed to fire, with no second chance at that gap.
+        support = bool(support)
+        kind, target_name = DataReader._csnipe_target_kind(tx, ty)
+        if kind == "attack" and support:
+            return None, ("%d|%d is a barbarian village - it can be attacked, "
+                          "not supported" % (tx, ty))
+        if kind == "support" and not support:
+            return None, ("%d|%d is your own village - send support to it, "
+                          "you cannot attack it" % (tx, ty))
 
         entry = {
             "id": uuid.uuid4().hex[:12],
@@ -1136,6 +1207,7 @@ class DataReader:
             "target_name": target_name,
             "distance": round(distance, 1),
             "units": selected,
+            "support": support,
             "lead_seconds": lead_seconds,
             "window_ms": window_ms,
             "start_ts": int(max(now, return_ms / 1000.0 - lead_seconds)),
@@ -1313,7 +1385,7 @@ class DataReader:
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
-                        shortfall, min_pct, boost):
+                        shortfall, min_pct, boost, max_delta_ms=0):
         """Arm one snipe per selected option: each sends `units` as support
         from its own village so they land at land_ms (epoch milliseconds) in
         the target village. Returns (armed_entries, per_option_errors)."""
@@ -1337,6 +1409,12 @@ class DataReader:
             return [], ["invalid numbers in the snipe form"]
         if shortfall not in ("scale", "all", "strict"):
             shortfall = "scale"
+        # How far off the target landing a command may be and still be kept.
+        # 0 means keep whatever lands, which is how this behaved before.
+        try:
+            max_delta_ms = max(0, int(float(max_delta_ms or 0)))
+        except (TypeError, ValueError):
+            max_delta_ms = 0
         if boost <= 0:
             boost = 1.0
         now = time.time()
@@ -1399,6 +1477,7 @@ class DataReader:
                 "boost": boost,
                 "shortfall": shortfall,
                 "min_pct": min_pct,
+                "max_delta_ms": max_delta_ms,
                 "distance": round(field_distance(oloc, tloc), 1),
                 "travel_est": int(travel),
                 "send_est_ts": int(send_est),
@@ -1786,6 +1865,37 @@ class DataReader:
         return True
 
     @staticmethod
+    def _bot_user_agent():
+        """The user agent the bot browses with, so a request the web process
+        makes on its behalf looks like the same client rather than a second one
+        appearing on the account from nowhere."""
+        try:
+            with open(DataReader.data_path("config.json")) as handle:
+                return json.load(handle).get("bot", {}).get("user_agent")
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def live_home_troops(village_id):
+        """What is standing in a village this second, off the live rally point.
+
+        Every cached figure the forms prefill from is a reading from some
+        minutes ago; this is the one the send itself would get. Returns the
+        reader's status dict ({"ok": True, "units": {...}} or a reason), never
+        raises, and writes nothing.
+        """
+        if read_home_troops is None:
+            return {"ok": False, "reason": "unavailable"}
+        village_id = str(village_id)
+        if not village_id.isdigit():
+            return {"ok": False, "reason": "bad_village"}
+        session = DataReader.get_session() or {}
+        return read_home_troops(village_id,
+                                session.get("cookies") or {},
+                                session.get("endpoint") or "",
+                                DataReader._bot_user_agent())
+
+    @staticmethod
     def incoming_rename_ingame(command_id, label):
         """Push a tag to TribalWars as the incoming attack's in-game label.
 
@@ -1800,13 +1910,7 @@ class DataReader:
         session = DataReader.get_session()
         cookies = (session or {}).get("cookies") or {}
         endpoint = (session or {}).get("endpoint") or ""
-        user_agent = None
-        try:
-            cfg_path = DataReader.data_path("config.json")
-            with open(cfg_path, 'r') as cf:
-                user_agent = json.load(cf).get("bot", {}).get("user_agent")
-        except (OSError, ValueError):
-            pass
+        user_agent = DataReader._bot_user_agent()
         # Load the captured rename endpoint world-aware: the game module's own
         # load_label_endpoint resolves against the bot's FileManager data root,
         # which the web process does not have, so it would read the default
@@ -2419,6 +2523,26 @@ class OverviewBuilder:
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _arrival_key(command):
+        """Sort key for an incoming or support command: its arrival to the ms.
+
+        A train lands several commands inside the same second, so ordering on
+        `arrival` alone leaves them in whatever order the cache happened to
+        hand over - and which of them lands first is the entire question when
+        you are picking a gap to snipe into. `arrival_ms` is the ms-exact
+        reading the poller takes off the arrival column; when it has not read
+        one yet the whole second is all we know, so it sorts as .000 and sits
+        ahead of anything in the same second whose millisecond IS known.
+        """
+        millis = command.get("arrival_ms")
+        if millis:
+            try:
+                return int(millis)
+            except (TypeError, ValueError):
+                pass
+        return OverviewBuilder._to_int(command.get("arrival")) * 1000
+
     @classmethod
     def _build_incomings(cls, village_db):
         """Group tracked incoming commands by target village, enriched with
@@ -2485,7 +2609,7 @@ class OverviewBuilder:
             by_target.setdefault(str(entry.get("target_id")), []).append(view)
 
         for commands in by_target.values():
-            commands.sort(key=lambda c: c.get("arrival") or 0)
+            commands.sort(key=cls._arrival_key)
         return by_target
 
     @classmethod
@@ -3101,6 +3225,36 @@ class DefenseOverview:
         village_db = data.get("villages", {}) or {}
         incomings_by_target = OverviewBuilder._build_incomings(village_db)
         now = int(time.time())
+        # Incoming support, cached whole by the poller. Deliberately kept out of
+        # incomings_by_target: everything downstream of that decides whether a
+        # village is under attack, and a reinforcement is not an attack.
+        supports_by_target = {}
+        support_age = None
+        try:
+            path = DataReader.data_path("cache", "incoming_support.json")
+            blob = {}
+            if os.path.exists(path):
+                with open(path) as handle:
+                    blob = json.load(handle) or {}
+            when = OverviewBuilder._to_int(blob.get("when"))
+            support_age = (now - when) if when else None
+            for command in (blob.get("commands") or []):
+                # The scraper records the arrival; the countdown is derived
+                # here, the same way the attack side does it, so a cache read
+                # minutes ago still counts down correctly.
+                arrival = OverviewBuilder._to_int(command.get("arrival"))
+                if not arrival:
+                    continue
+                eta = arrival - now
+                if eta <= 0:
+                    continue        # already landed
+                command = dict(command, eta=eta)
+                supports_by_target.setdefault(
+                    str(command.get("target_id")), []).append(command)
+        except Exception:
+            supports_by_target = {}
+        for cmds in supports_by_target.values():
+            cmds.sort(key=OverviewBuilder._arrival_key)
 
         # Garrisons come from the account-wide troop-location reading the bot
         # refreshes every few minutes (cache/troops_moving.json), NOT from each
@@ -3170,6 +3324,7 @@ class DefenseOverview:
                 "soonest_eta": soonest,
                 "soonest_arrival": (now + soonest) if soonest is not None else None,
                 "commands": future,
+                "supports": supports_by_target.get(str(vid), []),
                 "def_troops": home_def,
                 "def_total": sum(home_def.values()),
                 "def_away": away_def,
@@ -3184,8 +3339,45 @@ class DefenseOverview:
             -v["def_total"],
         ))
 
+        # The in-game groups, so the table can be cut down the way the account
+        # is already organised - "show me the front" rather than scrolling 58
+        # rows. Only groups that actually hold a managed village are offered.
+        groups = DataReader.groups_grab()
+        here = {str(v["id"]) for v in villages}
+        group_of = {}
+        group_options = []
+        for group in groups:
+            members = [str(m) for m in (group.get("villages") or [])]
+            held = [m for m in members if m in here]
+            if not held:
+                continue
+            group_options.append({"id": str(group.get("id")),
+                                  "name": group.get("name"),
+                                  "type": group.get("type"),
+                                  "count": len(held)})
+            for m in held:
+                group_of.setdefault(m, []).append(str(group.get("id")))
+        for v in villages:
+            v["groups"] = group_of.get(str(v["id"]), [])
+
+        # Every distinct in-game command name currently inbound, commonest
+        # first. "Aanval" is what an untagged attack is called, so this doubles
+        # as "how many are still waiting for a tag".
+        label_counts = collections.Counter(
+            (c.get("game_label") or "").strip()
+            for cmds in incomings_by_target.values() for c in cmds
+            if (c.get("eta") or 0) > 0 and (c.get("game_label") or "").strip())
+        incoming_labels = [{"name": name, "count": n}
+                           for name, n in label_counts.most_common()]
+
         return {
             "villages": villages,
+            "groups": group_options,
+            "incoming_labels": incoming_labels,
+            # Each command carries an eta, not an absolute time; the page turns
+            # them back into arrivals against this.
+            "now": now,
+            "support_age": support_age,
             "defensive_units": cls.DEFENSIVE_UNITS,
             "total_def": total_def,
             "total_def_sum": sum(total_def.values()),
@@ -3227,7 +3419,7 @@ def live_incomings(managed, village_db):
                 "eta": c.get("eta"),
                 "tag": c.get("tag") or c.get("game_label") or c.get("tag_auto"),
             })
-    incomings.sort(key=lambda c: c.get("arrival") or 0)
+    incomings.sort(key=OverviewBuilder._arrival_key)
     return incomings
 
 
@@ -3253,23 +3445,30 @@ class CSnipeOverview:
     DEFAULT_AIM_MS = 150
 
     @staticmethod
-    def _suggest_barb(loc, barbs, speeds, world_speed, unit_speed, lead_seconds):
-        """Nearest barb whose travel time keeps the troops under way at the
-        cancel moment even for a pure-heavy send; slower units only add margin."""
+    def _suggest_target(loc, candidates, speeds, world_speed, unit_speed,
+                        lead_seconds, kind):
+        """Nearest of `candidates` whose travel time keeps the troops under way
+        at the cancel moment even for a pure-heavy send; slower units only add
+        margin. `kind` is the command such a target takes ("attack" for a
+        barbarian, "support" for one of your own), which the form needs because
+        the game refuses the other one outright."""
         if not (field_distance and unit_travel_seconds) or not loc:
             return None
         base = speeds.get("heavy") or 11
         required = lead_seconds / 2.0 + 180
         best = None
-        for barb in barbs:
-            distance = field_distance(loc, barb["location"])
+        for candidate in candidates:
+            distance = field_distance(loc, candidate["location"])
             travel = unit_travel_seconds(distance, base, world_speed, unit_speed)
             if travel < required:
                 continue
             if best is None or distance < best["distance"]:
                 best = {
-                    "x": int(barb["location"][0]), "y": int(barb["location"][1]),
-                    "name": barb.get("name"),
+                    "x": int(candidate["location"][0]),
+                    "y": int(candidate["location"][1]),
+                    "name": candidate.get("name"),
+                    "kind": kind,
+                    "support": kind == "support",
                     "distance": round(distance, 1),
                     "travel_min_heavy": int(travel // 60),
                 }
@@ -3290,20 +3489,52 @@ class CSnipeOverview:
             and isinstance(v.get("location"), list) and len(v["location"]) == 2
         ]
 
+        # Garrisons from the account-wide troop-location reading the bot
+        # refreshes every few minutes, not from each village's own
+        # available_troops snapshot: that snapshot is only rewritten when the
+        # bot next runs the village, so it is routinely an hour old and is
+        # simply EMPTY for a village the bot has not run yet - which is how a
+        # village holding a stack came up as "/0" on every unit in this form.
+        home_reading, reading_age = DataReader.home_troop_reading()
+
+        own_villages = []
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            oloc = pub.get("location")
+            if isinstance(oloc, list) and len(oloc) == 2:
+                own_villages.append({
+                    "id": str(vid), "location": oloc,
+                    "name": vdata.get("name") or pub.get("name") or str(vid)})
+
         villages = {}
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
             loc = pub.get("location")
             avail = vdata.get("available_troops", {}) or {}
+            live = home_reading.get(str(vid))
+            source = live if live is not None else avail
             name = vdata.get("name") or pub.get("name") or vid
+            lead = cls.DEFAULT_LEAD_MIN * 60
             villages[str(vid)] = {
                 "id": str(vid),
                 "name": name,
                 "coords": loc,
-                "home": {u: OverviewBuilder._to_int(avail.get(u))
+                "home": {u: OverviewBuilder._to_int(source.get(u))
                          for u in cls.FORM_UNITS},
-                "barb": cls._suggest_barb(loc, barbs, speeds, ws, us,
-                                          cls.DEFAULT_LEAD_MIN * 60),
+                # Whether that came from the live reading or from the village's
+                # own stale snapshot, so the form can say which it is showing.
+                "home_fresh": live is not None,
+                "barb": cls._suggest_target(loc, barbs, speeds, ws, us,
+                                            lead, "attack"),
+                # Somewhere to send that is not a fight. A cancel that never
+                # goes through throws the stack at the barb, and a grown barb
+                # defends; support that fails to cancel just parks it in your
+                # own village, alive, until you recall it. Offered always, not
+                # only when there is no barb - which of the two failure modes
+                # you want is the player's call, not the map's.
+                "friendly": cls._suggest_target(
+                    loc, [v for v in own_villages if v["id"] != str(vid)],
+                    speeds, ws, us, lead, "support"),
             }
         incomings = live_incomings(managed, village_db)
 
@@ -3326,6 +3557,9 @@ class CSnipeOverview:
             "cancel_seconds": cancel_seconds,
             "default_lead_min": cls.DEFAULT_LEAD_MIN,
             "default_aim_ms": cls.DEFAULT_AIM_MS,
+            # How old the prefilled troop counts are, so the form can say so
+            # instead of presenting a reading from ten minutes ago as fact.
+            "home_age": reading_age,
             "now": now,
         }
 
@@ -3354,16 +3588,24 @@ class SnipeOverview:
         managed = data.get("bot", {}) or {}
         village_db = data.get("villages", {}) or {}
 
+        # Same live reading the Defense table and the c-snipe form use; a
+        # village's own available_troops snapshot is too old to decide which
+        # villages can still reach a landing.
+        home_reading, reading_age = DataReader.home_troop_reading()
+
         villages = {}
         for vid, vdata in managed.items():
             pub = vdata.get("public", {}) or {}
             avail = vdata.get("available_troops", {}) or {}
+            live = home_reading.get(str(vid))
+            source = live if live is not None else avail
             villages[str(vid)] = {
                 "id": str(vid),
                 "name": vdata.get("name") or pub.get("name") or vid,
                 "coords": pub.get("location"),
-                "home": {u: OverviewBuilder._to_int(avail.get(u))
+                "home": {u: OverviewBuilder._to_int(source.get(u))
                          for u in cls.SNIPE_UNITS},
+                "home_fresh": live is not None,
             }
 
         ws, us, speeds = DataReader.world_speeds()
@@ -3392,6 +3634,7 @@ class SnipeOverview:
             "unit_speed": us,
             "default_offset_ms": cls.DEFAULT_OFFSET_MS,
             "default_min_pct": cls.DEFAULT_MIN_PCT,
+            "home_age": reading_age,
             "now": int(time.time()),
         }
 
@@ -3689,8 +3932,10 @@ class EventOverview:
         for action in log:
             if previous and action.get("currency") is not None \
                     and previous.get("currency") is not None:
-                gap = (action["currency"] - previous["currency"]
-                       - int(action.get("reward") or 0))
+                # "reward" on the horse race, "scales" on the dragons board -
+                # the same thing under the name its own driver writes.
+                paid = int(action.get("reward") or action.get("scales") or 0)
+                gap = (action["currency"] - previous["currency"] - paid)
                 if gap > 0:
                     other += gap
                     # Big enough to be a payout rather than a few hand-clicks.
@@ -3703,12 +3948,22 @@ class EventOverview:
 
         # What is still to come: every hour left is one more unit of energy,
         # plus whatever is already in the bar.
+        # What an action is worth: the best option's rated value where the event
+        # has options to choose between, otherwise what the actions actually
+        # taken have averaged. The dragons board has nothing to choose - one
+        # button - so its own record is the only estimate there is.
+        per_action = None
+        if best:
+            per_action = best["value"]
+        elif totals.get("actions"):
+            per_action = earned / float(totals["actions"])
+
         forecast = None
         ends = state.get("ends_ts")
-        if ends and best and energy is not None and not state.get("finished"):
+        if ends and per_action and energy is not None and not state.get("finished"):
             hours_left = max(0.0, (ends - time.time()) / 3600.0)
             actions_left = int(hours_left + energy)
-            cheering = int(actions_left * best["value"])
+            cheering = int(actions_left * per_action)
             # Nearest, not floor: the payout lands at a fixed hour each day, so
             # 47 hours left spans two of them, and flooring lost a whole one -
             # which on this event is a bigger error than everything the
@@ -3741,10 +3996,22 @@ class EventOverview:
             "ranks_best": snapshot.get("ranks_best") or [],
             "ranks_unluckiest": snapshot.get("ranks_unluckiest") or [],
             "group": snapshot.get("group") or {},
+            "currency_name": snapshot.get("currency_name") or "",
+            # The dragons board: where the coin stands, what the log says, and
+            # what the squares have handed over. Empty on events that have no
+            # board, which is what the page keys its panels off.
+            "board": snapshot.get("board") or {},
+            "logs": snapshot.get("logs") or [],
+            "by_square": state.get("by_square") or {},
+            "items_won": state.get("items_won") or {},
             "totals": {"actions": int(totals.get("actions") or 0),
                        "jackpots": int(totals.get("jackpots") or 0),
                        "reward": earned,
-                       "expected": int(expected)},
+                       "expected": int(expected),
+                       "rolls": int(totals.get("rolls") or 0),
+                       "pips": int(totals.get("pips") or 0),
+                       "dragons": int(totals.get("dragons") or 0),
+                       "items": int(totals.get("items") or 0)},
             "luck": None if luck is None else round(luck, 2),
             "other": other,
             "spent": spent,

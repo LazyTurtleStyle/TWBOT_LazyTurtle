@@ -64,6 +64,11 @@ LABEL_ENDPOINT_CACHE = "cache/world/incoming_label.json"
 # once on transition instead of every single poll cycle. Kept out of
 # INCOMINGS_DIR so it is not mistaken for a command by _prune or the dashboard.
 SESSION_STATE_CACHE = "cache/world/incoming_session.json"
+# Incoming support, refreshed whole on every poll rather than stored per
+# command like attacks. Support has no tag to preserve and no history worth
+# keeping - it is either on its way or it has landed - so a single file that is
+# overwritten is both simpler and self-pruning.
+SUPPORT_CACHE = "cache/incoming_support.json"
 
 # How long a cached copy of the world speed data is considered fresh.
 WORLD_CACHE_TTL = 24 * 3600
@@ -199,6 +204,7 @@ class IncomingManager:
         self.ensure_world_data()
         self.ensure_groups()
         commands = self.update_incomings()
+        self.update_supports()
         self.reset_overview_view()
         return commands
 
@@ -440,6 +446,37 @@ class IncomingManager:
         self._prune(seen, now)
         self.logger.info("Tracking %d incoming attack(s)", len(seen))
         return commands
+
+    def update_supports(self):
+        """Cache incoming support, the other half of the village's own panel.
+
+        The game lists support on the same screen and in the same table as
+        attacks, so the attack parser reads it unchanged; only the subtype
+        differs. It is kept apart from the attack cache on purpose - nothing
+        here should ever reach the code that decides whether a village is under
+        attack, or a friendly reinforcement would read as an incoming.
+
+        Best-effort: a failed scrape leaves the previous file in place rather
+        than blanking the panel, and never interferes with attack tracking.
+        """
+        url = (
+            f"game.php?village={self.village_id}"
+            "&screen=overview_villages&mode=incomings&subtype=supports&group=0"
+        )
+        try:
+            res = self.wrapper.get_url(url)
+            if not res or self._session_status(res) != "ok":
+                return []
+            now = self._server_time(res)
+            commands = self.parse_incomings(res.text, now)
+            FileManager.save_json_file(
+                {"when": int(time.time()), "commands": commands}, SUPPORT_CACHE)
+            self.logger.debug("Tracking %d incoming support command(s)",
+                              len(commands))
+            return commands
+        except Exception as exc:
+            self.logger.debug("Could not read incoming support: %s", exc)
+            return []
 
     # -- session detection --------------------------------------------------
 

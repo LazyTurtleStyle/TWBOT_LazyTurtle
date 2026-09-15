@@ -564,7 +564,17 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
     pre_data = {k: v for k, v in Extractor.attack_form(pre)}
     pre_data.update({str(u): str(n) for u, n in units.items()})
     pre_data.update({"x": x, "y": y, "target_type": "coord"})
-    # The submit button's name tells the server the command type.
+    # The submit button's name tells the server the command type - and the
+    # rally point renders BOTH buttons, so both names come back from the form
+    # scrape. Setting one without clearing the other posts them together, and
+    # the server resolves that in favour of attack: a support send then built
+    # an attack confirm, the launch had its only type field stripped off as
+    # "the other kind", and the game created nothing at all while the request
+    # still came back 200. Three snipes reported sent and none existed.
+    #
+    # Verified against the live rally point: posting both yields a confirm page
+    # carrying attack=true, posting support alone yields support=true.
+    pre_data.pop("support" if not support else "attack", None)
     if support:
         pre_data["support"] = "Ondersteunen"
     else:
@@ -608,15 +618,65 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
     return confirm_data, duration, None
 
 
-def fire_command(wrapper, origin_id, confirm_data):
-    """Send the final launch request for an already-prepared command."""
+def fire_command(wrapper, origin_id, confirm_data, expect=None):
+    """Send the final launch request for an already-prepared command.
+
+    A truthy response is not a sent command. The game answers 200 to a launch
+    it refused, to bot protection, and to a payload it could not make sense of.
+    Reporting all three as "sent" is how three support snipes came back
+    successful having never left the village.
+
+    The two shapes are easy to tell apart once you look:
+
+        sent      {"response":{"type":"support","source_village":{...}}}
+        refused   <!DOCTYPE html> ... <title>Actie ongeldig</title>
+
+    A launch that worked answers with JSON describing the command it made, and
+    that JSON names the type - so `expect` ("attack" or "support") is checked
+    against it. That is the assertion the original bug needed: a support send
+    that the server had quietly turned into an attack would have failed here
+    the first time instead of being discovered three snipes later.
+    """
     result = wrapper.get_api_action(
         village_id=origin_id,
         action="popup_command",
         params={"screen": "place"},
         data=confirm_data,
     )
-    return (True, "sent") if result else (False, "launch request failed")
+    if not result:
+        return False, "launch request failed (no response)"
+    # get_api_action hands back the decoded JSON when the game sent JSON, and
+    # the raw response when it did not - so a dict here is already the answer,
+    # and anything else has to be read out of the page. Treating the dict as a
+    # response object was reading every successful launch as a failure, which
+    # is the same mistake as before with the sign flipped.
+    if isinstance(result, dict):
+        payload = result
+    else:
+        text = getattr(result, "text", "") or ""
+        if 'data-bot-protect="forced"' in text:
+            return False, "bot protection is up - the command did NOT leave"
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            # Not JSON, so the game rendered a page at us instead of making a
+            # command. Its <title> is the closest thing to a reason it gives.
+            title = re.search(r"<title>(.*?)</title>", text, re.S)
+            why = re.sub(r"\s+", " ", title.group(1)).strip() if title else ""
+            return False, ("the game did not accept the launch%s"
+                           % (": %s" % why if why else " (no command was created)"))
+    if isinstance(payload, dict) and payload.get("error"):
+        return False, "the game refused the launch: %s" % payload["error"]
+    response = (payload or {}).get("response") or {}
+    if not response:
+        return False, "the launch returned no command (nothing was created)"
+    kind = response.get("type")
+    if expect and kind and kind != expect:
+        # Phrased without an article: "a attack" is the sort of thing that
+        # makes a real warning look like a bug in the warning.
+        return False, ("the game made this a %s command, not %s - it is the "
+                       "wrong kind and it has been sent" % (kind, expect))
+    return True, "sent" + (" as %s" % kind if kind else "")
 
 
 def send_command(wrapper, origin_id, x, y, units):
@@ -624,7 +684,7 @@ def send_command(wrapper, origin_id, x, y, units):
     confirm_data, _duration, err = prepare_command(wrapper, origin_id, x, y, units)
     if err:
         return False, err
-    return fire_command(wrapper, origin_id, confirm_data)
+    return fire_command(wrapper, origin_id, confirm_data, expect="attack")
 
 
 def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
@@ -653,7 +713,8 @@ def execute_timed(wrapper, command, network_lead=NETWORK_LEAD):
             # send anyway but report how far off the launch is.
             logger.warning("Scheduled attack %s launching %.1fs late",
                            command.get("id"), -wait)
-    ok, msg = fire_command(wrapper, command.get("origin_id"), confirm_data)
+    ok, msg = fire_command(wrapper, command.get("origin_id"), confirm_data,
+                           expect="support" if command.get("support") else "attack")
     if ok:
         msg = "%s sent (server travel %ds; %s)" % (
             "support" if command.get("support") else "attack", duration, aimed_on)
@@ -771,7 +832,7 @@ def execute_timed_train(wrapper, command, network_lead=NETWORK_LEAD):
     started = time.time()
     sent, errors = [], list(failed)
     for index, confirm_data, _duration in prepared:
-        ok, msg = fire_command(wrapper, origin, confirm_data)
+        ok, msg = fire_command(wrapper, origin, confirm_data, expect="attack")
         if ok:
             sent.append(index + 1)
         else:

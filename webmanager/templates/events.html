@@ -71,8 +71,15 @@
 				<div class="k">Currency</div><div class="sub">to spend in the event shop</div></div>
 			<div class="stat"><div class="v">{{ c.totals.reward|comma }}</div>
 				<div class="k">Earned by the bot</div>
-				<div class="sub">{{ c.totals.actions }} action{{ '' if c.totals.actions == 1 else 's' }},
-					{{ c.totals.jackpots }} jackpot{{ '' if c.totals.jackpots == 1 else 's' }}</div></div>
+				<div class="sub">{{ c.totals.actions }} action{{ '' if c.totals.actions == 1 else 's' }}{%
+					if c.board %}, {{ c.totals.pips|comma }} spaces moved{% else %},
+					{{ c.totals.jackpots }} jackpot{{ '' if c.totals.jackpots == 1 else 's' }}{% endif %}</div></div>
+			{% if c.board %}
+			<div class="stat"><div class="v gold">{{ c.totals.dragons }}</div>
+				<div class="k">Dragons killed</div>
+				<div class="sub">square {{ c.board.position if c.board.position is not none else '?' }} of the
+					board{% if c.totals.items %} · {{ c.totals.items }} item{{ '' if c.totals.items == 1 else 's' }} won{% endif %}</div></div>
+			{% endif %}
 			{% if c.luck %}
 			<div class="stat"><div class="v {{ 'gold' if c.luck >= 1 else '' }}">{{ (c.luck * 100)|round(0)|int }}%</div>
 				<div class="k">Luck</div><div class="sub">of the {{ c.totals.expected|comma }} those choices were worth</div></div>
@@ -130,14 +137,25 @@
 			{% if c.log %}
 			<div class="table-responsive ev-scroll">
 				<table class="table table-sm table-striped mb-0 ev-log">
-					<thead><tr><th>When</th><th>Option</th><th class="text-right">Paid</th><th></th></tr></thead>
+					<thead><tr><th>When</th><th>{{ 'Threw' if c.board else 'Option' }}</th>
+						<th class="text-right">Paid</th><th></th></tr></thead>
 					<tbody>
 					{% for a in c.log %}
 					<tr>
 						<td class="faint">{{ a.ts|ago }}</td>
+						{% if c.board %}
+						<td class="mono">{{ a.rolls|join(' + ') if a.rolls else '?' }}
+							<span class="faint">= {{ a.moved }}</span></td>
+						<td class="text-right mono">{{ a.scales|comma if a.scales else '—' }}</td>
+						<td>
+							{%- if a.killed %}<span class="badge gold">dragon killed</span> {% endif %}
+							{%- for item in a['items'] or [] %}<span class="badge">{{ item }}</span> {% endfor %}
+							{%- for sq in a.squares or [] %}<span class="faint" style="font-size:11px">{{ sq }}</span> {% endfor %}</td>
+						{% else %}
 						<td>{{ a.option }}</td>
 						<td class="text-right mono">{{ a.reward|comma }}</td>
 						<td>{% if a.jackpot %}<span class="badge gold">jackpot</span>{% endif %}</td>
+						{% endif %}
 					</tr>
 					{% endfor %}
 					</tbody>
@@ -152,6 +170,38 @@
 		</div>
 	</div>
 	<div class="col-lg-6">
+		{% if c.board %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>The board</strong>
+				<small class="text-muted ml-2">square {{ c.board.position if c.board.position is not none else '?' }},
+					board #{{ c.board.board_id }}{% if c.board.squares %} · {{ c.board.squares }} squares dealt{% endif %}</small></div>
+			<div class="card-body py-2">
+				{% if c.by_square %}
+				<div class="mb-2">
+					{% for name, n in c.by_square|dictsort(by='value', reverse=true) %}
+					<span class="badge">{{ name }} <strong>{{ n }}</strong></span>
+					{% endfor %}
+				</div>
+				{% endif %}
+				{% if c.items_won %}
+				<div class="small mb-2"><span class="faint">Items won:</span>
+					{% for name, n in c.items_won|dictsort(by='value', reverse=true) %}
+					<span class="badge">{{ name }}{% if n > 1 %} ×{{ n }}{% endif %}</span>
+					{% endfor %}
+				</div>
+				{% endif %}
+				{% if c.logs %}
+				<div class="small"><span class="faint">Dragonslayer's log — the game wipes this every
+					time a dragon dies:</span>
+					<ul class="mb-0 pl-3">{% for line in c.logs %}<li>{{ line }}</li>{% endfor %}</ul>
+				</div>
+				{% endif %}
+				{% if not c.by_square and not c.logs %}
+				<div class="small text-muted">Nothing thrown yet.</div>
+				{% endif %}
+			</div>
+		</div>
+		{% endif %}
 		{% if c.group and c.group.race %}
 		<div class="card mb-3">
 			<div class="card-header py-2"><strong>The race</strong></div>
