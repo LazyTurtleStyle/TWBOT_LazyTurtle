@@ -197,7 +197,9 @@
   },
   "flags": {
     "manage": false,
-    "auto_upgrade": false
+    "auto_assign": false,
+    "auto_upgrade": false,
+    "max_reads_per_run": 15
   },
   "villages": {}
 }

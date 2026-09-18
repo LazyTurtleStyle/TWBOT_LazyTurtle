@@ -1,0 +1,176 @@
+{% extends "shell.html" %}
+{% block title %}Resource balancing{% endblock %}
+
+{% block content %}
+<style>
+	.bal-table td, .bal-table th { padding: .3rem .55rem; vertical-align: middle; }
+	.bal-scroll { max-height: 440px; overflow-y: auto; }
+	.bal-res { display: inline-flex; align-items: center; gap: 3px; margin-right: .5rem; }
+	.bal-res img { width: 13px; height: 13px; }
+	.bal-res .rv { font-family: var(--mono, monospace); font-size: 12px; }
+	.bal-set dt { font-weight: 500; }
+	.bal-set dd { margin-bottom: .35rem; color: var(--ink-dim); }
+</style>
+
+<p class="text-muted small mt-1">
+	Your big villages push resources to your small ones. This is the in-game <em>send resources</em>
+	screen between your own villages &mdash; no trade ratio, no counter-party, just merchants moving
+	goods. How much is sent is decided by how full the <strong>receiver</strong> is, never by what the
+	sender can spare, so a rim village with a tiny warehouse never overflows.
+</p>
+<p class="text-muted small">
+	The hard part is that a delivery already on the road is invisible to the receiver's own snapshot,
+	so several senders in a row would each fill the same empty warehouse again. Every send is
+	therefore written down together with the moment it lands, and anything still flying counts as
+	already delivered. That bookkeeping is what this page shows.
+</p>
+
+{% if not bal.enabled %}
+<div class="alert alert-secondary py-2 small">
+	Balancing is <strong>off</strong> (<a href="/config#balancer">balancer.enabled</a>). Nothing is
+	sent. Whatever is below is history from when it last ran.
+</div>
+{% endif %}
+
+<div class="stats mb-3">
+	<div class="stat"><div class="v {{ 'gold' if bal.inflight }}">{{ bal.inflight|length }}</div>
+		<div class="k">Convoys in the air</div>
+		<div class="sub">{{ bal.inflight_total|kshort }} resources travelling</div></div>
+	<div class="stat"><div class="v">{{ bal.delivered_day }}</div>
+		<div class="k">Deliveries &middot; 24h</div><div class="sub">{{ bal.delivered_total|comma }} all time</div></div>
+	<div class="stat"><div class="v">{{ bal.receivers|length }}</div>
+		<div class="k">Villages fed</div><div class="sub">that have ever received</div></div>
+	<div class="stat"><div class="v">{{ bal.senders|length }}</div>
+		<div class="k">Villages sending</div><div class="sub">that have ever sent</div></div>
+	<div class="stat">
+		<div class="v">{% if bal.merchant.minutes_per_field %}{{ '%.1f'|format(bal.merchant.minutes_per_field) }}{% else %}—{% endif %}</div>
+		<div class="k">Minutes per field</div>
+		<div class="sub">{% if bal.merchant.measured %}measured {{ bal.merchant.measured|ago }}{% else %}not measured yet{% endif %}</div></div>
+</div>
+
+{% if bal.inflight %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>On the road</strong>
+		<small class="text-muted ml-2">counted as delivered already, which is what stops the overshoot</small></div>
+	<div class="table-responsive bal-scroll">
+		<table class="table table-sm table-striped mb-0 bal-table">
+			<thead><tr><th>To</th><th>Carrying</th><th class="text-right">Total</th>
+				<th>Sent</th><th>Lands</th></tr></thead>
+			<tbody>
+			{% for f in bal.inflight %}
+			<tr>
+				<td><a class="vlink" href="village?id={{ f.to }}">{{ f.to_name }}</a></td>
+				<td>
+					{% for key, label in [('wood','Wood'), ('stone','Clay'), ('iron','Iron')] %}
+					{% if f.amounts.get(key) %}
+					<span class="bal-res" title="{{ label }}: {{ f.amounts[key]|comma }}">
+						<img src="/static/images/{{ key }}.png" alt="{{ label }}">
+						<span class="rv">{{ f.amounts[key]|kshort }}</span></span>
+					{% endif %}{% endfor %}
+				</td>
+				<td class="text-right mono">{{ f.total|comma }}</td>
+				<td class="small text-muted">{{ f.sent|ago }}</td>
+				<td class="mono"><span class="inc-eta" data-arrival="{{ f.arrival }}">{{ f.arrival|ts }}</span></td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<div class="grid-2">
+	<div class="stack">
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Senders</strong>
+				<small class="text-muted ml-2">newest first &middot; cooldown {{ bal.settings.send_cooldown_minutes or 60 }} min</small></div>
+			{% if bal.senders %}
+			<div class="table-responsive bal-scroll">
+				<table class="table table-sm table-striped mb-0 bal-table">
+					<thead><tr><th>Village</th><th>Last sent to</th><th class="text-right">Amount</th>
+						<th>When</th><th>Ready</th></tr></thead>
+					<tbody>
+					{% for s in bal.senders %}
+					<tr>
+						<td><a class="vlink" href="village?id={{ s.id }}">{{ s.name }}</a></td>
+						<td><a class="vlink" href="village?id={{ s.target_id }}">{{ s.target_name }}</a></td>
+						<td class="text-right mono">{{ s.total|kshort }}</td>
+						<td class="small text-muted">{{ s.last_send|ago }}</td>
+						<td>{% if s.ready_in %}<span class="badge badge-secondary" title="cooling down">{{ s.ready_in|dur }}</span>
+							{% else %}<span class="badge badge-success">now</span>{% endif %}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing has been sent yet.</div>
+			{% endif %}
+		</div>
+	</div>
+
+	<div class="stack">
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Receivers</strong>
+				<small class="text-muted ml-2">most recently fed first</small></div>
+			{% if bal.receivers %}
+			<div class="table-responsive bal-scroll">
+				<table class="table table-sm table-striped mb-0 bal-table">
+					<thead><tr><th>Village</th><th class="text-right">24h</th>
+						<th class="text-right">Total</th><th>Last</th></tr></thead>
+					<tbody>
+					{% for r in bal.receivers %}
+					<tr>
+						<td><a class="vlink" href="village?id={{ r.id }}">{{ r.name }}</a></td>
+						<td class="text-right mono {{ 'faint' if not r.day }}">{{ r.day or '—' }}</td>
+						<td class="text-right mono">{{ r.total }}</td>
+						<td class="small text-muted">{{ r.last|ago }}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Nothing has been delivered yet.</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+
+{% if bal.no_market %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>No marketplace</strong>
+		<small class="text-muted ml-2">skipped as receivers &mdash; re-checked every few hours</small></div>
+	<div class="card-body py-2 small">
+		{% for m in bal.no_market %}
+		<span class="badge badge-dark mr-1" title="last checked {{ m.when|ago }}">{{ m.name }}</span>
+		{% endfor %}
+		<div class="text-muted mt-2">A village with no marketplace cannot show what is already on its way,
+			so there is nothing to read and nothing to send to. This is a fact about the village, not a
+			failed read &mdash; it is remembered so every sender in the account stops re-asking the same
+			dead page on every pass.</div>
+	</div>
+</div>
+{% endif %}
+
+<div class="card">
+	<div class="card-header py-2"><strong>Settings in force</strong>
+		<small class="text-muted ml-2"><a href="/config#balancer">change them</a></small></div>
+	<div class="card-body py-2">
+		<div class="row small bal-set">
+			<div class="col-md-6"><dl class="mb-0">
+				<dt>Sends once it is over</dt><dd>{{ bal.settings.sender_min_points|comma if bal.settings.sender_min_points else '—' }} points</dd>
+				<dt>Receives while under</dt><dd>{{ bal.settings.receiver_max_points|comma if bal.settings.receiver_max_points else '—' }} points</dd>
+				<dt>Fills the receiver to</dt><dd>{{ bal.settings.target_fill_pct or '—' }}% of its own warehouse, {{ bal.settings.fill_mode or '—' }}</dd>
+				<dt>Sender keeps back</dt><dd>{{ bal.settings.sender_keep|comma if bal.settings.sender_keep else 'nothing' }} per resource, on top of what its own queue is short of</dd>
+			</dl></div>
+			<div class="col-md-6"><dl class="mb-0">
+				<dt>Who sends / who is served first</dt><dd>{{ bal.settings.sender_order or '—' }} / {{ bal.settings.target_order or '—' }}</dd>
+				<dt>Between sends from one village</dt><dd>{{ bal.settings.send_cooldown_minutes or '—' }} minutes</dd>
+				<dt>Deliveries per receiver per window</dt><dd>{{ bal.settings.max_sends_per_receiver or '—' }}</dd>
+				<dt>Merchants kept free for trading</dt><dd>{{ bal.settings.reserve_merchants or 0 }}</dd>
+			</dl></div>
+		</div>
+	</div>
+</div>
+{% endblock %}

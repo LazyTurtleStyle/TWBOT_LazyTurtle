@@ -1,0 +1,365 @@
+{% extends "shell.html" %}
+{% block title %}Flags{% endblock %}
+
+{% block content %}
+<style>
+	.fl-plan td { padding: .35rem .5rem; vertical-align: middle; }
+	.fl-plan select { min-width: 190px; }
+	.fl-arrow { color: var(--ink-faint); }
+	.fl-move { min-width: 26px; margin-right: 2px; }
+	.fl-move:disabled { opacity: .3; }
+	.fl-state-table td, .fl-state-table th { padding: .3rem .55rem; }
+	.fl-scroll { max-height: 460px; overflow-y: auto; }
+	.fl-pool { display: flex; flex-wrap: wrap; gap: .8rem; }
+	.fl-card { flex: 1 1 210px; border: 1px solid var(--line); border-radius: 4px;
+		padding: .55rem .7rem; background: var(--surface); }
+	.fl-card.short { border-color: rgba(210,75,62,.5); }
+	.fl-card .n { font-family: var(--display); font-size: 22px; line-height: 1.1; }
+	.fl-card .sub { font-size: 11px; color: var(--ink-faint); }
+	.fl-lv { font-size: 11px; color: var(--ink-dim); }
+	#fl-saved { position: fixed; bottom: 1rem; right: 1rem; z-index: 1050; display: none; }
+</style>
+
+<p class="text-muted small mt-1">
+	<span class="badge badge-warning">alpha</span>
+	A flag is not a per-village setting, which is the thing about flags that catches people out.
+	They are an <strong>account-wide inventory</strong>: you own a number of them of each type and
+	level, and every one you own sits on <strong>exactly one village</strong>. Giving village B a
+	flag takes it off village A. You cannot have twenty villages on a resource flag while owning
+	three of them.
+</p>
+<p class="text-muted small">
+	So the plan below is <strong>group &rarr; flag type</strong>, applied for the whole account in
+	one pass. Rows apply top to bottom and the later row wins: give every village the resource
+	flag, then give [OFF] the attack flag. A village no row matches keeps its own
+	<code>flag_type</code>. Where there are not enough flags to go round, the more specific row is
+	served first and the rest are listed as <em>unmet</em> &mdash; nothing is ever taken off a
+	village that already has what it wants.
+</p>
+
+{% if not fl.available %}
+<div class="alert alert-danger py-2 small">The flag module could not be loaded, so this page is
+	read-only and nothing can be applied.</div>
+{% endif %}
+{% if fl.world_has_flags is sameas false %}
+<div class="alert alert-secondary py-2 small">The world marker says this world has
+	<strong>no flags</strong> (<a href="/config#world">world.flags_enabled</a>). If that is wrong,
+	fix it there &mdash; nothing here will work while the world has none.</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center flex-wrap">
+		<span><strong>Flag pass</strong>
+			<small class="text-muted ml-2">
+				{% if fl.last_run %}last applied {{ fl.last_run }}{% if fl.last_run_ts %} ({{ fl.last_run_ts|ago }}){% endif %}
+				{% else %}never applied by the bot{% endif %}
+				&middot;
+				{% if fl.read_when %}flag screen read {{ fl.read_when|ago }}{% else %}flag screen never read{% endif %}
+			</small>
+		</span>
+		<span class="ml-auto d-flex align-items-center" style="gap:.4rem">
+			<button class="btn btn-sm" id="fl-refresh">Refresh from game</button>
+			<button class="btn btn-sm btn-ember" id="fl-apply"
+				{% if not fl.manage %}disabled title="flags.manage is off - nothing would be assigned"{% endif %}>Apply plan now</button>
+		</span>
+	</div>
+	<div class="card-body py-2">
+		<div class="small text-muted">
+			{% if fl.manage %}
+			<span class="badge badge-success">manage ON</span>
+			{% else %}
+			<span class="badge badge-secondary">manage OFF</span>
+			{% endif %}
+			<span class="badge {{ 'badge-success' if fl.auto_assign else 'badge-secondary' }}">daily auto-assign {{ 'ON' if fl.auto_assign else 'OFF' }}</span>
+			<span class="badge {{ 'badge-success' if fl.auto_upgrade else 'badge-secondary' }}">auto-upgrade {{ 'ON' if fl.auto_upgrade else 'OFF' }}</span>
+			<a href="/config#flags" class="ml-2">change</a>
+		</div>
+		{% if not fl.manage %}
+		<div class="small text-muted mt-2">
+			While <strong>manage</strong> is off nothing is ever assigned. <em>Refresh from game</em>
+			still works &mdash; it only reads &mdash; which is the way to look at your flags and try a
+			plan on paper before handing them over.
+		</div>
+		{% endif %}
+		{% if fl.cooldown %}
+		<div class="small mt-2" style="color:var(--ember)">
+			&#9201; The game has flag changes on <strong>cooldown</strong>. Moves wait for the next pass.
+		</div>
+		{% endif %}
+		{% if fl.pending_run or fl.pending_refresh %}
+		<div class="small mt-2" style="color:var(--ember)">
+			&#9201; {{ 'Apply' if fl.pending_run else 'Refresh' }} queued &mdash; it runs on the bot's next cycle.
+		</div>
+		{% endif %}
+	</div>
+</div>
+
+<!-- The pool: what you own, what is placed, what the plan is asking for -->
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Your flags</strong>
+		<small class="text-muted ml-2">{{ fl.owned_total }} owned &middot; {{ fl.placed_total }} standing on a village
+			{% if fl.upgraded %}&middot; {{ fl.upgraded }} upgraded last pass{% endif %}</small></div>
+	<div class="card-body py-2">
+		{% if fl.owned_total == 0 %}
+			{% if fl.raw %}
+			<div class="small" style="color:var(--ember)">The flag screen sent something this page could
+				not read. That is a parser bug, not an empty account &mdash; the raw payload is below so it
+				can be fixed:</div>
+			<pre class="small mt-2 mb-0" style="white-space:pre-wrap">{{ fl.raw }}</pre>
+			{% elif fl.read_when %}
+			<div class="small text-muted">The flag screen was read and you own no flags yet.</div>
+			{% else %}
+			<div class="small text-muted">Press <em>Refresh from game</em> &mdash; the bot then reads your
+				flag collection off the flags screen on its next cycle.</div>
+			{% endif %}
+		{% else %}
+		<div class="fl-pool">
+			{% for t in fl.types %}{% if t.owned or t.want %}
+			<div class="fl-card {{ 'short' if t.short }}">
+				<div class="n">{{ t.owned }}<span class="fl-lv" style="font-size:13px"> owned</span></div>
+				<div><strong>{{ t.name }}</strong></div>
+				<div class="sub">{{ t.effect }}</div>
+				<div class="fl-lv mt-1">
+					{% for lv in t.levels %}<span class="badge badge-dark">lv {{ lv.level }} &times;{{ lv.count }}</span> {% endfor %}
+				</div>
+				<div class="sub mt-1">
+					{{ t.placed }} placed &middot; {{ t.spare }} spare
+					{% if t.want %}&middot; <strong>{{ t.want }} wanted</strong>{% endif %}
+				</div>
+				{% if t.short %}
+				<div class="sub" style="color:#ef6e62">{{ t.short }} village(s) cannot be served</div>
+				{% endif %}
+			</div>
+			{% endif %}{% endfor %}
+		</div>
+		{% endif %}
+	</div>
+</div>
+
+<!-- The plan -->
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center">
+		<span><strong>Plan</strong>
+			<small class="text-muted ml-2">later rows win where groups overlap &mdash;
+				put [All villages] first and the exceptions below it</small></span>
+		<span class="ml-auto d-flex align-items-center" style="gap:.6rem">
+			<span class="faint" style="font-size:12px" id="fl-rowcount">{{ fl.rows|length }} row(s)</span>
+			<button class="btn btn-sm" id="fl-add">Add row</button>
+		</span>
+	</div>
+	<div class="table-responsive">
+		<table class="table table-sm mb-0 fl-plan" id="fl-plan">
+			<thead><tr><th style="width:38%">Group</th><th></th><th style="width:38%">Flag</th>
+				<th class="text-right">Villages</th><th></th></tr></thead>
+			<tbody></tbody>
+		</table>
+	</div>
+	<div class="card-body py-2 small text-muted" id="fl-empty" style="display:none">
+		No rows yet. Every village keeps its own <code>flag_type</code> until you add one.
+	</div>
+</div>
+
+{% if fl.unmet %}
+<div class="card mb-3" style="border-color:rgba(210,75,62,.4)">
+	<div class="card-header py-2"><strong style="color:#ef6e62">Asked for, not owned</strong>
+		<small class="text-muted ml-2">{{ fl.unmet|length }} village(s) the plan could not serve on the last pass</small></div>
+	<div class="table-responsive fl-scroll">
+		<table class="table table-sm table-striped mb-0 fl-state-table">
+			<thead><tr><th>Village</th><th>Wanted</th></tr></thead>
+			<tbody>
+			{% for u in fl.unmet %}
+			<tr><td><a class="vlink" href="village?id={{ u.id }}">{{ u.name }}</a></td>
+				<td>{{ u.flag_name }}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	<div class="card-body py-2 small text-muted">These are not errors. The plan asks for more flags of
+		that type than you own, so the villages served are the ones the most specific row covers and
+		these wait. Own more, or point them at a type you have spare.</div>
+</div>
+{% endif %}
+
+{% if fl.last_result %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Last pass</strong>
+		<small class="text-muted ml-2">{{ fl.last_result_when|ago }}, started {{ fl.last_result_source or 'by the bot' }}</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm table-striped mb-0 fl-state-table">
+			<thead><tr><th>Village</th><th>Given</th><th>Result</th></tr></thead>
+			<tbody>
+			{% for r in fl.last_result %}
+			<tr>
+				<td><a class="vlink" href="village?id={{ r.village_id }}">{{ r.name }}</a></td>
+				<td>{{ r.flag_name }}{% if r.level %} <span class="fl-lv">lv {{ r.level }}</span>{% endif %}</td>
+				<td>{% if r.ok %}<span class="badge badge-success">assigned</span>
+					{% else %}<span class="badge badge-danger">{{ r.error or 'failed' }}</span>{% endif %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<!-- Per village: what it should carry, and what it is carrying -->
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Per village</strong>
+		<small class="text-muted ml-2">{{ fl.villages|length }} managed
+			{% if fl.unread %}&middot; {{ fl.unread|length }} never read{% endif %}</small></div>
+	<div class="table-responsive fl-scroll">
+		<table class="table table-sm table-striped mb-0 fl-state-table">
+			<thead><tr><th>Village</th><th>Should carry</th><th>Decided by</th><th>Carrying now</th><th></th></tr></thead>
+			<tbody>
+			{% for v in fl.villages %}
+			<tr>
+				<td><a class="vlink" href="village?id={{ v.id }}">{{ v.name }}</a></td>
+				<td>{% if v.want %}{{ v.want_name }}{% else %}<span class="faint">no flag</span>{% endif %}</td>
+				<td class="small text-muted">{% if v.source == 'group' %}group <strong>{{ v.group }}</strong>
+					{% else %}its own setting{% endif %}</td>
+				<td>{% if v.current %}{{ v.current_name }} <span class="fl-lv">lv {{ v.level }}</span>
+					{% elif v.read %}<span class="faint">none</span>
+					{% else %}<span class="faint">not read yet</span>{% endif %}</td>
+				<td>{% if not v.read %}<span class="badge badge-secondary">unknown</span>
+					{% elif v.ok %}<span class="badge badge-success">right flag</span>
+					{% elif not v.want %}<span class="badge badge-dark">not managed</span>
+					{% else %}<span class="badge badge-warning">wants {{ v.want_name|lower }}</span>{% endif %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+
+<div class="toast-body bg-dark text-white rounded" id="fl-saved">Plan saved</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const FL_ROWS = {{ fl.rows|tojson }};
+const FL_GROUPS = {{ fl.groups|tojson }};
+const FL_TYPES = {{ fl.types|tojson }};
+
+function flToast(msg) {
+	var el = $('#fl-saved').text(msg).fadeIn(120);
+	setTimeout(function () { el.fadeOut(400); }, 1400);
+}
+
+function flGroup(id) {
+	for (var i = 0; i < FL_GROUPS.length; i++) {
+		if (String(FL_GROUPS[i].id) === String(id)) return FL_GROUPS[i];
+	}
+	return null;
+}
+
+// Rendered from FL_ROWS so add/remove/edit/reorder all go through one path, and
+// the table is always exactly what the next save would write.
+function flRender() {
+	var body = $('#fl-plan tbody').empty();
+	FL_ROWS.forEach(function (row, idx) {
+		var tr = $('<tr>');
+		var gsel = $('<select class="form-control form-control-sm">');
+		FL_GROUPS.forEach(function (g) {
+			gsel.append($('<option>').val(g.id).text(
+				g.name + (g.type === 'dynamic' ? ' (dynamic)' : ''))); });
+		if (!FL_GROUPS.some(function (g) { return String(g.id) === String(row.group_id); })) {
+			gsel.append($('<option>').val(row.group_id).text(row.group_name + ' (gone?)'));
+		}
+		gsel.val(row.group_id).change(function () {
+			var picked = flGroup(this.value);
+			row.group_id = this.value;
+			row.group_name = (picked && picked.name) || $(this).find('option:selected').text();
+			// Re-rendered rather than patched in place, so the village count in
+			// the row follows the group just chosen instead of going stale.
+			row.villages = picked ? picked.villages : null;
+			row.missing = !picked;
+			flRender();
+			flSave();
+		});
+		var tsel = $('<select class="form-control form-control-sm">');
+		tsel.append($('<option>').val(0).text('No flag'));
+		FL_TYPES.forEach(function (t) {
+			// The count rides in the label: picking a flag you own none of is
+			// a thing you should see before you pick it, not after the pass.
+			tsel.append($('<option>').val(t.id).text(t.name + ' (' + t.owned + ' owned)')); });
+		tsel.val(row.flag_type).change(function () {
+			row.flag_type = parseInt(this.value, 10);
+			flRender();
+			flSave();
+		});
+		var del = $('<button class="btn btn-sm btn-outline-danger py-0">Remove</button>').click(function () {
+			FL_ROWS.splice(idx, 1);
+			flRender();
+			flSave();
+		});
+		// Order is the plan's meaning - a row applied later overwrites the
+		// villages it shares with an earlier one - so it has to be editable
+		// without deleting and re-adding everything below it.
+		var up = $('<button class="btn btn-sm py-0 fl-move" title="Apply earlier">&uarr;</button>')
+			.prop('disabled', idx === 0).click(function () { flMove(idx, -1); });
+		var down = $('<button class="btn btn-sm py-0 fl-move" title="Apply later">&darr;</button>')
+			.prop('disabled', idx === FL_ROWS.length - 1).click(function () { flMove(idx, 1); });
+		var count = $('<td class="text-right mono">').text(
+			row.villages === null || row.villages === undefined ? '—' : row.villages);
+		if (row.missing) {
+			count.append($('<div class="fl-lv" style="color:#ef6e62">no such group</div>'));
+		}
+		tr.append($('<td>').append(gsel))
+			.append($('<td class="fl-arrow">&rarr;</td>'))
+			.append($('<td>').append(tsel))
+			.append(count)
+			.append($('<td class="text-right">').append(up).append(down).append(del));
+		body.append(tr);
+	});
+	$('#fl-empty').toggle(FL_ROWS.length === 0);
+	$('#fl-rowcount').text(FL_ROWS.length + ' row(s)');
+}
+
+function flMove(idx, delta) {
+	var to = idx + delta;
+	if (to < 0 || to >= FL_ROWS.length) return;
+	FL_ROWS.splice(to, 0, FL_ROWS.splice(idx, 1)[0]);
+	flRender();
+	flSave();
+}
+
+function flSave() {
+	fetch('/app/flags/plan/save', {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({rows: FL_ROWS.map(function (r) {
+			return {group_id: r.group_id, group_name: r.group_name,
+				flag_type: r.flag_type}; })})
+	}).then(function (r) { return r.json(); })
+		.then(function (resp) { flToast(resp && resp.ok ? 'Plan saved' : 'Could not save the plan'); })
+		.catch(function () { flToast('Could not save the plan'); });
+}
+
+$(function () {
+	flRender();
+
+	$('#fl-add').click(function () {
+		var g = FL_GROUPS[0];
+		FL_ROWS.push({group_id: g.id, group_name: g.name, flag_type: 1,
+			villages: g.villages, missing: false});
+		flRender();
+		flSave();
+	});
+
+	$('#fl-refresh').click(function () {
+		var b = $(this).prop('disabled', true);
+		fetch('/app/flags/refresh').then(function (r) { return r.json(); })
+			.then(function () { flToast('Refresh queued for the next cycle'); })
+			.catch(function () { flToast('Could not queue the refresh'); })
+			.then(function () { b.prop('disabled', false); });
+	});
+
+	$('#fl-apply').click(function () {
+		var b = $(this).prop('disabled', true);
+		fetch('/app/flags/apply').then(function (r) { return r.json(); })
+			.then(function () { flToast('Apply queued for the next cycle'); })
+			.catch(function () { flToast('Could not queue the apply'); })
+			.then(function () { b.prop('disabled', false); });
+	});
+});
+</script>
+{% endblock %}

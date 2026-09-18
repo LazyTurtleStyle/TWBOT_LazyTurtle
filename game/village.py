@@ -192,19 +192,10 @@ class Village:
         """
         Set-up the defence manager
         """
-        # Flag management is now its own feature, independent of world.flags_enabled
-        # (which is just a "this world has flags" capability marker). The flags
-        # section drives whether we manage flags at all and whether we auto-upgrade;
-        # the flag to keep assigned is chosen per village.
-        self.def_man.manage_flags_enabled = self.get_config(
-            section="flags", parameter="manage", default=False
-        )
-        self.def_man.auto_upgrade_flags = self.get_config(
-            section="flags", parameter="auto_upgrade", default=False
-        )
-        self.def_man.flag_type = self.get_village_config(
-            self.village_id, parameter="flag_type", default=1
-        )
+        # Flags are not set up here: they are an account-wide inventory, so one
+        # pass decides them for every village at once (game/flags.py, driven by
+        # the Flags page). This village's own flag_type is still read - as the
+        # fallback for a village no plan row matches - but it is read there.
         self.def_man.support_factor = self.get_village_config(
             self.village_id, "support_others_factor", default=0.25
         )

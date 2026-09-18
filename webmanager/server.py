@@ -14,13 +14,15 @@ try:
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
                                   PlayerFarmOverview, PlanImport,
                                   AccountManagerOverview, EventOverview,
-                                  MintingOverview)
+                                  MintingOverview, FlagsOverview,
+                                  BalancerOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
-                       AccountManagerOverview, EventOverview, MintingOverview)
+                       AccountManagerOverview, EventOverview, MintingOverview,
+                       FlagsOverview, BalancerOverview)
 
 import datetime
 from html import escape as html_escape
@@ -231,17 +233,18 @@ def pre_process_list(key, value, village_id=None):
 
 
 # TribalWars flag type ids (stable across worlds) for the per-village flag_type
-# dropdown. 0 = never assign a flag (only manage upgrades, if enabled).
+# dropdown - the fallback for a village no row on the Flags page matches.
+# 0 = never assign a flag. Names match game/flags.py FLAG_TYPES.
 FLAG_TYPE_OPTIONS = [
     (0, "Off (no flag assigned)"),
     (1, "Resource production"),
     (2, "Recruitment speed"),
     (3, "Attack strength"),
-    (4, "Defense strength"),
+    (4, "Defence strength"),
     (5, "Luck"),
     (6, "Population"),
-    (7, "Reduce coin cost"),
-    (8, "Haul capacity"),
+    (7, "Coin cost"),
+    (8, "Haul"),
 ]
 TARGET_ORDER_OPTIONS = [
     ("nearest", "Nearest village first (shortest merchant trip)"),
@@ -913,6 +916,40 @@ def am_refresh():
     return jsonify({"ok": DataReader.am_request("refresh")})
 
 
+@app.route('/flags', methods=['GET'])
+def flags_page():
+    data = sync()
+    return render_template('flags.html', data=data, fl=FlagsOverview.build(data))
+
+
+@app.route('/app/flags/plan/save', methods=['POST'])
+def flags_plan_save():
+    """Replace the whole group -> flag type plan. Expects JSON:
+    {rows: [{group_id, group_name, flag_type}]}. Order matters and is kept: the
+    bot applies the rows top to bottom, so a later row deliberately overrides an
+    earlier one where two groups overlap."""
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": bool(DataReader.flag_plan_save(body.get("rows") or []))})
+
+
+@app.route('/app/flags/apply', methods=['GET', 'POST'])
+def flags_apply():
+    """Ask the bot to apply the flag plan on its next cycle."""
+    return jsonify({"ok": DataReader.flag_request("run_now")})
+
+
+@app.route('/app/flags/refresh', methods=['GET', 'POST'])
+def flags_refresh():
+    """Ask the bot to re-read the flag screen - the inventory, and which flag
+    each village is carrying. Read-only, so it works with flags.manage off."""
+    return jsonify({"ok": DataReader.flag_request("refresh")})
+
+
+@app.route('/balancer', methods=['GET'])
+def balancer_page():
+    data = sync()
+    return render_template('balancer.html', data=data,
+                           bal=BalancerOverview.build(data))
 @app.route('/minting', methods=['GET'])
 def minting_page():
     data = sync()

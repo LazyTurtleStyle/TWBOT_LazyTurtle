@@ -46,6 +46,7 @@ from game import csnipe
 from game import accountmanager
 from game import dailybonus
 from game import events
+from game import flags
 from game import markings
 from game import minter
 from game import reportanalysis
@@ -1310,6 +1311,20 @@ class TWB:
                 except Exception as exc:
                     logging.getLogger("AccountManager").warning(
                         "Account Manager setup failed: %s", exc)
+
+                # Village flags. An account-wide pass rather than a per-village
+                # one, because the flags are an account-wide pool: one flag
+                # sits on one village, so twenty villages asking for the same
+                # flag type is a question about supply, not twenty independent
+                # decisions. Read-only unless flags.manage is on.
+                try:
+                    flags.run(
+                        self.wrapper, next(iter(config["villages"]), None),
+                        config,
+                        active_hours=self.is_active_hours(config=config))
+                except Exception as exc:
+                    logging.getLogger("Flags").warning(
+                        "Flag pass failed: %s", exc)
 
                 # The player's own map markings, so the dashboard's map is
                 # coloured the way theirs is. Self-limiting to once a day.
