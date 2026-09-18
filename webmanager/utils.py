@@ -1149,7 +1149,15 @@ class DataReader:
         if csnipe is None:
             return None, "c-snipe engine unavailable"
         village_id = str(village_id)
-        managed = DataReader.cache_grab("managed")
+        # Including the villages the bot has not run yet: a village taken this
+        # afternoon is exactly the one being sniped for, and looking it up in
+        # the raw snapshot cache refused to arm with "unknown village" while
+        # the page listed its four incoming attacks quite happily.
+        managed = OverviewBuilder._with_attacked_targets(
+            DataReader.cache_grab("managed") or {},
+            DataReader.cache_grab("villages") or {},
+            OverviewBuilder._build_incomings(
+                DataReader.cache_grab("villages") or {}))
         origin = managed.get(village_id) or {}
         pub = origin.get("public") or {}
         loc = pub.get("location")
@@ -1470,6 +1478,17 @@ class DataReader:
         return {}
 
     @staticmethod
+    def report_analysis_request(job):
+        """Queue one notes job for the bot: the page's selection, written on
+        the bot's next cycle and then never again until asked."""
+        if reportanalysis is None:
+            return False
+        DataReader.ensure_data_dir("cache")
+        reportanalysis.queue_job(job, path=DataReader.data_path(
+            "cache", "report_analysis.json"))
+        return True
+
+    @staticmethod
     def report_analysis_state_grab():
         """What the report-analysis pass has already written onto the map."""
         try:
@@ -1503,7 +1522,13 @@ class DataReader:
             return [], ["snipe engine unavailable"]
         if not (field_distance and unit_travel_seconds):
             return [], ["travel-time helpers unavailable"]
-        managed = DataReader.cache_grab("managed")
+        # Same reason as csnipe_arm: the village being sniped for may be one the
+        # bot has not reached yet.
+        managed = OverviewBuilder._with_attacked_targets(
+            DataReader.cache_grab("managed") or {},
+            DataReader.cache_grab("villages") or {},
+            OverviewBuilder._build_incomings(
+                DataReader.cache_grab("villages") or {}))
         target_village_id = str(target_village_id)
         target = managed.get(target_village_id) or {}
         tpub = target.get("public") or {}
@@ -2022,7 +2047,39 @@ class DataReader:
         return fresh
 
     @staticmethod
-    def dead_clears(min_units=None, min_loss_pct=None, alive_max_loss_pct=None):
+    def world_players():
+        """{player_id: name} for the world, from the public map file, cached
+        like world_villages() and falling back to a stale copy the same way."""
+        if worldvillages is None or not hasattr(worldvillages, "fetch_players"):
+            return {}
+        path = DataReader.data_path(*worldvillages.PLAYERS_REL)
+        try:
+            if os.path.exists(path) and \
+                    time.time() - os.path.getmtime(path) < worldvillages.TTL:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+        except (OSError, ValueError):
+            pass
+        session = DataReader.get_session() or {}
+        fresh = worldvillages.fetch_players(session.get("endpoint") or "")
+        if not fresh:
+            try:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+            except (OSError, ValueError):
+                return {}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                json.dump(fresh, handle)
+        except OSError:
+            pass
+        return fresh
+
+    @staticmethod
+    def dead_clears(min_units=None, min_loss_pct=None, alive_max_loss_pct=None,
+                    rebuild_days=None, prefix=None, prefix_alive=None,
+                    rebuild_word=None):
         """Every enemy village that has thrown a stack at us, and what became
         of its clear - newest event first, each row carrying "dead" or "alive".
 
@@ -2032,7 +2089,11 @@ class DataReader:
         """
         if reportanalysis is None:
             return []
-        return reportanalysis.find_clear_states(
+        ra = reportanalysis
+        settings = (DataReader.config_grab() or {}).get("report_analysis") or {}
+        if rebuild_days is None:
+            rebuild_days = settings.get("rebuild_days", ra.DEFAULT_REBUILD_DAYS)
+        rows = reportanalysis.find_clear_states(
             DataReader.cache_grab("reports") or {},
             DataReader.cache_grab("managed") or {},
             DataReader.cache_grab("villages") or {},
@@ -2041,7 +2102,23 @@ class DataReader:
             int(min_loss_pct if min_loss_pct is not None
                 else reportanalysis.DEFAULT_MIN_LOSS_PCT),
             int(alive_max_loss_pct if alive_max_loss_pct is not None
-                else reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT))
+                else reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT),
+            int(rebuild_days or 0))
+        # The line each village would get, worked out here rather than in the
+        # page so the page can never write something the bot would not.
+        players = DataReader.world_players() if rows else {}
+        for row in rows:
+            if row.get("owner") and not row.get("owner_name"):
+                row["owner_name"] = players.get(str(row["owner"]))
+            row["line"] = ra.note_line(
+                row,
+                prefix if prefix is not None
+                else settings.get("note_prefix", ra.DEFAULT_NOTE_PREFIX),
+                prefix_alive if prefix_alive is not None
+                else settings.get("note_prefix_alive", ra.DEFAULT_NOTE_PREFIX_ALIVE),
+                rebuild_word if rebuild_word is not None
+                else settings.get("note_rebuild", ra.DEFAULT_NOTE_REBUILD))
+        return rows
 
     @staticmethod
     def village_note_read(village_id):
@@ -2059,7 +2136,7 @@ class DataReader:
             home_village=home)
 
     @staticmethod
-    def village_note_add(village_id, line):
+    def village_note_add(village_id, line, replace_prefixes=None):
         """Add one line to a village's note without losing what is there.
 
         Reads first, folds the line in with villagenotes.compose (which returns
@@ -2071,8 +2148,18 @@ class DataReader:
         current = DataReader.village_note_read(village_id)
         if not current.get("ok"):
             return current
-        merged = villagenotes.compose(current.get("note"), line)
+        replace = None
+        if replace_prefixes is not None and reportanalysis is not None:
+            # An older line of the Report analysis module's own - written with
+            # the prefixes the page used, the configured ones or the defaults -
+            # is replaced rather than stacked under the new one.
+            settings = (DataReader.config_grab() or {}).get("report_analysis") or {}
+            replace = reportanalysis.own_line_matcher(
+                list(replace_prefixes) + reportanalysis.own_prefixes(settings))
+        merged = villagenotes.compose(current.get("note"), line, replace)
         if merged is None:
+            if replace is not None:
+                DataReader._report_analysis_noted(village_id, line)
             return {"ok": True, "skipped": "already noted",
                     "note": current.get("note")}
         session = DataReader.get_session() or {}
@@ -2081,7 +2168,19 @@ class DataReader:
             str(village_id), merged, session.get("cookies") or {},
             session.get("endpoint") or "", DataReader._bot_user_agent(),
             current.get("csrf"), home_village=home)
+        if result.get("ok") and replace is not None:
+            DataReader._report_analysis_noted(village_id, line)
         return result
+
+    @staticmethod
+    def _report_analysis_noted(village_id, line):
+        """Tell the bot's job a Report analysis line is already on a village,
+        so it does not spend a page read finding out."""
+        try:
+            reportanalysis.record_noted(village_id, line, path=DataReader.data_path(
+                "cache", "report_analysis.json"))
+        except OSError:
+            pass
 
     @staticmethod
     def live_home_troops(village_id):
@@ -3748,6 +3847,12 @@ class CSnipeOverview:
         village_db = data.get("villages", {}) or {}
         now = int(time.time())
 
+        # A village under attack has to be in here, whether or not the bot has
+        # run it yet: this map is what the arm button looks the village up in,
+        # and a village missing from it made the button do nothing at all.
+        managed = OverviewBuilder._with_attacked_targets(
+            managed, village_db, OverviewBuilder._build_incomings(village_db))
+
         world_cfg = (DataReader.cache_grab("world") or {}).get("config") or {}
         cancel_seconds = int(world_cfg.get("command_cancel_time") or 600)
         ws, us, speeds = DataReader.world_speeds()
@@ -3855,6 +3960,11 @@ class SnipeOverview:
     def build(cls, data):
         managed = data.get("bot", {}) or {}
         village_db = data.get("villages", {}) or {}
+
+        # As in the c-snipe tab: the village the options are being computed FOR
+        # has to be in this map or the button that opens them does nothing.
+        managed = OverviewBuilder._with_attacked_targets(
+            managed, village_db, OverviewBuilder._build_incomings(village_db))
 
         # Same live reading the Defense table and the c-snipe form use; a
         # village's own available_troops snapshot is too old to decide which
@@ -4682,6 +4792,79 @@ class BalancerOverview:
             "last_turn": max([int(t or 0) for t in
                               (state.get("_turns") or {}).values()] or [0]),
         }
+
+
+class ReportAnalysisOverview:
+    """What the Report analysis page shows: the switches, and what has already
+    been written onto the map.
+
+    The reading itself (which villages have a dead clear) is done on demand by
+    /app/dead-clears, because it is a scan of every report on disk and there is
+    no reason to pay for it on a page load nobody asked it of. This is the part
+    that is cheap: the settings the panel should start from, and the notes the
+    unattended pass has written.
+    """
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("report_analysis", {}) or {}
+        state = DataReader.report_analysis_state_grab()
+        noted = state.get("noted") or {}
+        managed = DataReader.cache_grab("managed") or {}
+
+        rows = []
+        for village_id, line in noted.items():
+            entry = managed.get(str(village_id)) or {}
+            rows.append({"id": str(village_id),
+                         "name": entry.get("name") or str(village_id),
+                         "line": line})
+        rows.sort(key=lambda r: str(r["line"]), reverse=True)
+
+        defaults = {}
+        if reportanalysis is not None:
+            defaults = {
+                "min_units": reportanalysis.DEFAULT_MIN_UNITS,
+                "min_loss_pct": reportanalysis.DEFAULT_MIN_LOSS_PCT,
+                "alive_max_loss_pct": reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT,
+                "note_prefix": reportanalysis.DEFAULT_NOTE_PREFIX,
+                "note_prefix_alive": reportanalysis.DEFAULT_NOTE_PREFIX_ALIVE,
+                "note_rebuild": reportanalysis.DEFAULT_NOTE_REBUILD,
+                "rebuild_days": reportanalysis.DEFAULT_REBUILD_DAYS,
+            }
+        # Where the scout button points: the rally point of a village of ours
+        # with the target filled in, so checking whether a nuke is back is one
+        # click and one send.
+        session = DataReader.get_session() or {}
+        endpoint = session.get("endpoint") or ""
+        game_base = (endpoint.rsplit("/", 1)[0]
+                     if endpoint.startswith("http") else "")
+
+        return {
+            "available": reportanalysis is not None,
+            "job": state.get("job") or {},
+            "min_units": settings.get("min_units", defaults.get("min_units")),
+            "min_loss_pct": settings.get("min_loss_pct",
+                                         defaults.get("min_loss_pct")),
+            "alive_max_loss_pct": settings.get(
+                "alive_max_loss_pct", defaults.get("alive_max_loss_pct")),
+            "note_prefix": settings.get("note_prefix",
+                                        defaults.get("note_prefix")),
+            "note_prefix_alive": settings.get(
+                "note_prefix_alive", defaults.get("note_prefix_alive")),
+            "note_rebuild": settings.get("note_rebuild",
+                                         defaults.get("note_rebuild")),
+            "rebuild_days": settings.get("rebuild_days",
+                                         defaults.get("rebuild_days")),
+            "game_base": game_base,
+            "home": next(iter(managed), ""),
+            "noted": rows,
+            "noted_count": len(rows),
+            "last_run": state.get("last_run"),
+            "reports": len(DataReader.cache_grab("reports") or {}),
+        }
+
+
 class BotManager:
     def __init__(self):
         # world key ("" = default) -> pid we started, so each world's bot is

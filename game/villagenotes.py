@@ -136,10 +136,14 @@ def read_note(village_id, cookies, endpoint, user_agent=None, home_village=None)
     return result
 
 
-def compose(existing, line):
+def compose(existing, line, replace=None):
     """The note to save: `line` added to `existing` without losing it.
 
-    Returns None when the line is already there, so a second run over the same
+    `replace`, when given, is a test for lines this bot wrote itself earlier;
+    those are taken out so a verdict that changed (dead, then alive again)
+    reads as one line, not a history. Nothing it does not recognise is touched.
+
+    Returns None when the note would not change, so a second run over the same
     reports is a no-op rather than a note that repeats itself. Newest first,
     because the note is read at a glance in a tooltip.
     """
@@ -147,9 +151,14 @@ def compose(existing, line):
     line = (line or "").strip()
     if not line:
         return None
-    if line in existing:
+    lines = existing.splitlines() if existing else []
+    kept = [l for l in lines
+            if l.strip() == line or not (replace and replace(l))]
+    if len(kept) == len(lines) and line in existing:
         return None
-    return "%s\n%s" % (line, existing) if existing else line
+    kept = [l for l in kept if l.strip() != line]
+    rest = "\n".join(kept).strip()
+    return "%s\n%s" % (line, rest) if rest else line
 
 
 def write_note(village_id, note, cookies, endpoint, user_agent, csrf,

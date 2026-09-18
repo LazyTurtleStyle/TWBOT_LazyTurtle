@@ -1,0 +1,380 @@
+{% extends "shell.html" %}
+{% block title %}Report analysis{% endblock %}
+
+{% block content %}
+<style>
+	.ra-table td, .ra-table th { padding: .3rem .55rem; vertical-align: middle; }
+	.ra-scroll { max-height: 420px; overflow-y: auto; }
+</style>
+
+<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span>
+	Every attack that died on your walls is a nuke the attacker has to rebuild, and rebuilding one
+	takes weeks. The reports already say which of his villages are in that state - one report at a
+	time, the day it happened - and by the time the next wave comes nobody remembers. This reads them
+	back out and writes the answer onto the village itself, as the private note the game keeps on its
+	info page, so it is there when you are looking at the incoming rather than in a spreadsheet you
+	have to go and find.</p>
+
+<div class="stats mb-3">
+	<div class="stat"><div class="v">{{ ra.reports|comma }}</div>
+		<div class="k">Reports cached</div><div class="sub">what the scan reads</div></div>
+	<div class="stat"><div class="v {{ 'gold' if ra.noted_count }}">{{ ra.noted_count }}</div>
+		<div class="k">Villages noted</div><div class="sub">written onto the map</div></div>
+	<div class="stat"><div class="v" id="ra-job-v">{{ (ra.job.status or 'none')|upper }}</div>
+		<div class="k">Bot job</div>
+		<div class="sub" id="ra-job-sub">{% if ra.last_run %}last finished {{ ra.last_run|ago }}{% else %}never run{% endif %}</div></div>
+</div>
+
+<div class="card mb-3">
+	<div class="card-body py-2 small text-muted">
+		Nothing here runs on its own. Press <strong>Find them</strong> to read the reports, narrow the list with
+		the filters, then <strong>Let the bot write these</strong>: the bot writes exactly that selection once, on
+		its next cycle, and costs nothing the rest of the time. Press it again after the next wave - villages
+		that already carry their line are skipped without a request.
+	</div>
+</div>
+<div class="card mb-3">
+	<div class="card-body py-2">
+		<div class="form-row align-items-end">
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Attack size at least</label>
+				<input type="number" class="form-control form-control-sm" id="dc-units" min="0" value="{{ ra.min_units }}">
+			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Of which lost</label>
+				<div class="input-group input-group-sm">
+					<input type="number" class="form-control form-control-sm" id="dc-pct" min="0" max="100" value="{{ ra.min_loss_pct }}">
+					<div class="input-group-append"><span class="input-group-text">%</span></div>
+				</div>
+			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Clear</label>
+				<select class="form-control form-control-sm" id="dc-state" onchange="dcRender()">
+					<option value="dead">dead</option>
+					<option value="back">dead, probably rebuilt</option>
+					<option value="alive">still alive</option>
+					<option value="none">type only (no clear seen)</option>
+					<option value="">all</option>
+				</select>
+			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Attacker</label>
+				<select class="form-control form-control-sm" id="dc-owner" onchange="dcRender()">
+					<option value="">everyone</option>
+				</select>
+			</div>
+			<div class="form-group col-6 col-md-2 mb-1">
+				<label>Rebuilt after</label>
+				<div class="input-group input-group-sm">
+					<input type="number" class="form-control form-control-sm" id="dc-rebuild" min="0" value="{{ ra.rebuild_days }}"
+						title="days after a clear died that it is probably back; 0 = never assume">
+					<div class="input-group-append"><span class="input-group-text">days</span></div>
+				</div>
+			</div>
+			<div class="form-group col-12 col-md-3 mb-1">
+				<label>Note <small class="text-muted">(type and date are added)</small></label>
+				<div class="input-group input-group-sm">
+					<input type="text" class="form-control form-control-sm" id="dc-prefix" value="{{ ra.note_prefix }}"
+						title="written on a village whose clear died" onchange="dcLoad()">
+					<input type="text" class="form-control form-control-sm" id="dc-prefix-alive" value="{{ ra.note_prefix_alive }}"
+						title="written on a village whose clear is still alive" onchange="dcLoad()">
+					<input type="text" class="form-control form-control-sm" id="dc-rebuild-word" value="{{ ra.note_rebuild }}"
+						title="put in front of the rebuild date on a dead clear" onchange="dcLoad()">
+				</div>
+			</div>
+			<div class="form-group col-auto mb-1">
+				<button class="btn btn-sm btn-outline-secondary" onclick="dcLoad()">Find them</button>
+			</div>
+			<div class="form-group col-auto mb-1">
+				<button class="btn btn-sm btn-warning" id="dc-write-all" onclick="dcQueue()" disabled
+					title="the bot writes the villages in this list on its next cycle">Let the bot write these</button>
+			</div>
+			<div class="form-group col mb-1"><small id="dc-note" class="text-muted"></small></div>
+		</div>
+		<small class="text-muted d-block">A note reads like <span class="mono">OFF - {{ ra.note_prefix }} 12-09-2026 ({{ ra.note_rebuild }}26-09)</span>:
+			what the village is, what became of its clear, and the day it is probably back. Writing keeps whatever
+			the note already says; only an older line written here is replaced, so a village whose clear came back
+			carries one line, not its history. Past the rebuild date the only way to know is to look - the
+			&#128269; button opens the rally point aimed at it.</small>
+	</div>
+</div>
+
+<div class="card">
+	<div class="card-header py-2"><strong>Enemy clears</strong>
+		<small class="text-muted ml-2" id="dc-count"></small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0" id="dc-table">
+			<thead><tr>
+				<th>When</th><th></th><th>Village</th><th>Owner</th>
+				<th class="text-right">Sent</th><th class="text-right">Lost</th>
+				<th>Hit</th><th>Back by</th><th>Note</th><th></th>
+			</tr></thead>
+			<tbody><tr><td colspan="10" class="text-muted small">Press &ldquo;Find them&rdquo;.</td></tr></tbody>
+		</table>
+	</div>
+</div>
+
+{% if ra.noted %}
+<div class="card mt-3">
+	<div class="card-header py-2"><strong>Already written</strong>
+		<small class="text-muted ml-2">{{ ra.noted|length }} village(s) carry a note from this module</small></div>
+	<div class="table-responsive ra-scroll">
+		<table class="table table-sm table-striped mb-0 ra-table">
+			<thead><tr><th>Village</th><th>Note</th></tr></thead>
+			<tbody>
+			{% for n in ra.noted %}
+			<tr><td>{{ n.name }}</td><td class="mono">{{ n.line }}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	<div class="card-body py-2 small text-muted">Remembered here so a village that already carries the
+		same line is skipped without spending a page read on checking. The note itself lives in the
+		game, on the village's info page.</div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) {
+	const d = document.createElement('div');
+	d.textContent = String(s == null ? '' : s);
+	return d.innerHTML;
+}
+
+/* ---------- dead clears -------------------------------------------------
+   The reports hold the answer already; this is the reading and the writing of
+   it. Nothing here runs on its own: the list is asked for, and each note is
+   written because it was pressed. Enemy villages carry notes the player wrote
+   by hand, and losing one of those to a bot that decided to tidy up would cost
+   more than the whole feature is worth - so the write is additive and the
+   panel says so. */
+let DC_ROWS = [];
+const DC_GAME = {{ ra.game_base|tojson }}, DC_HOME = {{ ra.home|tojson }};
+
+function dcVal(id) { return ((document.getElementById(id) || {}).value || '').trim(); }
+
+// The line comes from the server, worked out by the same function the bot
+// uses, so what is written from here and what the bot writes never differ.
+function dcLine(row) { return row.line || ''; }
+
+// A dead clear past its rebuild date: probably back, until somebody looks.
+function dcBack(row) { return row.state === 'dead' && row.maybe_rebuilt; }
+
+function dcLoad() {
+	const note = document.getElementById('dc-note');
+	const units = parseInt(document.getElementById('dc-units').value, 10) || 0;
+	const pct = parseInt(document.getElementById('dc-pct').value, 10);
+	note.innerHTML = '<span class="text-muted">reading the reports…</span>';
+	const rebuild = parseInt(document.getElementById('dc-rebuild').value, 10);
+	const q = new URLSearchParams({
+		min_units: units, min_loss_pct: isNaN(pct) ? 90 : pct,
+		rebuild_days: isNaN(rebuild) ? 14 : rebuild,
+		prefix: dcVal('dc-prefix'), prefix_alive: dcVal('dc-prefix-alive'),
+		rebuild_word: (document.getElementById('dc-rebuild-word') || {}).value || ''});
+	fetch('/app/dead-clears?' + q)
+		.then(r => r.json()).then(function(res) {
+			DC_ROWS = res.rows || [];
+			// One entry per attacker actually present, so the filter offers only
+			// choices that mean something.
+			const sel = document.getElementById('dc-owner');
+			const seen = {};
+			DC_ROWS.forEach(function(r) {
+				if (r.owner && !seen[r.owner]) { seen[r.owner] = r.owner_name || ('#' + r.owner); }
+			});
+			const keep = sel.value;
+			sel.innerHTML = '<option value="">everyone (' + DC_ROWS.length + ')</option>' +
+				Object.keys(seen).map(function(id) {
+					const n = DC_ROWS.filter(function(r) { return String(r.owner) === id; }).length;
+					return '<option value="' + id + '">' + esc(seen[id]) + ' (' + n + ')</option>';
+				}).join('');
+			if (keep) sel.value = keep;
+			note.innerHTML = DC_ROWS.length
+				? '<span class="text-muted">from the reports already on disk — nothing was asked of the game</span>'
+				: '<span class="text-muted">no attack that big has died on you</span>';
+			dcRender();
+		})
+		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; });
+}
+
+/* The rows on screen: everything found, or one attacker's share of it. Kept as
+   a view over DC_ROWS rather than a re-fetch, because the scan is free and the
+   filter is a question about the same answer. */
+function dcVisible() {
+	const owner = (document.getElementById('dc-owner') || {}).value || '';
+	const state = (document.getElementById('dc-state') || {}).value || '';
+	return DC_ROWS.map(function(r, i) { return {row: r, i: i}; })
+		.filter(function(x) { return !owner || String(x.row.owner) === owner; })
+		.filter(function(x) {
+			if (!state) return true;
+			if (state === 'back') return dcBack(x.row);
+			if (state === 'dead') return x.row.state === 'dead' && !dcBack(x.row);
+			return x.row.state === state;
+		});
+}
+
+function dcRender() {
+	const body = document.querySelector('#dc-table tbody');
+	const shown = dcVisible();
+	document.getElementById('dc-count').textContent = shown.length
+		? shown.length + ' village' + (shown.length === 1 ? '' : 's') +
+		  (shown.length === DC_ROWS.length ? '' : ' of ' + DC_ROWS.length) +
+		  ' \u00b7 ' + DC_ROWS.filter(function(r) { return r.state === 'dead'; }).length +
+		  ' dead (' + DC_ROWS.filter(dcBack).length + ' probably rebuilt), ' +
+		  DC_ROWS.filter(function(r) { return r.state === 'alive'; }).length + ' alive, ' +
+		  DC_ROWS.filter(function(r) { return r.state === 'none'; }).length + ' type only'
+		: '';
+	document.getElementById('dc-write-all').disabled = !shown.length;
+	if (!shown.length) {
+		body.innerHTML = '<tr><td colspan="10" class="text-muted small">Nothing matches.</td></tr>';
+		return;
+	}
+	body.innerHTML = shown.map(function(x) {
+		const r = x.row, i = x.i;
+		// Most enemy villages are outside the bot's map cache, so the name is
+		// often unknown until the note is read - which fetches the info page
+		// anyway. Until then the id is what there is, and saying so is better
+		// than an empty cell.
+		const where = r.coords ? '<span class="coord text-muted">' + r.coords[0] + '|' + r.coords[1] + '</span>' : '';
+		const who = r.owner_name ? esc(r.owner_name)
+			: (r.owner ? '<span class="text-muted">#' + r.owner + '</span>' : '<span class="text-muted">?</span>');
+		return '<tr id="dc-row-' + i + '">' +
+			'<td class="small">' + esc(r.date) + '</td>' +
+			'<td class="text-nowrap"><span class="badge badge-' + (r.kind === 'DEF' ? 'info' : 'dark') + '">' + esc(r.kind || '?') + '</span> ' +
+				(r.state === 'none'
+				? '<span class="badge badge-light" title="' + (r.seen_as === 'home' ? 'from a scout of it' : 'from fakes it sent') + ' - no clear of it seen">no clear</span>'
+				: r.state === 'alive'
+				? '<span class="badge badge-danger">alive</span>'
+				: dcBack(r)
+				? '<span class="badge badge-warning" title="past the rebuild date - it may be back">rebuilt?</span>'
+				: '<span class="badge badge-success">dead</span>') + '</td>' +
+			'<td><small>' + (r.name ? '<strong>' + esc(r.name) + '</strong> ' : '<span class="text-muted">#' + esc(r.village_id) + '</span> ') +
+				where + '</small></td>' +
+			'<td><small>' + who + '</small></td>' +
+			'<td class="text-right mono">' + r.sent.toLocaleString() + '</td>' +
+			'<td class="text-right mono">' + (r.lost == null ? '<span class="text-muted">&ndash;</span>'
+				: r.lost.toLocaleString() + ' <small class="text-muted">' + r.loss_pct + '%</small>') + '</td>' +
+			'<td><small class="text-muted">' + esc(r.target_name || '') +
+				// A nuke that died on a village you have since lost still died.
+				(r.target_held ? '' : ' <span class="text-warning">(since lost)</span>') + '</small></td>' +
+			'<td class="small text-nowrap">' + dcBackBy(r) + '</td>' +
+			'<td class="small dc-note" id="dc-note-' + i + '"><span class="text-muted mono">' + esc(dcLine(r)) + '</span></td>' +
+			'<td class="text-right text-nowrap">' + dcScout(r) + ' <button class="btn btn-sm btn-outline-warning py-0" ' +
+				'id="dc-btn-' + i + '" onclick="dcWrite(' + i + ')">note it</button></td></tr>';
+	}).join('');
+}
+
+/* When a dead clear is probably back, and anything seen since that says
+   whether it is. A look inside after the death beats any estimate: a village
+   with a few hundred troops at home is still empty, one with thousands is not. */
+function dcBackBy(r) {
+	if (r.state !== 'dead') return '<span class="text-muted">&ndash;</span>';
+	let out = r.rebuilt_date
+		? (r.maybe_rebuilt ? '<span class="text-warning">' + esc(r.rebuilt_date) + '</span>'
+			: esc(r.rebuilt_date)) + ' <span class="text-muted">(' + r.age_days + 'd ago)</span>'
+		: '<span class="text-muted">' + r.age_days + 'd ago</span>';
+	if (r.seen_since) {
+		out += '<br><span class="text-muted" title="the newest look inside after it died">seen ' +
+			esc(r.seen_since.date) + ': ' + Number(r.seen_since.total).toLocaleString() + ' home</span>';
+	}
+	return out;
+}
+
+function dcScout(r) {
+	if (!DC_GAME || !DC_HOME) return '';
+	const url = DC_GAME + '/game.php?village=' + encodeURIComponent(DC_HOME) +
+		'&screen=place&target=' + encodeURIComponent(r.village_id);
+	return '<a class="btn btn-sm btn-outline-secondary py-0" target="_blank" rel="noopener" href="' + esc(url) +
+		'" title="open the rally point aimed at this village, to scout whether it is back">&#128269;</a>';
+}
+
+function dcWrite(i) {
+	const row = DC_ROWS[i];
+	if (!row) return Promise.resolve(false);
+	const cell = document.getElementById('dc-note-' + i);
+	const button = document.getElementById('dc-btn-' + i);
+	if (button) button.disabled = true;
+	cell.innerHTML = '<span class="text-muted">writing…</span>';
+	const body = new URLSearchParams({village_id: row.village_id, line: dcLine(row),
+		replace: [dcVal('dc-prefix'), dcVal('dc-prefix-alive')].join('|')});
+	return fetch('/app/village/note', {method: 'POST', body: body})
+		.then(r => r.json()).then(function(res) {
+			if (!res.ok) {
+				cell.innerHTML = '<span class="text-danger">' + esc(res.reason || 'failed') + '</span>';
+				if (button) button.disabled = false;
+				return false;
+			}
+			// The write reads the page first, so it comes back knowing what the
+			// list could not: fill the row in from it.
+			if (res.name && !row.name) { row.name = res.name; }
+			if (res.coords && !row.coords) { row.coords = res.coords; }
+			cell.innerHTML = res.skipped
+				? '<span class="text-muted">already noted</span>'
+				: '<span class="text-success">✓ ' + esc(dcLine(row)) + '</span>';
+			if (button) button.textContent = 'again';
+			if (button) button.disabled = false;
+			return true;
+		})
+		.catch(function(e) {
+			cell.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>';
+			if (button) button.disabled = false;
+			return false;
+		});
+}
+
+/* Hand the list on screen to the bot: it has the session and the pacing, and
+   it does not need this page to stay open. The job carries the filters and
+   settings exactly as shown, so the bot writes what is on screen. */
+function dcQueue() {
+	const button = document.getElementById('dc-write-all');
+	const note = document.getElementById('dc-note');
+	const pct = parseInt(document.getElementById('dc-pct').value, 10);
+	const rebuild = parseInt(document.getElementById('dc-rebuild').value, 10);
+	const job = {
+		view: (document.getElementById('dc-state') || {}).value || '',
+		owner: (document.getElementById('dc-owner') || {}).value || '',
+		min_units: parseInt(document.getElementById('dc-units').value, 10) || 0,
+		min_loss_pct: isNaN(pct) ? 90 : pct,
+		rebuild_days: isNaN(rebuild) ? 14 : rebuild,
+		prefix: dcVal('dc-prefix'), prefix_alive: dcVal('dc-prefix-alive'),
+		rebuild_word: (document.getElementById('dc-rebuild-word') || {}).value || ''};
+	button.disabled = true;
+	fetch('/app/report_analysis/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify(job)})
+		.then(r => r.json()).then(function(res) {
+			note.innerHTML = res.ok
+				? '<span class="text-success">queued ' + dcVisible().length + ' villages - the bot writes them on its next cycle</span>'
+				: '<span class="text-danger">could not queue</span>';
+			button.disabled = false;
+			raPoll();
+		})
+		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; button.disabled = false; });
+}
+
+/* The job's progress, while there is one to follow. */
+let RA_TIMER = null;
+function raPoll() {
+	clearTimeout(RA_TIMER);
+	fetch('/app/report_analysis/status').then(r => r.json()).then(function(res) {
+		const job = res.job || {};
+		const v = document.getElementById('ra-job-v'), sub = document.getElementById('ra-job-sub');
+		v.textContent = (job.status || 'none').toUpperCase();
+		if (job.status === 'queued') {
+			sub.textContent = 'waiting for the bot\'s next cycle';
+		} else if (job.status === 'running' || job.status === 'done') {
+			const n = (job.written || 0) + (job.already || 0) + (job.failed || 0);
+			sub.textContent = n + ' of ' + (job.total || 0) + ' - ' + (job.written || 0) + ' written' +
+				(job.already ? ', ' + job.already + ' already there' : '') +
+				(job.failed ? ', ' + job.failed + ' unreadable' : '') +
+				(job.selected > job.total ? ' (' + (job.selected - job.total) + ' skipped, already noted)' : '');
+		}
+		if (job.status === 'queued' || job.status === 'running') {
+			RA_TIMER = setTimeout(raPoll, 5000);
+		}
+	}).catch(function() {});
+}
+{% if ra.job.status in ('queued', 'running') %}raPoll();{% endif %}
+{% if ra.job.status == 'done' %}raPoll();{% endif %}
+</script>
+{% endblock %}

@@ -79,6 +79,31 @@ def fetch(endpoint):
     return villages if len(villages) > 100 else None
 
 
+PLAYERS_REL = ("cache", "world", "players_txt.json")
+
+
+def fetch_players(endpoint):
+    """{player_id: name} from map/player.txt (id,name,tribe,villages,points,
+    rank), or None. Same public source and same rules as the village list:
+    it is what turns an owner id into the name a player recognises."""
+    if not endpoint or endpoint == "None":
+        return None
+    url = "%s/map/player.txt" % endpoint.rsplit("/", 1)[0]
+    try:
+        res = requests.get(url, timeout=(10, 60))
+    except requests.RequestException as exc:
+        logger.debug("player.txt fetch failed: %s", exc)
+        return None
+    if res.status_code != 200 or len(res.content) > MAX_BYTES:
+        return None
+    out = {}
+    for line in res.text.splitlines():
+        parts = line.split(",")
+        if len(parts) >= 2 and parts[0].isdigit():
+            out[parts[0]] = urllib.parse.unquote_plus(parts[1])
+    return out if len(out) > 10 else None
+
+
 def cached(wrapper, ttl=TTL):
     """The world's village list, read at most once every `ttl` seconds.
 

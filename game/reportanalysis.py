@@ -21,15 +21,24 @@ you click an incoming.
     not recorded anywhere else.
   - A village already carrying the line is left alone, and the villages it has
     written are remembered, so a second pass costs nothing and says nothing.
-  - It is off by default and does not turn itself on. Marked alpha: it writes
-    to the game, and what it writes is an opinion about a report.
+  - It never runs on its own. The Report analysis page queues one job - the
+    rows it is showing, with the settings it is showing them with - and the
+    bot does that job once, on its next cycle, then goes back to costing
+    nothing. Reading five thousand reports every cycle to find the two new
+    villages a wave produced is not worth the time it takes.
+  - Marked alpha: it writes to the game, and what it writes is an opinion
+    about a report.
 """
 
+import json
 import logging
+import os
+import re
 import time
 
 from core.filemanager import FileManager
 from game import villagenotes, worldvillages
+from game.attack_scheduler import _Lock
 
 logger = logging.getLogger("ReportAnalysis")
 
@@ -48,12 +57,35 @@ DEFAULT_MIN_LOSS_PCT = 90
 # a wrong word on the map. There was exactly one such report in the account
 # this was built against.
 DEFAULT_ALIVE_MAX_LOSS_PCT = 50
-DEFAULT_NOTE_PREFIX = "Clear dood"
-DEFAULT_NOTE_PREFIX_ALIVE = "Clear leeft"
-# Each note is two requests (read the page, save the note). A first run on a
-# long war is fifty of them, which is a lot of traffic in one burst, so a pass
-# takes a bounded bite and the next pass continues.
-DEFAULT_MAX_PER_RUN = 10
+DEFAULT_NOTE_PREFIX = "clear dood"
+DEFAULT_NOTE_PREFIX_ALIVE = "clear leeft"
+# A dead nuke does not stay dead. Nobody on this account has come back from one
+# yet - every village that hit twice was alive both times - so there is no
+# measured figure; two weeks is the player's own estimate of a rebuild, and the
+# note carries the date it runs out so it can be read without doing sums.
+DEFAULT_REBUILD_DAYS = 14
+DEFAULT_NOTE_REBUILD = "herbouwd ~"
+
+# What a village is for, read off the troops it has shown. Spies, the paladin
+# and nobles say nothing about it and are left out of the count; heavy cavalry
+# is on the defensive side because that is how it is almost always built.
+OFFENSIVE_UNITS = ("axe", "light", "marcher", "ram", "catapult")
+DEFENSIVE_UNITS = ("spear", "sword", "archer", "heavy")
+# How much of a stack has to be one side before it names the village, and how
+# big it has to be to be worth reading at all - a farm run of a few light
+# cavalry is not an offensive village.
+KIND_SHARE = 0.7
+KIND_MIN_UNITS = 1000
+# Below that a stack is a fake, and a fake names its village only by what is
+# in it. Axes, light and mounted archers are built in offensive villages and
+# nowhere else, so any of them in an incoming attack is proof enough. Rams,
+# catapults, scouts and heavy cavalry are not: every village has them, and a
+# ram fake from a defensive village is exactly how a nuke gets hidden - on the
+# account this was built against 46 villages faked with nothing else, against
+# 54 that sent axes or light along.
+OFFENSIVE_SIGNATURE = ("axe", "light", "marcher")
+# Which rows a job writes, by the page's "Clear" filter.
+VIEWS = ("dead", "back", "alive", "none", "")
 
 
 def _int(value):
@@ -63,18 +95,135 @@ def _int(value):
         return 0
 
 
-def load_state():
-    return FileManager.load_json_file(STATE_FILE) or {}
+def _state_path(path=None):
+    """Where the state lives. The dashboard passes its own: its process has no
+    per-world data root."""
+    return path or FileManager.get_path(STATE_FILE)
 
 
-def save_state(state):
-    FileManager.save_json_file_atomic(state, STATE_FILE)
+def load_state(path=None):
+    try:
+        with open(_state_path(path)) as handle:
+            return json.load(handle) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def update_state(mutator, path=None):
+    """Read -> mutate -> write under the cross-process lock. The dashboard
+    queues jobs and records the notes it writes by hand into the same file the
+    bot records its job in, and neither may lose the other's write."""
+    target = _state_path(path)
+    with _Lock(target):
+        state = load_state(target)
+        mutator(state)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp = "%s.tmp.%d" % (target, os.getpid())
+        with open(tmp, "w") as handle:
+            json.dump(state, handle, indent=1)
+        os.replace(tmp, target)
+    return state
+
+
+def in_view(row, view):
+    """Whether a row is one the page's "Clear" filter is showing - the same
+    test as the page's own, so a job writes exactly what was on screen."""
+    if not view:
+        return True
+    if view == "back":
+        return row["state"] == "dead" and bool(row.get("maybe_rebuilt"))
+    if view == "dead":
+        return row["state"] == "dead" and not row.get("maybe_rebuilt")
+    return row["state"] == view
+
+
+def queue_job(job, path=None):
+    """Ask the bot to write one batch of notes on its next cycle. `job` is the
+    page's selection: view, owner, and the thresholds and words it used."""
+    job = dict(job or {})
+    job["requested"] = int(time.time())
+    job["status"] = "queued"
+    return update_state(lambda state: state.update({"job": job}), path)
+
+
+def record_noted(village_id, line, path=None):
+    """Remember a note written by hand from the page, so a job does not spend
+    a page read finding out it is already there."""
+    return update_state(
+        lambda state: state.setdefault("noted", {}).update(
+            {str(village_id): line}), path)
+
+
+def troop_kind(units):
+    """"OFF", "DEF" or None for a set of troops."""
+    counts = {k: _int(v) for k, v in (units or {}).items()}
+    off = sum(counts.get(u, 0) for u in OFFENSIVE_UNITS)
+    dfn = sum(counts.get(u, 0) for u in DEFENSIVE_UNITS)
+    if off + dfn < KIND_MIN_UNITS:
+        return None
+    if off >= KIND_SHARE * (off + dfn):
+        return "OFF"
+    if dfn >= KIND_SHARE * (off + dfn):
+        return "DEF"
+    return None
+
+
+def village_readings(reports, managed):
+    """What every enemy village has shown of itself, per village id.
+
+    Two kinds of sighting, each kept newest-first:
+
+      - "sent": a stack it sent at us (units_sent of an incoming attack);
+      - "home": what one of our scouts or attacks found standing in it
+        (defence_units - which includes any support parked there, so a DEF
+        reading can be a friend's troops rather than its own).
+
+    `kind` is the newest sighting that names one side clearly. A village is
+    built for one job and keeps it, so the newest answer is the answer; the
+    older readings are kept for the dashboard to show.
+    """
+    managed = managed or {}
+    seen = {}
+    for report in (reports or {}).values():
+        if report.get("type") not in ("attack", "scout"):
+            continue
+        origin, dest = str(report.get("origin")), str(report.get("dest"))
+        extra = report.get("extra") or {}
+        when = _int(extra.get("when"))
+        if origin in managed and dest not in managed and dest != "None":
+            units = extra.get("defence_units") or {}
+            village, how = dest, "home"
+        elif origin not in managed and origin != "None" \
+                and report.get("type") == "attack":
+            units = extra.get("units_sent") or {}
+            village, how = origin, "sent"
+        else:
+            continue
+        kind = troop_kind(units)
+        if kind is None and how == "sent" and \
+                any(_int(units.get(u)) for u in OFFENSIVE_SIGNATURE):
+            kind = "OFF"
+        entry = seen.setdefault(village, {"sightings": []})
+        entry["sightings"].append({
+            "when": when, "how": how,
+            "total": sum(_int(n) for n in units.values()),
+            "kind": kind})
+    for entry in seen.values():
+        entry["sightings"].sort(key=lambda s: s["when"], reverse=True)
+        entry["kind"] = next((s["kind"] for s in entry["sightings"]
+                              if s["kind"]), None)
+    return seen
+
+
+def _date(stamp, fmt="%d-%m-%Y"):
+    return time.strftime(fmt, time.localtime(stamp)) if stamp else ""
 
 
 def find_clear_states(reports, managed, village_db, world,
                      min_units=DEFAULT_MIN_UNITS,
                      min_loss_pct=DEFAULT_MIN_LOSS_PCT,
-                     alive_max_loss_pct=DEFAULT_ALIVE_MAX_LOSS_PCT):
+                     alive_max_loss_pct=DEFAULT_ALIVE_MAX_LOSS_PCT,
+                     rebuild_days=DEFAULT_REBUILD_DAYS, now=None):
     """Every enemy village that has thrown a real stack at us, and what became
     of it, newest event first.
 
@@ -83,6 +232,10 @@ def find_clear_states(reports, managed, village_db, world,
         "dead"  - its nuke broke on a wall and has to be rebuilt, which is
                   weeks; that village cannot be in the next wave
         "alive" - it has walked a nuke through and nothing has killed it since
+        "none"  - no clear of its has been seen, but its troops say what it
+                  is: fakes with axes or light in them, or what a scout found
+                  standing there. Only the type is known, so only the type is
+                  said.
 
     Which one it is follows the reports rather than a guess: the newest death
     is compared against the newest survival, so a village that lost a clear and
@@ -100,7 +253,16 @@ def find_clear_states(reports, managed, village_db, world,
     `world` is the world's public village list, which is what supplies a name,
     a position and an owner for the attackers outside the bot's own map cache -
     most of them, since that cache only covers the ground around our villages.
+
+    A dead clear is not dead forever. `rebuild_days` after the death it is
+    probably back, so a dead row also carries `rebuilt_by` (that moment),
+    `maybe_rebuilt` (whether it has passed) and `seen_since`: the newest time
+    one of our scouts or attacks looked inside the village after the death,
+    with how many troops were standing there - the one reading that says
+    whether it actually is back, rather than whether it could be.
     """
+    now = now or int(time.time())
+    readings = village_readings(reports, managed)
     by_village = {}
     for report in (reports or {}).values():
         if report.get("type") != "attack":
@@ -167,8 +329,58 @@ def find_clear_states(reports, managed, village_db, world,
         # not always this row's newest report: a village that died and later
         # walked one through is alive as of the survival, not of the death.
         stamp = row["when_dead"] if row["state"] == "dead" else row["when_alive"]
-        row["date"] = (time.strftime("%d-%m-%Y", time.localtime(stamp))
-                       if stamp else row["date"])
+        row["date"] = _date(stamp) or row["date"]
+        seen = readings.get(row["village_id"]) or {}
+        # Every row here threw a clear at us, so OFF unless the troops say
+        # otherwise; the reading is still taken so a village that turns out to
+        # be something else is called what it is.
+        row["kind"] = seen.get("kind") or "OFF"
+        row["age_days"] = max(0, (now - stamp) // 86400) if stamp else None
+        row["rebuilt_by"] = row["rebuilt_date"] = None
+        row["maybe_rebuilt"] = False
+        row["seen_since"] = None
+        if row["state"] == "dead":
+            if rebuild_days and rebuild_days > 0:
+                row["rebuilt_by"] = stamp + int(rebuild_days) * 86400
+                row["rebuilt_date"] = _date(row["rebuilt_by"], "%d-%m")
+                row["maybe_rebuilt"] = now >= row["rebuilt_by"]
+            look = next((s for s in seen.get("sightings", [])
+                         if s["how"] == "home" and s["when"] > stamp), None)
+            if look:
+                row["seen_since"] = {"date": _date(look["when"]),
+                                     "total": look["total"],
+                                     "kind": look["kind"]}
+    # The villages that never sent a clear but have shown what they are.
+    for village_id, seen in readings.items():
+        if village_id in by_village or not seen.get("kind"):
+            continue
+        out = (world or {}).get(village_id) or {}
+        known = (village_db or {}).get(village_id) or {}
+        # Barbarians are scouted and farmed all day; they are not anybody's
+        # offence or defence.
+        if str(out.get("owner", "")) == "0":
+            continue
+        latest = next(s for s in seen["sightings"] if s["kind"])
+        coords = known.get("location")
+        if not coords and out.get("x") is not None:
+            coords = [out["x"], out["y"]]
+        by_village[village_id] = {
+            "village_id": village_id,
+            "name": out.get("name") or known.get("name"),
+            "coords": coords,
+            "points": out.get("points") or known.get("points"),
+            "owner": out.get("owner")
+                     or (str(known.get("owner")) if known.get("owner") else None),
+            "when": latest["when"], "date": _date(latest["when"]),
+            "sent": latest["total"], "lost": None, "loss_pct": None,
+            "seen_as": latest["how"],
+            "target_id": None, "target_name": "", "target_held": True,
+            "state": "none", "kind": seen["kind"],
+            "age_days": max(0, (now - latest["when"]) // 86400)
+                        if latest["when"] else None,
+            "rebuilt_by": None, "rebuilt_date": None,
+            "maybe_rebuilt": False, "seen_since": None,
+        }
     return sorted(by_village.values(), key=lambda r: r["when"], reverse=True)
 
 
@@ -181,10 +393,55 @@ def find_dead_clears(reports, managed, village_db, world,
             if r["state"] == "dead"]
 
 
-def note_line(row, prefix=DEFAULT_NOTE_PREFIX, prefix_alive=DEFAULT_NOTE_PREFIX_ALIVE):
-    """What to write on the village: what became of its clear, and when."""
+def note_line(row, prefix=DEFAULT_NOTE_PREFIX, prefix_alive=DEFAULT_NOTE_PREFIX_ALIVE,
+              rebuild_word=DEFAULT_NOTE_REBUILD):
+    """What to write on the village: what it is, what became of its clear, and
+    when - and for a dead one, when it is probably back.
+
+        OFF - clear dood 12-09-2026 (herbouwd ~26-09)
+
+    The rebuild date is written rather than worked out later, so the note
+    never has to be rewritten to stay true: it says when to stop trusting it.
+    A village whose clear has never been seen gets its type and nothing else.
+    """
+    if row.get("state") == "none":
+        return row.get("kind") or ""
     word = prefix_alive if row.get("state") == "alive" else prefix
-    return ("%s %s" % ((word or "").strip(), row.get("date", ""))).strip()
+    line = ("%s %s" % ((word or "").strip(), row.get("date", ""))).strip()
+    if row.get("kind"):
+        line = "%s - %s" % (row["kind"], line)
+    if row.get("state") == "dead" and row.get("rebuilt_date"):
+        line = "%s (%s%s)" % (line, rebuild_word or "", row["rebuilt_date"])
+    return line
+
+
+def own_line_matcher(prefixes):
+    """A test for "this note line was written by this module", so a village
+    whose verdict changed gets its old line replaced instead of a second one
+    stacked on top. Deliberately narrow: the whole line has to be one of ours
+    - optional kind, one of the prefixes, a date, an optional bracket - so a
+    line somebody typed by hand is never taken for one."""
+    words = sorted({(p or "").strip() for p in prefixes if (p or "").strip()},
+                   key=len, reverse=True)
+    bare = re.compile(r"^(?:OFF|DEF)$")
+    if not words:
+        return lambda line: bool(bare.match((line or "").strip()))
+    pattern = re.compile(
+        r"^(?:[A-Z?]{2,6} - )?(?:%s) \d{2}-\d{2}-\d{4}(?: \([^)]*\))?$"
+        % "|".join(re.escape(w) for w in words), re.I)
+    # A bare type line is ours too, so the day a clear is seen it becomes
+    # "OFF - clear dood ..." rather than sitting under it.
+    return lambda line: bool(pattern.match((line or "").strip())
+                             or bare.match((line or "").strip()))
+
+
+def own_prefixes(settings):
+    """Every prefix a line of ours could have been written with: the current
+    ones and the defaults, old capitalised ones included by the matcher being
+    case-blind."""
+    settings = settings or {}
+    return [settings.get("note_prefix"), settings.get("note_prefix_alive"),
+            DEFAULT_NOTE_PREFIX, DEFAULT_NOTE_PREFIX_ALIVE]
 
 
 # -- writing, through the bot's own wrapper ---------------------------------
@@ -209,8 +466,10 @@ def write_note(wrapper, home_village, village_id, note):
     return not result.get("error")
 
 
-def add_note(wrapper, home_village, village_id, line):
-    """Add one line to a village's note, keeping what was there.
+def add_note(wrapper, home_village, village_id, line, replace=None):
+    """Add one line to a village's note, keeping what was there - except an
+    older line of this module's own, which `replace` recognises and which the
+    new one takes the place of.
 
     Returns "written", "already" or None; None means the note could not be read
     and so was not touched - an unreadable note and an empty one are not the
@@ -219,7 +478,7 @@ def add_note(wrapper, home_village, village_id, line):
     current = read_note(wrapper, home_village, village_id)
     if current is None:
         return None
-    merged = villagenotes.compose(current, line)
+    merged = villagenotes.compose(current, line, replace)
     if merged is None:
         return "already"
     return "written" if write_note(wrapper, home_village, village_id, merged) else None
@@ -239,60 +498,91 @@ def _load_cache_dir(path):
     return out
 
 
-def run(wrapper, home_village, config):
-    """One pass: note the dead clears that have not been noted yet.
+def _job_settings(job, settings):
+    """The job's own values where the page sent them, the config otherwise."""
+    def pick(key, default):
+        value = job.get(key)
+        return value if value not in (None, "") else settings.get(key, default)
+    return pick
 
-    Off unless report_analysis.enabled is set. Never turns itself on, and takes
-    a bounded number of villages per pass so a first run on a long war does not
-    fire a hundred requests in a burst. Loads its own inputs, so the caller has
-    nothing to assemble.
+
+def run(wrapper, home_village, config):
+    """Serve a queued job, if there is one. Otherwise do nothing at all - not
+    even read the reports - so a cycle with no job costs one small file read.
+
+    A job writes every row of the page's selection that does not already carry
+    its line, in one go, paced by the bot's own wrapper like any other request.
+    Progress is saved as it goes so the page can show it.
     """
-    settings = (config or {}).get("report_analysis", {}) or {}
-    if not settings.get("enabled", False) or not home_village:
+    state = load_state()
+    job = state.get("job") or {}
+    if job.get("status") != "queued" or not home_village:
         return 0
-    prefix = settings.get("note_prefix", DEFAULT_NOTE_PREFIX)
-    prefix_alive = settings.get("note_prefix_alive", DEFAULT_NOTE_PREFIX_ALIVE)
+    settings = (config or {}).get("report_analysis", {}) or {}
+    pick = _job_settings(job, settings)
+    prefix = pick("prefix", DEFAULT_NOTE_PREFIX)
+    prefix_alive = pick("prefix_alive", DEFAULT_NOTE_PREFIX_ALIVE)
+    rebuild_word = job.get("rebuild_word") if job.get("rebuild_word") is not None \
+        else settings.get("note_rebuild", DEFAULT_NOTE_REBUILD)
+    ours = own_line_matcher([prefix, prefix_alive] + own_prefixes(settings))
     rows = find_clear_states(
         _load_cache_dir("cache/reports"),
         config.get("villages", {}) or {},
         _load_cache_dir("cache/villages"),
         worldvillages.cached(wrapper),
-        _int(settings.get("min_units")) or DEFAULT_MIN_UNITS,
-        _int(settings.get("min_loss_pct")) or DEFAULT_MIN_LOSS_PCT,
-        _int(settings.get("alive_max_loss_pct"))
-        or DEFAULT_ALIVE_MAX_LOSS_PCT)
-    # Which of the two the module writes. A dead clear is the one that changes
-    # what you do about the next wave, so it is the one that is on by default;
-    # noting the living ones marks out the rest of his hitting power and is
-    # asked for separately.
-    if not settings.get("note_alive", False):
-        rows = [r for r in rows if r["state"] == "dead"]
-    if not rows:
-        return 0
-    cap = _int(settings.get("max_per_run")) or DEFAULT_MAX_PER_RUN
-    state = load_state()
-    noted = state.setdefault("noted", {})
-    done = 0
+        _int(pick("min_units", DEFAULT_MIN_UNITS)) or DEFAULT_MIN_UNITS,
+        _int(pick("min_loss_pct", DEFAULT_MIN_LOSS_PCT)) or DEFAULT_MIN_LOSS_PCT,
+        _int(pick("alive_max_loss_pct", DEFAULT_ALIVE_MAX_LOSS_PCT))
+        or DEFAULT_ALIVE_MAX_LOSS_PCT,
+        _int(pick("rebuild_days", DEFAULT_REBUILD_DAYS)))
+    view = job.get("view") if job.get("view") in VIEWS else ""
+    owner = str(job.get("owner") or "")
+    rows = [r for r in rows if in_view(r, view)
+            and (not owner or str(r.get("owner")) == owner)]
+    noted = state.get("noted") or {}
+    todo = []
     for row in rows:
-        if done >= cap:
-            break
-        line = note_line(row, prefix, prefix_alive)
+        line = note_line(row, prefix, prefix_alive, rebuild_word)
         # Remembered rather than re-checked: the check itself costs a page.
-        if noted.get(row["village_id"]) == line:
-            continue
-        outcome = add_note(wrapper, home_village, row["village_id"], line)
+        if line and noted.get(row["village_id"]) != line:
+            todo.append((row, line))
+
+    progress = {"status": "running", "started": int(time.time()),
+                "selected": len(rows), "total": len(todo),
+                "written": 0, "already": 0, "failed": 0}
+    done = {}
+
+    def save(extra=None):
+        def apply(st):
+            st.setdefault("noted", {}).update(done)
+            current = st.get("job") or {}
+            # A newer press while this ran is kept, not overwritten.
+            if current.get("requested") == job.get("requested"):
+                current.update(progress)
+                current.update(extra or {})
+                st["job"] = current
+        update_state(apply)
+
+    save()
+    logger.info("Report analysis job: %d of %d selected villages to note",
+                len(todo), len(rows))
+    for n, (row, line) in enumerate(todo, 1):
+        outcome = add_note(wrapper, home_village, row["village_id"], line, ours)
         if outcome is None:
+            progress["failed"] += 1
             logger.debug("Could not read the note on %s, leaving it alone",
                          row["village_id"])
-            continue
-        noted[row["village_id"]] = line
-        done += 1
-        if outcome == "written":
-            logger.info("Noted %s (%s): %s",
-                        row.get("name") or row["village_id"],
-                        "%s|%s" % tuple(row["coords"]) if row.get("coords") else "?",
-                        line)
-    if done:
-        state["last_run"] = int(time.time())
-        save_state(state)
-    return done
+        else:
+            progress["already" if outcome == "already" else "written"] += 1
+            done[row["village_id"]] = line
+            if outcome == "written":
+                logger.info("Noted %s (%s): %s",
+                            row.get("name") or row["village_id"],
+                            "%s|%s" % tuple(row["coords"]) if row.get("coords") else "?",
+                            line)
+        if n % 10 == 0:
+            save()
+    progress["status"] = "done"
+    save({"finished": int(time.time())})
+    update_state(lambda st: st.update({"last_run": int(time.time())}))
+    return progress["written"]

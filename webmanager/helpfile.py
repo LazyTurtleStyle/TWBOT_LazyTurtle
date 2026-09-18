@@ -53,15 +53,14 @@ help_file = {
     'events': 'The rotating in-game events (the weekly themed mini-game). The bot notices whichever event is running from a page it already loads, and can play it for you - see the Events page.',
     'events.auto_play': 'Let the bot play the running event. Its energy bar refills on a timer and stops refilling once full, so every hour it sits capped is an action thrown away - this spends the bar down every cycle. Off by default; nothing is ever played until you switch it on.',
     'events.option': 'Which choice to make: "auto" picks whichever option is worth the most right now (the jackpots move, so the best choice moves with them), or set a number to always take that one.',
-    'report_analysis': 'ALPHA. Reads your reports back out and writes what they mean onto the map. An attack that dies takes the attacker\'s nuke with it and rebuilding one takes weeks, so every defence that held is a fact about his next wave - that village cannot be in it. This finds those villages and writes the date onto each one as the private note the game keeps on its info page, where it is on screen the moment you click an incoming. See Defense -> Dead clears to look before switching it on.',
-    'report_analysis.enabled': 'Let the bot write the notes on its own. Off by default and it never turns itself on. The Dead clears tab does the same thing on demand, which is the way to try it first.',
+    'report_analysis': 'ALPHA. Reads your reports back out and writes what they mean onto the map. An attack that dies takes the attacker\'s nuke with it and rebuilding one takes weeks, so every defence that held is a fact about his next wave - that village cannot be in it. This finds those villages and writes the date onto each one as the private note the game keeps on its info page, where it is on screen the moment you click an incoming. It runs only when you press \"Let the bot write these\" on the Report analysis page: the bot writes that selection once, on its next cycle, and costs nothing the rest of the time. The settings here are the defaults the page starts from.',
     'report_analysis.min_units': 'How big an attack has to be before losing it counts as losing a clear. Below this it is a probe, a fake or snipe-bait rather than a nuke.',
     'report_analysis.min_loss_pct': 'How much of that attack has to have died. In practice this is near-binary - an attack either breaks on the wall or walks through it - so anything from about 80 upwards picks out the same set.',
     'report_analysis.alive_max_loss_pct': 'How little an attack can have lost and still count as a nuke that walked through - proof the village HAS one. The middle ground, a stack that lost most of itself but not all, is deliberately left out of both piles: it is neither gone nor intact, and guessing would put a wrong word on the map.',
-    'report_analysis.note_prefix': 'What the note says about a village whose clear died, with the date added after it. "Clear dood" gives "Clear dood 12-09-2026".',
-    'report_analysis.note_alive': 'Also note the villages whose clear is still alive. A dead clear is the one that changes what you do about the next wave, so that is what gets noted by default; this marks out the rest of his hitting power as well. Which a village is follows the newest report of each kind, so one that lost a clear and later walked another through reads as alive again.',
+    'report_analysis.note_prefix': 'What the note says about a village whose clear died. The village type goes in front and the date after it: "clear dood" gives "OFF - clear dood 12-09-2026". An older line written by this module is replaced, never stacked.',
     'report_analysis.note_prefix_alive': 'What the note says about a village whose clear is still alive, with the date it was last seen walking through.',
-    'report_analysis.max_per_run': 'How many villages to note in one cycle. Each one costs two requests (read the note, save it), so a first run on a long war is spread over several cycles instead of going out in a burst.',
+    'report_analysis.rebuild_days': 'How many days after a clear died it is probably back. A dead clear is not dead forever: past this date the Report analysis page marks it "rebuilt?" and the note says so, because the only way to know then is to scout it. 0 leaves the date off and never assumes.',
+    'report_analysis.note_rebuild': 'Put in front of the rebuild date on a dead clear\'s note. "herbouwd ~" gives "OFF - clear dood 12-09-2026 (herbouwd ~26-09)".',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
     'building.default': 'The default template to use, village configs override this variable',
@@ -286,9 +285,9 @@ section_setup = {
 # newly added keys are never dropped.
 config_groups = {
     'report_analysis': [
-        ('What counts', ['enabled', 'min_units', 'min_loss_pct',
-                         'alive_max_loss_pct', 'max_per_run']),
-        ('What to write', ['note_prefix', 'note_alive', 'note_prefix_alive']),
+        ('What counts', ['min_units', 'min_loss_pct', 'alive_max_loss_pct',
+                         'rebuild_days']),
+        ('What to write', ['note_prefix', 'note_prefix_alive', 'note_rebuild']),
     ],
     'notifications': [
         ('Connection', ['enabled', 'token', 'channel_id']),

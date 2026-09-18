@@ -1282,11 +1282,10 @@ class TWB:
                     logging.getLogger("Events").warning(
                         "Event pass failed: %s", exc)
 
-                # Read the reports back out and write what they mean onto the
-                # map. Off unless asked for: it writes to the game, and what it
-                # writes is a reading of a report rather than a fact the game
-                # states. Behind the event for the same reason as the Account
-                # Manager - it is not urgent, and a dead nuke stays dead.
+                # Write the notes the Report analysis page queued, if it queued
+                # any. Nothing is read otherwise: the job is pressed for once
+                # and served once. Behind the event for the same reason as the
+                # Account Manager - it is not urgent, and a dead nuke stays dead.
                 try:
                     reportanalysis.run(
                         self.wrapper, next(iter(config["villages"]), None),
