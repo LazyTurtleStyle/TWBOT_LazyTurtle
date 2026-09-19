@@ -62,6 +62,13 @@
     "research": false,
     "auto_setup": false
   },
+  "dodge": {
+    "enabled": false,
+    "trigger": "DODGE THIS",
+    "leave_before_seconds": 90,
+    "return_after_seconds": 5,
+    "merge_seconds": 300
+  },
   "minting": {
     "enabled": false,
     "village": "",
@@ -119,7 +126,6 @@
     "scavenge_unlock_hq_3": 8,
     "scavenge_unlock_hq_4": 15,
     "snobs": 0,
-    "evacuate_fragile_units_on_attack": false,
     "support_others": false,
     "support_others_factor": 0.25,
     "support_others_max_villages": 2,

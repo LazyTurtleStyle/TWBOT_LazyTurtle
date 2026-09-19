@@ -43,6 +43,7 @@ from game.incomings import IncomingManager
 from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
+from game import dodge
 from game import accountmanager
 from game import dailybonus
 from game import events
@@ -873,6 +874,35 @@ class TWB:
                 logger.warning("C-snipe runner error: %s", exc)
                 time.sleep(2)
 
+    def dodge_runner(self, config):
+        """Background loop: dodge the attacks tagged with the dodge trigger.
+
+        Its own thread and wrapper, like the snipe runners: a dodge must never
+        wait on a timed attack, and many villages can need one in the same
+        minute, so every dodge shares this one timeline (game/dodge.py). The
+        config is re-read each pass so the switch and the timings take effect
+        without a restart - and a dodge that is already out is always brought
+        home, switch or no switch.
+        """
+        logger = logging.getLogger("Dodge")
+        sender = self._make_poller_wrapper(config)
+        sender.priority_mode = True
+        runner = dodge.Runner(sender)
+        last_cookies = 0
+        while self.should_run:
+            try:
+                live = FileManager.load_json_file("config.json") or config
+                settings = dodge.settings_from(live)
+                if time.time() - last_cookies > 30:
+                    session = FileManager.load_json_file("cache/session.json")
+                    if session and session.get("cookies"):
+                        sender.web.cookies.update(session["cookies"])
+                    last_cookies = time.time()
+                time.sleep(runner.tick(settings))
+            except Exception as exc:
+                logger.warning("Dodge runner error: %s", exc)
+                time.sleep(2)
+
     def snipe_runner(self, config):
         """Background loop: execute armed support-snipes from the Defense tab.
 
@@ -1171,6 +1201,13 @@ class TWB:
             )
             snipe_thread.start()
             print("Support-snipe runner started")
+        # Always started, and cheap while off: tagging an attack is the arming,
+        # and the switch is read live, so turning dodging on needs no restart.
+        dodge_thread = threading.Thread(
+            target=self.dodge_runner, args=(config,), daemon=True
+        )
+        dodge_thread.start()
+        print("Dodge runner started")
         # Always started: it costs a config read a minute while switched off,
         # and starting it conditionally would mean a restart to turn minting on.
         mint_thread = threading.Thread(

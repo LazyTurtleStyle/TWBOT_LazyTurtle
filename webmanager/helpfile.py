@@ -42,6 +42,12 @@ help_file = {
     'account_manager.recruiting': 'The Account Manager is recruiting here, so the bot does not.',
     'account_manager.research': 'The Account Manager is researching here, so the bot does not.',
     'account_manager.auto_setup': 'Re-apply the group templates from the Account manager page once every morning (first cycle in active hours). Account Manager templates run out after a few days, this puts them back. Off means the plan is only applied when you press Apply now.',
+    'dodge': 'ALPHA. Auto-dodge: rename an incoming attack so its name contains the trigger text (in game, or tag it from the Defense page) and the bot takes everything at home out just before it lands and brings it back seconds after. See Defense > Dodge.',
+    'dodge.enabled': 'Master switch. While OFF nothing leaves; a dodge that is already out is still brought home.',
+    'dodge.trigger': 'Text an incoming attack\'s name must contain to be dodged, ignoring upper/lower case. "DODGE THIS" matches "Ram >>>> DODGE THIS <<<<" - the unit in front is only the speed tag.',
+    'dodge.leave_before_seconds': 'How long before the first tagged attack lands the troops leave. Shorter keeps them home longer, but leaves less time to retry if a send fails. Minimum 30.',
+    'dodge.return_after_seconds': 'How long after the last tagged attack lands the troops are back home.',
+    'dodge.merge_seconds': 'Tagged attacks on the same village landing at most this far apart are dodged in one trip: out before the first, back after the last. One trip can last at most about twice the world\'s cancel time.',
     'minting': 'Coin minting: keep one village stocked so it can mint gold coins without you carrying resources by hand. See the Minting page.',
     'minting.enabled': 'Let the bot top up the coin village. Off by default; it only ever requests resources - it never mints, never switches on auto-minting and never touches a flag.',
     'minting.village': 'The village that mints. Put your coin-cost flag there and let the game auto-mint; this keeps its warehouse full.',
@@ -168,7 +174,6 @@ help_file = {
     'village.scavenge_unlock_hq_3': 'Headquarters level at which scavenge option 3 should be unlocked (default 8).',
     'village.scavenge_unlock_hq_4': 'Headquarters level at which scavenge option 4 should be unlocked (default 15, costly, so wait until the warehouse can hold it).',
     'village.snobs': 'The amount of snobs to create in the current village',
-    'village.evacuate_fragile_units_on_attack': 'Dodge: when an attack is incoming on this village, send the off units (axe, light, marcher, ram, catapult) and nobles as support to the nearest own village that is not under attack itself. They stay there until you pull them back manually. Works on its own; the global manage_defence switch is not required.',
     'village.support_others': 'Allows the sending of automatic support',
     'village.support_others_factor': 'Factor of units to use in support operation (only defensive ones)',
     'village.support_others_max_villages': 'The max amount of villages to send support to (total 2 * 25% of troops)',
@@ -206,6 +211,7 @@ section_labels = {
     'farms': 'Farms',
     'market': 'Market',
     'balancer': 'Resource balancing',
+    'dodge': 'Dodge (alpha)',
     'report_analysis': 'Report analysis (alpha)',
     'world': 'World',
     'flags': 'Flags',
@@ -354,7 +360,7 @@ config_groups = {
                        'scavenge_unlock_enabled', 'prioritize_scavenge_unlock',
                        'scavenge_unlock_hq_1', 'scavenge_unlock_hq_2',
                        'scavenge_unlock_hq_3', 'scavenge_unlock_hq_4']),
-        ('Defence & support', ['evacuate_fragile_units_on_attack', 'support_others',
+        ('Defence & support', ['support_others',
                               'support_others_factor', 'support_others_max_villages',
                               'request_support_on_attack']),
         ('Flags', ['flag_type']),
@@ -365,4 +371,13 @@ config_groups = {
         ('Upgrading', ['auto_upgrade']),
         ('Cost', ['max_reads_per_run']),
     ],
+}
+
+# Settings the bot no longer reads. Configs written before they were removed
+# still carry them, and without this they would turn up unexplained under
+# "Other" on the settings page, looking like switches that do something.
+retired_settings = {
+    # The stefan2200 evacuation: sent the off units away on any incoming and
+    # never brought them back. Replaced by the tag-driven dodge (game/dodge.py).
+    'evacuate_fragile_units_on_attack',
 }

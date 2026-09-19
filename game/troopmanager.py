@@ -77,7 +77,6 @@ class TroopManager:
     """
     can_recruit = True
     can_attack = True
-    can_dodge = False
     can_farm = True
     can_gather = True
     can_fix_queue = True

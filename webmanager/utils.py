@@ -51,6 +51,11 @@ except Exception:  # pragma: no cover - dashboard still works without live reads
     read_home_troops = None
 
 try:
+    from game import dodge as dodge_engine
+except Exception:  # pragma: no cover - dashboard still works without it
+    dodge_engine = None
+
+try:
     from game import villagenotes
 except Exception:  # pragma: no cover - dashboard still works without notes
     villagenotes = None
@@ -1251,6 +1256,27 @@ class DataReader:
         if csnipe is None:
             return None
         return csnipe.disarm(str(snipe_id), path=DataReader.csnipe_path())
+
+    DODGE_REL = ("cache", "dodges.json")
+
+    @staticmethod
+    def dodge_path():
+        """World-aware path of the dodge plan the bot reads/writes."""
+        return DataReader.data_path(*DataReader.DODGE_REL)
+
+    @staticmethod
+    def dodge_grab():
+        """World-aware read of the dodge plan. Always returns a list."""
+        if dodge_engine is None:
+            return []
+        return dodge_engine.load_dodges(path=DataReader.dodge_path())
+
+    @staticmethod
+    def dodge_cancel(dodge_id):
+        """Drop a planned dodge, or bring one that is out home now."""
+        if dodge_engine is None:
+            return None
+        return dodge_engine.cancel(str(dodge_id), path=DataReader.dodge_path())
 
     SNIPE_REL = ("cache", "snipes.json")
 
@@ -3934,6 +3960,74 @@ class CSnipeOverview:
             # instead of presenting a reading from ten minutes ago as fact.
             "home_age": reading_age,
             "now": now,
+        }
+
+
+class DodgeOverview:
+    """View-model for the Defense page's Dodge tab: the switch and timings,
+    which incoming attacks carry the trigger right now, and every dodge the
+    bot has planned, sent or finished (game/dodge.py does the work)."""
+
+    @classmethod
+    def build(cls, data):
+        config = DataReader.config_grab() or {}
+        settings = dodge_engine.settings_from(config) if dodge_engine else {}
+        managed = data.get("bot", {}) or {}
+        names = {}
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            names[str(vid)] = {"name": vdata.get("name") or pub.get("name") or vid,
+                               "coords": pub.get("location")}
+        now_ms = int(time.time() * 1000)
+
+        tagged = []
+        if dodge_engine:
+            for inc in (DataReader.cache_grab("incomings") or {}).values():
+                if not isinstance(inc, dict):
+                    continue
+                hit = dodge_engine._hit_ms(inc)
+                if hit and hit > now_ms and dodge_engine.is_tagged(
+                        inc, settings.get("trigger")):
+                    v = names.get(str(inc.get("target_id"))) or {}
+                    tagged.append({
+                        "id": str(inc.get("command_id")),
+                        "village_id": str(inc.get("target_id")),
+                        "village_name": v.get("name") or inc.get("target_id"),
+                        # Whichever name carries the trigger - the in-game
+                        # name and the dashboard tag can differ.
+                        "label": next((inc.get(f) for f in ("game_label", "tag")
+                                       if dodge_engine.is_tagged(
+                                           {f: inc.get(f)},
+                                           settings.get("trigger"))), ""),
+                        "hit_ms": hit,
+                    })
+        tagged.sort(key=lambda r: r["hit_ms"])
+
+        dodges = []
+        for d in DataReader.dodge_grab():
+            row = dict(d)
+            v = names.get(str(d.get("village_id"))) or {}
+            row["village_name"] = v.get("name") or d.get("village_id")
+            row["coords"] = v.get("coords")
+            dodges.append(row)
+        active = [d for d in dodges if d.get("status") in ("planned", "out")]
+        past = [d for d in dodges if d.get("status") not in ("planned", "out")]
+        active.sort(key=lambda d: d.get("send_at_ms") or 0)
+        past.sort(key=lambda d: d.get("finished") or d.get("created") or 0,
+                  reverse=True)
+
+        world_cfg = (DataReader.cache_grab("world") or {}).get("config") or {}
+        cancel_seconds = int(world_cfg.get("command_cancel_time") or 600)
+        trip_max = dodge_engine.max_trip_ms(cancel_seconds * 1000) \
+            if dodge_engine else 0
+        return {
+            "settings": settings,
+            "tagged": tagged,
+            "dodges": active + past[:40],
+            "active_count": len(active),
+            "out_count": sum(1 for d in active if d.get("status") == "out"),
+            "cancel_seconds": cancel_seconds,
+            "trip_max_min": trip_max // 60000,
         }
 
 

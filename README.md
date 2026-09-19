@@ -50,7 +50,7 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - Fake trains: send one row as several back-to-back commands, and warn when a command is too small for the game to accept
 - A queue view built for hundreds of commands: edit a queued arrival or its troops in place, and cancel every ticked command at once
 - Noble jobs added by pasting a list of coordinates; noble trains fold into one row
-- Automatic defensive support, unit evacuation and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
+- Automatic defensive support and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
 
 ![The defense page](readme/img/dashboard-defense.png)
 
@@ -63,6 +63,7 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - **Snipe** *(alpha)*: a launch list in the style of the well-known snipe calculators. Arm several options at once; the bot sends support as support, checks the game actually accepted it, and recalls anything that would land outside the window you set
 - **Cancel-sniping** *(alpha)*: dodge as support to your own village, with the cancel fired inside the right wall-clock second
 - Villages nothing can reach in time are folded away, and snipes can be filled from a troop template
+- **Dodge** *(alpha)*: rename an incoming attack to include `DODGE THIS` (the text is a setting) and the bot takes everything at home out just before it lands, as support to one of your own villages, then cancels halfway so the troops are back seconds after the hit. Attacks landing close together are dodged in one trip, and many villages can dodge in the same minute. The troops stay alive and close by, ready to snipe the nobles later
 
 **Report analysis** *(alpha)*
 - Reads your battle reports back and finds the **dead clears**: nukes that died on your walls, counted by who sent them. A dead nuke takes weeks to rebuild

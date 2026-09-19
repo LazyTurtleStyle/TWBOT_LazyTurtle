@@ -125,6 +125,9 @@
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
+	<li class="nav-item"><a class="nav-link" href="#dodge" data-pane="dodge">Dodge
+		<span class="badge badge-warning">alpha</span>
+		{% if dodge.active_count %}<span class="badge badge-{{ 'danger' if dodge.out_count else 'info' }}">{{ dodge.active_count }}</span>{% endif %}</a></li>
 </ul>
 
 <div id="pane-overview">
@@ -765,6 +768,120 @@
 </div>
 </div><!-- /pane-snipe -->
 
+<div id="pane-dodge" style="display:none">
+{% set ds = dodge.settings %}
+<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span>
+	Keeps a village's troops alive through the attacks you mark. Rename an incoming attack so its
+	name contains <code>{{ ds.trigger or '—' }}</code> (in game, or with the tag box on the Overview and
+	Village tabs) and the bot takes <strong>everything at home</strong> out {{ ds.leave_before_seconds }}s before
+	it lands, as support to the nearest village of yours that is far enough away, and cancels halfway
+	so the troops are back {{ ds.return_after_seconds }}s after it. Tagged attacks on one village landing
+	within {{ ds.merge_seconds // 60 }} min of each other are dodged in one trip. One trip lasts at most
+	{{ dodge.trip_max_min }} min on this world (commands can only be cancelled for
+	{{ dodge.cancel_seconds // 60 }} min), so a longer run of attacks gets several trips.
+	A cancel that fails leaves the troops as support in your own village: alive, just not home.
+	In-game renames are seen when the incoming poller next runs (every few minutes), so tag early
+	or tag here.</p>
+
+{% if not ds.enabled and dodge.tagged %}
+<div class="alert alert-warning py-2 small">Dodging is <strong>off</strong>, and {{ dodge.tagged|length }}
+	incoming attack{{ '' if dodge.tagged|length == 1 else 's' }} carr{{ 'ies' if dodge.tagged|length == 1 else 'y' }}
+	the trigger. Nothing will leave until you switch it on below.</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Settings</strong>
+		<small class="text-muted">saved as you change them</small>
+		<small id="dg_saved" class="text-success ml-2" style="display:none">saved</small></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="col-6 col-md-2 mb-2">
+				<label class="small mb-0">Dodging</label>
+				<select class="form-control form-control-sm dg-set" data-key="dodge.enabled">
+					<option value="false" {{ '' if ds.enabled else 'selected' }}>off</option>
+					<option value="true" {{ 'selected' if ds.enabled else '' }}>on</option>
+				</select></div>
+			<div class="col-6 col-md-4 mb-2">
+				<label class="small mb-0">Trigger text in the attack's name</label>
+				<input class="form-control form-control-sm dg-set" data-key="dodge.trigger" value="{{ ds.trigger }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">Leave before (s)</label>
+				<input type="number" min="30" class="form-control form-control-sm dg-set" data-key="dodge.leave_before_seconds" value="{{ ds.leave_before_seconds }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">Back after (s)</label>
+				<input type="number" min="1" class="form-control form-control-sm dg-set" data-key="dodge.return_after_seconds" value="{{ ds.return_after_seconds }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">One trip if within (s)</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="dodge.merge_seconds" value="{{ ds.merge_seconds }}"></div>
+		</div>
+	</div>
+</div>
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Dodges,</strong>
+		<small class="text-muted">active first</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Status</th><th>Village</th><th>Attacks</th><th>Leaves</th><th>Back</th>
+				<th>Walks to</th><th>Result</th><th></th>
+			</tr></thead>
+			<tbody>
+			{% for d in dodge.dodges %}
+			{% set badge = {'planned': 'info', 'out': 'warning', 'done': 'success', 'failed': 'danger',
+							'skipped': 'danger', 'cancelled': 'secondary'} %}
+			<tr>
+				<td><span class="badge badge-{{ badge.get(d.status, 'dark') }}">{{ d.status }}</span>
+					{% if d.events %}
+					<details class="mt-1"><summary class="small text-muted">log</summary>
+						<div class="snipe-log text-muted">{{ d.events|join('\n') }}</div>
+					</details>
+					{% endif %}</td>
+				<td><strong>{{ d.village_name }}</strong>
+					<small class="text-muted d-block">{% if d.coords %}{{ d.coords[0] }}|{{ d.coords[1] }} · {% endif %}#{{ d.village_id }}</small></td>
+				<td class="small">{% for h in d.hits_ms or [] %}<span class="ms d-block" data-ms="{{ h }}">…</span>{% endfor %}</td>
+				<td class="small"><span class="ms" data-ms="{{ d.send_ms or d.send_at_ms }}">…</span></td>
+				<td class="small"><span class="ms" data-ms="{{ d.return_actual_ms or d.return_planned_ms or d.return_ms }}">…</span></td>
+				<td class="coord small">{% if d.target %}{{ d.target.x }}|{{ d.target.y }}{% if d.travel_seconds %}
+					<small class="text-muted d-block">{{ d.travel_seconds // 60 }} min walk</small>{% endif %}{% else %}—{% endif %}</td>
+				<td class="small">{{ d.result or '—' }}</td>
+				<td class="text-right">
+					{% if d.status == 'planned' %}
+					<button class="btn btn-sm btn-outline-secondary" onclick="dodgeCancel('{{ d.id }}', false)">don't dodge</button>
+					{% elif d.status == 'out' %}
+					<button class="btn btn-sm btn-outline-danger" onclick="dodgeCancel('{{ d.id }}', true)">bring home now</button>
+					{% endif %}
+				</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="8" class="text-muted">No dodges yet.{% if ds.enabled %} Tag an incoming attack
+				with <code>{{ ds.trigger }}</code> and it shows up here within seconds of the bot seeing it.{% endif %}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+
+<div class="card">
+	<div class="card-header py-2"><strong>Tagged attacks,</strong>
+		<small class="text-muted">incoming attacks whose name contains the trigger right now</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr><th>Village</th><th>Name</th><th>Lands</th></tr></thead>
+			<tbody>
+			{% for r in dodge.tagged %}
+			<tr><td><strong>{{ r.village_name }}</strong> <small class="text-muted">#{{ r.village_id }}</small></td>
+				<td class="small"><code>{{ r.label }}</code></td>
+				<td class="small"><span class="ms" data-ms="{{ r.hit_ms }}">…</span></td></tr>
+			{% else %}
+			<tr><td colspan="3" class="text-muted">None.</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+</div><!-- /pane-dodge -->
+
 {% endblock %}
 
 {% block scripts %}
@@ -772,7 +889,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe', 'dodge'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -1536,6 +1653,28 @@ function csnipeDisarm(id) {
 	fetch('/app/csnipe/cancel?id=' + encodeURIComponent(id))
 		.then(r => r.json()).then(function() {
 			if (PANES.indexOf(location.hash.slice(1)) <= 0) location.hash = '#csnipe';
+			location.reload();
+		});
+}
+
+// --- dodge tab ---
+document.querySelectorAll('.dg-set').forEach(function(el) {
+	el.addEventListener('change', function() {
+		fetch('/app/config/set?parameter=' + encodeURIComponent(this.dataset.key) +
+			'&value=' + encodeURIComponent(this.value))
+			.then(function() {
+				const note = document.getElementById('dg_saved');
+				note.style.display = '';
+				setTimeout(function() { note.style.display = 'none'; }, 2500);
+			});
+	});
+});
+function dodgeCancel(id, out) {
+	if (out && !confirm('Bring the troops home now? If the attack has not landed yet, they may walk back into it.'))
+		return;
+	fetch('/app/dodge/cancel?id=' + encodeURIComponent(id))
+		.then(r => r.json()).then(function() {
+			location.hash = '#dodge';
 			location.reload();
 		});
 }
