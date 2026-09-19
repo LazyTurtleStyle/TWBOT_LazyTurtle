@@ -559,6 +559,13 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     # a send whose measured ms misses the window is cancelled immediately
     # (troops home in seconds) and re-fired on a later 2s slot.
     window_ms = int(snipe.get("window_ms") or 0)
+    # Aimed BEFORE the hit: home in time to stand in it, not out for it. The
+    # dangerous direction flips - late is now after the hit - so a send that
+    # cannot be brought inside the window is not kept "late-safe"; it is
+    # cancelled at once and the troops walk home early, long before the hit,
+    # which is the safe side of this one.
+    first_hit = snipe.get("first_hit_ms")
+    before_hit = bool(first_hit) and return_ms < int(first_hit)
 
     attempt = 0
     while True:
@@ -694,6 +701,17 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
             break
         if attempt >= MAX_SEND_ATTEMPTS \
                 or return_ms - clock.server_now_ms() < RETRY_MIN_LEAD_MS:
+            if before_hit:
+                if wrapper.get_url(cancel_url) is None:
+                    return _finish(sid, "failed", "no send landed inside the "
+                                   "window before the hit, and cancelling the "
+                                   "last one failed - it may come home AFTER "
+                                   "the hit; recall it by hand", path=path)
+                return _finish(sid, "missed", "no send landed inside the window "
+                               "before the hit (attempt %d/%d) - cancelled at "
+                               "once, so the troops are home early, well before "
+                               "the hit" % (attempt, MAX_SEND_ATTEMPTS),
+                               path=path)
             _event(sid, "out of retry budget (attempt %d/%d, %ds left) - "
                    "keeping this send, late-safe"
                    % (attempt, MAX_SEND_ATTEMPTS,

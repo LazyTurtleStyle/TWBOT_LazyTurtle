@@ -391,13 +391,13 @@
 					oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
-				<label>Land +ms after it</label>
-				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="1" max="5000"
+				<label>Land ms vs it <small class="text-muted">(&lt;0 = before)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="-5000" max="5000"
 					value="{{ csnipe.default_aim_ms }}" oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
-				<label>No later than +ms <small class="text-muted">(alpha)</small></label>
-				<input type="number" class="form-control form-control-sm" id="cs-latest-ms" min="2" max="5000"
+				<label>No later than ms <small class="text-muted">(alpha)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cs-latest-ms" min="-5000" max="5000"
 					placeholder="empty = no cap">
 			</div>
 			<div class="form-group col-6 col-md-2">
@@ -1432,18 +1432,25 @@ function csnipeGapStrip(villageId) {
 	const el = document.getElementById('cs-gaps');
 	if (!el) return;
 	const list = csnipeVillageIncomings(villageId);
-	if (list.length < 2) {
-		// One command, so there is no gap to choose - it is the lone-incoming
-		// case the "land +ms after it" default already covers.
+	if (!list.length) {
 		el.innerHTML = '';
 		return;
 	}
 	CS_GAPS = list;
-	el.innerHTML = '<div class="small text-muted mb-1">' + list.length +
-		' commands land on this village. Pick the gap to come home in — ' +
-		'usually the one after the first noble, since that is the one the ' +
-		'attacker loads:</div><div class="cs-gap-strip"></div>';
+	el.innerHTML = '<div class="small text-muted mb-1">' + (list.length > 1
+		? list.length + ' commands land on this village. Pick the gap to come ' +
+		  'home in — usually the one after the first noble, since that is the ' +
+		  'one the attacker loads — or come home before the first to meet it:'
+		: 'Come home after the hit (out for it), or before it (home to meet it):') +
+		'</div><div class="cs-gap-strip"></div>';
 	const strip = el.querySelector('.cs-gap-strip');
+	// Before the first command: home in time to stand in it rather than be
+	// out for it. Every later "before" is already the gap after the command
+	// in front of it.
+	strip.insertAdjacentHTML('beforeend',
+		'<button class="btn btn-sm cs-gap" data-gap="before" onclick="csnipePickBefore()">' +
+		'before <strong>.' + pad(list[0].ms % 1000, 3) + '</strong>' +
+		'<small class="d-block">home to meet it</small></button>');
 	list.forEach(function(item, i) {
 		const next = list[i + 1];
 		const width = next ? (next.ms - item.ms) : null;
@@ -1466,6 +1473,30 @@ function csnipeGapStrip(villageId) {
 
 let CS_GAPS = [];
 let CS_GAP_PICKED = null;
+
+/* Home BEFORE the first command. The deadline is the hit itself, less the
+   usual edge, and it is not optional here: the engine is late-safe, never
+   early-safe, so without it a slow send could drift past the hit - which is
+   the one outcome this is meant to rule out. Aimed well clear of the hit so
+   the engine's own +30-150ms lands inside the window at the first try. */
+const CS_BEFORE_AIM_MS = -400;
+function csnipePickBefore() {
+	const item = CS_GAPS[0];
+	if (!item) return;
+	CS_GAP_PICKED = 'before';
+	csForm.incoming_id = item.c.command_id;
+	csForm.arrival = Math.floor(item.ms / 1000);
+	document.getElementById('cs-hit-ms').value = item.ms % 1000;
+	document.getElementById('cs-aim-ms').value = CS_BEFORE_AIM_MS;
+	document.getElementById('cs-latest-ms').value = -CS_GAP_EDGE_MS;
+	const d = new Date(item.ms);
+	document.getElementById('cs-context').textContent =
+		'· ' + (CSNIPE.villages[csForm.village_id] || {}).name +
+		', home before ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' +
+		pad(d.getSeconds()) + '.' + pad(item.ms % 1000, 3);
+	csnipeMarkGap();
+	csnipeReturnNote();
+}
 
 function csnipeMarkGap() {
 	document.querySelectorAll('#cs-gaps .cs-gap').forEach(function(b) {
@@ -1522,6 +1553,20 @@ function csnipeReturnNote() {
 	const aim = parseInt(document.getElementById('cs-aim-ms').value, 10) || 0;
 	const hitMs = csForm.arrival * 1000 + hit;
 	const back = hitMs + aim;
+	if (aim < 0) {
+		// Home before it: the hit is the deadline, so that is what is spelled out.
+		const latestB = parseInt(document.getElementById('cs-latest-ms').value, 10);
+		el.innerHTML = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
+			'. Your troops walk back in at </span><strong>' + fmtMs(back) +
+			'</strong><span class="text-muted"> \u2014 ' + (-aim) + ' ms <em>before</em> it, home ' +
+			'to meet it. </span>' + (isNaN(latestB) || latestB >= 0
+				? '<strong class="text-danger">Set \u201cno later than\u201d below 0, or a slow send ' +
+				  'could come home after the hit.</strong>'
+				: '<span class="text-muted">No later than ' + fmtMs(hitMs + latestB) + ', ' + (-latestB) +
+				  ' ms clear of the hit; a send that cannot make that is cancelled at once and ' +
+				  'the troops come home early instead.</span>');
+		return;
+	}
 	let html = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
 		'. Your troops are out for it and walk back in at </span><strong>' +
 		fmtMs(back) + '</strong><span class="text-muted"> \u2014 ' + aim +
@@ -1614,10 +1659,16 @@ function csnipeArm() {
 		const latest = parseInt(latestRaw, 10);
 		if (!(latest > aimMs)) {
 			document.getElementById('cs-error').textContent =
-				'"no later than" must be greater than "land +ms after it" (' + aimMs + ')';
+				'"no later than" must be greater than "land ms vs it" (' + aimMs + ')';
 			return;
 		}
 		windowMs = latest - aimMs;
+	}
+	if (aimMs < 0 && (!windowMs || aimMs + windowMs >= 0)) {
+		document.getElementById('cs-error').textContent =
+			'coming home before the hit needs "no later than" below 0, so the ' +
+			'return can never drift past the hit';
+		return;
 	}
 	const body = {
 		village_id: csForm.village_id,

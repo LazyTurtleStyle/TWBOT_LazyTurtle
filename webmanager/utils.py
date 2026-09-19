@@ -1191,6 +1191,13 @@ class DataReader:
             return None, "no units selected"
 
         return_ms = first_hit_ms + aim_ms
+        # Home BEFORE the hit: the late side is now the fatal one, and the
+        # one-shot mode is only late-safe, so a deadline short of the hit is
+        # required - the engine re-fires until inside it, or brings the troops
+        # home early (see csnipe.execute).
+        if aim_ms < 0 and (not window_ms or aim_ms + window_ms >= 0):
+            return None, ("coming home before the hit needs a \"no later than\" "
+                          "below 0, so the return can never drift past the hit")
         now = time.time()
         if return_ms / 1000.0 - now < 120:
             return None, "too late - the return moment is under 2 minutes away"
