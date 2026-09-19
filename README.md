@@ -30,6 +30,8 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - Rebuilt "war-room" web interface: village overview with live resources, troops and build queues, per-village detail pages, and a config editor with search
 - Start and stop your bot from the browser, watch the live log, and get warned by a silent-stall detector when the bot has quietly stopped doing anything
 - Farm and scavenge status per village at a glance
+- A draggable, zoomable **world map** coloured the way you already coloured it in-game (your tribe and player markings), with your own villages ringed
+- Filter the village override table by in-game group, and set a whole column at once for just the villages on screen
 
 **Multi-world**
 - One installation plays several worlds at once, each with its own config, session and cache, all from a single dashboard with a world switcher
@@ -44,10 +46,28 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 *Every farming knob in one place, each with a plain-English explanation of what it does.*
 
 **Attacking & defence**
-- Attack planner with timed auto-send, inline target ETAs and map deep links
-- Incoming attack tracking with in-game tagging
-- Automatic defensive support, unit evacuation and support-sniping
-- Cancel-sniping *(alpha)* and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
+- Attack planner with timed auto-send, inline target ETAs and map deep links, aimed on the game's own clock to the millisecond
+- Fake trains: send one row as several back-to-back commands, and warn when a command is too small for the game to accept
+- A queue view built for hundreds of commands: edit a queued arrival or its troops in place, and cancel every ticked command at once
+- Noble jobs added by pasting a list of coordinates; noble trains fold into one row
+- Automatic defensive support, unit evacuation and a barbarian "shaper" that razes walls with axe+ram *(alpha)*
+
+![The defense page](readme/img/dashboard-defense.png)
+
+*Every village under attack on top, each incoming command on its own line with the name the game shows, who sent it, and the defence sitting at home.*
+
+**Defense**
+- Incomings ordered by the millisecond they land, filterable by village and by the command name the game shows
+- Tag incomings straight from the dashboard, one at a time or for the whole account from the Overview, with the unit the flight time implies already filled in
+- A **Village** tab for one village's incoming attacks and support side by side
+- **Snipe** *(alpha)*: a launch list in the style of the well-known snipe calculators. Arm several options at once; the bot sends support as support, checks the game actually accepted it, and recalls anything that would land outside the window you set
+- **Cancel-sniping** *(alpha)*: dodge as support to your own village, with the cancel fired inside the right wall-clock second
+- Villages nothing can reach in time are folded away, and snipes can be filled from a troop template
+
+**Report analysis** *(alpha)*
+- Reads your battle reports back and finds the **dead clears**: nukes that died on your walls, counted by who sent them. A dead nuke takes weeks to rebuild
+- Writes the answer onto the attacker's village as the game's own private village note (OFF/DEF, with the date), so it's right there when the next incoming shows up, not in a spreadsheet
+- Also notes the clears that are still alive. Runs when you press the button, not every cycle
 
 ![The attack scheduler](readme/img/dashboard-scheduler.png)
 
@@ -57,16 +77,31 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 - Hand building, recruiting and research to the in-game Account Manager, and the bot stops doing them (and stops reading the screens it only needed for them)
 - Keep a group &rarr; sjabloon plan on the Account manager page and have it re-applied every morning, because the manager's build queue runs dry after a few days
 
+**Economy**
+- **Resource balancing**: your big villages feed your small ones through the in-game send screen. How much goes out depends on how full the receiver is, and shipments already on the road count as delivered, so three senders never fill the same empty warehouse
+- **Coin minting**: keeps the warehouse of your coin village full by asking the rest of the account for what it can spare, on a timer (every 60 minutes by default). It never mints, never switches auto-minting on and never moves a flag. Shows coins minted, what the bot hauled and the cost per coin
+- **Flags** *(alpha)*: flags are one pool for the whole account, not a per-village setting, so you set a group &rarr; flag type plan and the bot applies it in a single pass. Later rows win, the most specific row gets served first when there aren't enough flags, and anything short is listed as unmet
+
+![The coin minting page](readme/img/dashboard-minting.png)
+
+*The coin village's stock, what each sender was asked for on the last run, and how long the merchants take to walk it over.*
+
 **Events**
 - The weekly in-game event is noticed automatically from a page the bot already loads, and can be played for you: its energy bar refills on a timer and stops once full, so every hour it sits capped is an action lost
 - Picks the choice with the best expected value *at that moment* rather than a fixed one, because the jackpots are progressive and the best option moves with them
 - Tracks every action, what it paid, and how the luck ran against what the choices were worth; finished events stay on file as history
+- Plays board events too (the dragons board: rolls, squares and items won), and counts the daily race payouts on top of what the bot earned itself
+
+![The events page](readme/img/dashboard-events.png)
+
+*A live event: energy and when it refills, what each throw paid, the board, the leaderboard, and past events kept on file.*
 
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
 - Captcha auto-resume: solve it in your browser and the bot picks up where it left off, no restart
-- A browser extension that restores your game session in one click, so opening the game yourself doesn't kill the bot's session
+- A browser extension that restores your game session in one click, so opening the game yourself doesn't kill the bot's session (Chrome, Edge and Firefox)
 - Socket timeouts, world-aware re-auth, crash recovery, daily login bonus claiming, premium point trading
+- A dead session puts the bot to sleep instead of crashing it, and it stays quiet during your inactive hours, captcha checks included
 
 Anything marked *(alpha)* works but is less tested. Switch it on knowing that.
 
@@ -182,8 +217,8 @@ Config changes are picked up while the bot runs; no restart needed.
 The sidebar is grouped by what you're doing:
 
 - **Overview**: what every village is doing right now, recent loot, last activity. **Bot logs** shows the live log.
-- **Operations**: **Villages** (per-village detail and toggles), **Attack** (planner and timed sends), **Defense**, **Farms & scavenging**, **World map**.
-- **Modules**: quick jumps into the building, recruitment and market config.
+- **Operations**: **Villages** (per-village detail and toggles), **Attack** (planner and timed sends), **Defense** (incomings, tagging and snipes), **Farms & scavenging**, **World map**.
+- **Modules**: building, recruitment and market config, plus **Resource balancing**, **Account manager**, **Flags**, **Report analysis**, **Events** and **Coin minting**.
 
 If something looks stuck, the Overview banner tells you whether it's a captcha, a dead session, or a genuine stall.
 
@@ -224,6 +259,8 @@ The bot can't read these itself (they're on a domain it never visits), so you ha
 
 1. Open **http://localhost:5000/app/tw-open** and click **Download extension**. Unzip it to a folder you won't delete.
 2. In Chrome or Edge, go to `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked**, and pick that folder.
+
+**On Firefox,** click **Download for Firefox** instead, then go to `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on** and pick the `manifest.json` in the folder. Firefox forgets a temporary add-on every time it restarts, which is exactly when you need it after a reboot. To make it stay, upload the zip to [addons.mozilla.org](https://addons.mozilla.org/developers/addon/submit/distribution) as an **unlisted** add-on (free, not published) and install the signed `.xpi` Mozilla hands back. The Open Game page explains the other options.
 
 ![The Open Game page with the extension install steps](readme/img/session-restore-extension.png)
 
