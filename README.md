@@ -2,7 +2,7 @@
 
 An open source bot that plays [Tribal Wars](https://www.tribalwars.net/) for you: it builds, recruits, farms, scavenges, trades, researches, defends and nobles, while you keep playing in your browser alongside it.
 
-This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan2200/TWB), the original bot, heavily extended through vibe coding: a rebuilt web dashboard, multi-world support, scavenging, an attack planner, Telegram alerts and a long list of smaller fixes. See [What's new in this fork](#whats-new-in-this-fork).
+This is the **LazyTurtle fork** of [stefan2200/TWB](https://github.com/stefan2200/TWB), the original bot, forked in June 2026 and heavily extended through vibe coding: a rebuilt web dashboard, multi-world support, scavenging, an attack planner, Telegram alerts and a long list of smaller fixes. See [What's new in this fork](#whats-new-in-this-fork).
 
 ![The TWB dashboard](readme/img/dashboard-overview.png)
 
