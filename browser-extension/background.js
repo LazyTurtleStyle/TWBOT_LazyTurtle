@@ -56,7 +56,7 @@ async function cookieHeaderFor(url) {
 	return cookies.map(function (c) { return c.name + "=" + c.value; }).join("; ");
 }
 
-// The world host this browser is logged into, e.g. nl115.tribalwars.nl.
+// The world host this browser is logged into, e.g. nl99.tribalwars.nl.
 // Prefer the world the extension was built for, else any non-portal host.
 async function findGameHost(world) {
 	const cookies = await chrome.cookies.getAll({ domain: TW_TLD });

@@ -93,7 +93,7 @@ setting it runs in. Three things it cannot speak to:
   single-resource send wastes one. Fuzzing put this at ~386 resources per
   send on random data; the real cost depends on the merchant counts and
   warehouse sizes actually in play.
-- On nl116 the old code already filled all three resources on 66% of sends
+- On a live world the old code already filled all three resources on 66% of sends
   (196-send baseline), because most receivers are small enough that the
   budget covers every gap. The change only ever had room to affect the other
   third, so the real-world win may be smaller than the fuzzing suggests.
@@ -119,7 +119,7 @@ ones, so the player is not left staring at Farm-assistent every time they open
 the game. It costs one extra GET per village cycle - about 37 per pass, ~4% of
 everything the bot does.
 
-**Why that might matter:** bot protection on nl116 fires roughly 3.8 times a
+**Why that might matter:** bot protection on a live world fires roughly 3.8 times a
 day, once per ~6,000 requests, and each one stalls the bot until the captcha is
 solved in a browser (31 hours of stall over the four days to 2026-08-27, the
 worst of it overnight). Nothing about *which* endpoint or *what time of day*
@@ -145,9 +145,9 @@ but 39% of the lost hours (4.14h average stall against 1.52h by day), because
 a 02:00 captcha sits until someone wakes up.
 
 **First night with it on (2026-08-27 -> 28) says the ~25x is conditional on no
-captcha standing.** nl117 did exactly what it says on the tin: last village
+captcha standing.** One world did exactly what it says on the tin: last village
 work 23:58, sleep announced 00:03, idle until 06:00, incoming poller ticking
-~9/hr throughout. nl116 never got there. A captcha hit at 22:40, 50 minutes
+~9/hr throughout. The other never got there. A captcha hit at 22:40, 50 minutes
 before the window closed, so the main loop went into `_await_captcha_clear`
 and never reached the sleep check at the top of `run()`. It sat there until
 06:59 - 8h19m, well above the 4.14h night average above.
@@ -169,7 +169,7 @@ anyway. Replaying last night through it: 1,496 -> 573 requests.
 
 Two things that follow:
 
-- **Last night is not a usable data point for section 1** on nl116. The night
+- **Last night is not a usable data point for section 1** on that world. The night
   was neither quiet nor honestly counted. Discard it and wait for a night that
   either sleeps clean or blocks under the new backoff.
 - **The residual is now the fast polls inside active hours** - 507 of those
@@ -226,7 +226,7 @@ instrumentation once this is closed.
 
 Making the incoming poller ungated was the whole point of letting the bot sleep
 - an attack landing at 04:00 is the one you cannot afford to first hear about
-at 05:00. On nl116 that night the poller ran ~65 times and *every single one*
+at 05:00. On that world that night the poller ran ~65 times and *every single one*
 logged `Bot protection hit during background poll, skipping` (`core/request.py`
 in `get_url`/`post_url`, where `block_on_captcha` is false). Attack detection
 was dead for 8 hours while the logs showed a poller dutifully polling.

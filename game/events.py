@@ -24,7 +24,7 @@ Its four options are a straight expected-value question:
     option 4: 25, plus a 5%  chance at a jackpot
 
 and the jackpots are progressive - option 4's was seen to climb from 575 to
-1400 within an hour on nl116, which moves it from the worst option (EV 53.75) to
+1400 within an hour on a live world, which moves it from the worst option (EV 53.75) to
 by far the best (EV 95). So the driver does not hardcode a favourite: it reads
 the live jackpots every cycle and spends on whichever option is worth most right
 then. That is the part a human cannot do well, because it means re-checking the
