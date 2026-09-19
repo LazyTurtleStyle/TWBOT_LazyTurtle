@@ -14,13 +14,15 @@ try:
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
                                   PlayerFarmOverview, PlanImport,
                                   AccountManagerOverview, EventOverview,
-                                  MintingOverview)
+                                  MintingOverview, FlagsOverview,
+                                  BalancerOverview, ReportAnalysisOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
-                       AccountManagerOverview, EventOverview, MintingOverview)
+                       AccountManagerOverview, EventOverview, MintingOverview,
+                       FlagsOverview, BalancerOverview, ReportAnalysisOverview)
 
 import datetime
 from html import escape as html_escape
@@ -231,17 +233,18 @@ def pre_process_list(key, value, village_id=None):
 
 
 # TribalWars flag type ids (stable across worlds) for the per-village flag_type
-# dropdown. 0 = never assign a flag (only manage upgrades, if enabled).
+# dropdown - the fallback for a village no row on the Flags page matches.
+# 0 = never assign a flag. Names match game/flags.py FLAG_TYPES.
 FLAG_TYPE_OPTIONS = [
     (0, "Off (no flag assigned)"),
     (1, "Resource production"),
     (2, "Recruitment speed"),
     (3, "Attack strength"),
-    (4, "Defense strength"),
+    (4, "Defence strength"),
     (5, "Luck"),
     (6, "Population"),
-    (7, "Reduce coin cost"),
-    (8, "Haul capacity"),
+    (7, "Coin cost"),
+    (8, "Haul"),
 ]
 TARGET_ORDER_OPTIONS = [
     ("nearest", "Nearest village first (shortest merchant trip)"),
@@ -828,9 +831,31 @@ def dead_clears():
         except ValueError:
             return None
     return jsonify({"ok": True,
-                    "rows": DataReader.dead_clears(_int("min_units"),
-                                                   _int("min_loss_pct"),
-                                                   _int("alive_max_loss_pct"))})
+                    "rows": DataReader.dead_clears(
+                        _int("min_units"), _int("min_loss_pct"),
+                        _int("alive_max_loss_pct"), _int("rebuild_days"),
+                        request.args.get("prefix"),
+                        request.args.get("prefix_alive"),
+                        request.args.get("rebuild_word"))})
+
+
+@app.route('/app/report_analysis/run', methods=['POST'])
+def report_analysis_run():
+    """Queue one notes job for the bot: the selection the page is showing
+    (view, owner) and the thresholds and words it is showing it with."""
+    body = request.get_json(silent=True) or {}
+    keep = ("view", "owner", "min_units", "min_loss_pct", "alive_max_loss_pct",
+            "rebuild_days", "prefix", "prefix_alive", "rebuild_word")
+    job = {k: body.get(k) for k in keep if body.get(k) is not None}
+    return jsonify({"ok": DataReader.report_analysis_request(job)})
+
+
+@app.route('/app/report_analysis/status', methods=['GET'])
+def report_analysis_status():
+    """Where the queued notes job is: queued, running (with counts) or done."""
+    state = DataReader.report_analysis_state_grab()
+    return jsonify({"ok": True, "job": state.get("job") or {},
+                    "noted": len(state.get("noted") or {})})
 
 
 @app.route('/app/village/note', methods=['GET', 'POST'])
@@ -846,7 +871,11 @@ def village_note():
     line = request.form.get("line") or ""
     if not line.strip():
         return jsonify({"ok": False, "reason": "empty_line"})
-    return jsonify(DataReader.village_note_add(village_id, line.strip()))
+    # replace=<prefix>,<prefix>: this line is the Report analysis module's, and
+    # an older line of its own on the village is replaced rather than kept.
+    replace = request.form.get("replace")
+    prefixes = ([p for p in replace.split("|")] if replace is not None else None)
+    return jsonify(DataReader.village_note_add(village_id, line.strip(), prefixes))
 
 
 @app.route('/app/csnipe/cancel', methods=['GET', 'POST'])
@@ -911,6 +940,49 @@ def am_refresh():
     """Ask the bot to re-read the manager's templates, groups and village
     state - after adding or renaming a template in game."""
     return jsonify({"ok": DataReader.am_request("refresh")})
+
+
+@app.route('/flags', methods=['GET'])
+def flags_page():
+    data = sync()
+    return render_template('flags.html', data=data, fl=FlagsOverview.build(data))
+
+
+@app.route('/app/flags/plan/save', methods=['POST'])
+def flags_plan_save():
+    """Replace the whole group -> flag type plan. Expects JSON:
+    {rows: [{group_id, group_name, flag_type}]}. Order matters and is kept: the
+    bot applies the rows top to bottom, so a later row deliberately overrides an
+    earlier one where two groups overlap."""
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": bool(DataReader.flag_plan_save(body.get("rows") or []))})
+
+
+@app.route('/app/flags/apply', methods=['GET', 'POST'])
+def flags_apply():
+    """Ask the bot to apply the flag plan on its next cycle."""
+    return jsonify({"ok": DataReader.flag_request("run_now")})
+
+
+@app.route('/app/flags/refresh', methods=['GET', 'POST'])
+def flags_refresh():
+    """Ask the bot to re-read the flag screen - the inventory, and which flag
+    each village is carrying. Read-only, so it works with flags.manage off."""
+    return jsonify({"ok": DataReader.flag_request("refresh")})
+
+
+@app.route('/balancer', methods=['GET'])
+def balancer_page():
+    data = sync()
+    return render_template('balancer.html', data=data,
+                           bal=BalancerOverview.build(data))
+
+
+@app.route('/report_analysis', methods=['GET'])
+def report_analysis_page():
+    data = sync()
+    return render_template('report_analysis.html', data=data,
+                           ra=ReportAnalysisOverview.build(data))
 
 
 @app.route('/minting', methods=['GET'])

@@ -1,8 +1,5 @@
-import json
 import logging
 import math
-import random
-import re
 import time
 
 from core.extractors import Extractor
@@ -30,27 +27,10 @@ class DefenceManager:
     # attack: the whole off plus the noble. Defensive units stay and fight.
     hide_units = ["snob", "axe", "light", "marcher", "ram", "catapult"]
 
-    flags = {}
-
     runs = 0
     logger = None
-    manage_flags_enabled = True
-    # Only combine 3-of-a-kind flags into a higher level when explicitly enabled,
-    # so the bot never consumes the user's flags without being asked.
-    auto_upgrade_flags = False
-    # Which flag type to keep assigned on this village (TribalWars flag type id:
-    # 1 resource, 2 recruitment, 3 attack, 4 defense, 5 luck, 6 population,
-    # 7 coin cost, 8 haul). 0 = manage upgrades only, never assign a flag.
-    flag_type = 1
     support_factor = 0.25
     support_max_villages = 2
-
-    # flag_index, flag_level
-    current_flag = []
-
-    _can_change_flag = False
-
-    _sf_logged = False
 
     supported = []
 
@@ -100,11 +80,11 @@ class DefenceManager:
 
     def update(self, main, with_defence=False):
         ok = True
-        self.manage_flags()
         self.runs += 1
-        # Keep the village's configured flag assigned regardless of attack state
-        # (no attack-time override - a manual defence action will live elsewhere).
-        self.flag_logic(self.flag_type)
+        # Flags are not handled here. They are an account-wide inventory - one
+        # flag sits on exactly one village - so deciding them per village made
+        # every village fight the others over the same few flags. game/flags.py
+        # owns them now, in one pass that counts the pool.
         if self.detect_incoming(main):
             self.under_attack = True
             ok = False
@@ -229,114 +209,6 @@ class DefenceManager:
                 "Evacuation send to village %s failed, trying the next one", vid
             )
         return False
-
-    def flag_logic(self, set_flag):
-        if not self.manage_flags_enabled:
-            return
-        if not set_flag or set_flag <= 0:
-            return  # flag_type 0 -> never assign a flag (upgrades only)
-
-        highest_flag_possible = self.get_highest_flag_possible(flag_id=set_flag)
-        if not highest_flag_possible:
-            return
-
-        if (
-                not self.current_flag
-                or self.current_flag[0] is not set_flag
-                or highest_flag_possible and highest_flag_possible > self.current_flag[1]
-        ):
-            if not self._can_change_flag:
-                if not self._sf_logged:
-                    self.logger.info(
-                        "Unable to set new flag on village %s because of cool down", self.village_id
-                    )
-                    self._sf_logged = True
-                return
-            self._sf_logged = False
-            self.flag_set(
-                set_flag, level=self.get_highest_flag_possible(flag_id=set_flag)
-            )
-            self.logger.info(
-                "Setting flag %d level %d for village %s",
-                set_flag, self.get_highest_flag_possible(flag_id=set_flag), self.village_id
-            )
-
-    def flag_upgrade(self, flag, level):
-        return self.wrapper.get_api_action(
-            self.village_id,
-            action="upgrade_flag",
-            params={"screen": "flags", "h": self.wrapper.last_h},
-            data={"flag_type": flag, "from_level": level},
-        )
-
-    def flag_set(self, flag, level):
-        return self.wrapper.get_api_action(
-            self.village_id,
-            action="assign_flag",
-            params={"screen": "flags", "h": self.wrapper.last_h},
-            data={
-                "flag_type": str(flag),
-                "level": str(level),
-                "village_id": self.village_id,
-            },
-        )
-
-    def get_highest_flag_possible(self, flag_id=1):
-        if flag_id not in self.flags:
-            return None
-        return self.flags[flag_id]
-
-    def manage_flags(self):
-        if not self.manage_flags_enabled:
-            return
-        # Randomize flag runs
-        if self.runs != 0 and self.runs % random.randint(3, 8) != 0:
-            return
-        self.logger.info("Managing flags")
-
-        url = f"game.php?village={self.village_id}&screen=flags"
-        result = self.wrapper.get_url(url=url)
-
-        self._can_change_flag = '<span class="timer cooldown">' not in result.text
-
-        get_flag_data = re.search(r"FlagsScreen\.setFlagCounts\((.+?)\);", result.text)
-        if not get_flag_data:
-            self.logger.warning("Error reading flag data")
-            return
-        get_current_flag = re.search(
-            r'(?s)<div id="current_flag".+?/(\d+)_(\d+)\.png.+?<p>(.+?)</p>.+?</div>',
-            result.text,
-        )
-        if get_current_flag:
-            if '<div id="current_flag" style="margin-top: 10px; display: none">' in result.text:
-                self.logger.warning(
-                    "No flag was identified on village, setting default one"
-                )
-                self.current_flag = None
-            else:
-                cflag = [int(get_current_flag.group(1)), int(get_current_flag.group(2))]
-                if cflag != self.current_flag:
-                    self.current_flag = cflag
-                    self.logger.info(
-                        "Current village flag: %s", get_current_flag.group(3).strip()
-                    )
-        upgraded = 0
-        raw_flags = json.loads(get_flag_data.group(1))
-        self.flags = {}
-        for flag_type in raw_flags:
-            for level in raw_flags[flag_type]:
-                for amount in raw_flags[flag_type][level]:
-                    if self.auto_upgrade_flags and int(amount) >= 3:
-                        self.flag_upgrade(flag=flag_type, level=level)
-                        self.logger.info("Upgraded flag %s", flag_type)
-                        upgraded += 1
-                    if int(amount) > 0:
-                        if int(flag_type) not in self.flags or self.flags[
-                            int(flag_type)
-                        ] < int(level):
-                            self.flags[int(flag_type)] = int(level)
-        if upgraded:
-            return self.manage_flags()
 
     def support(self, vid, troops=None, coords=None):
         url = f"game.php?village={self.village_id}&screen=place&target={vid}"

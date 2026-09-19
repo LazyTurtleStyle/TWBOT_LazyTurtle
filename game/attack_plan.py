@@ -4,7 +4,7 @@ exports that follow the same layout) into scheduled commands.
 
 One planned command per line:
 
-    569|444->564|454,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1
+    512|507->507|517,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1
     origin  target  dist  unit type  arrival                  travel        send                   count
 
 Only the coordinates, the arrival moment and the count actually drive anything:

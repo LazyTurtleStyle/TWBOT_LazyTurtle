@@ -125,7 +125,6 @@
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
-	<li class="nav-item"><a class="nav-link" href="#deadclears" data-pane="deadclears">Clears</a></li>
 </ul>
 
 <div id="pane-overview">
@@ -766,83 +765,6 @@
 </div>
 </div><!-- /pane-snipe -->
 
-<div id="pane-deadclears" style="display:none">
-<p class="text-muted small mt-1">Every attack that died on your walls is a nuke the attacker has to
-	rebuild, and rebuilding one takes weeks. The reports already say which of his villages are in that
-	state - one report at a time, the day it happened - and by the time the next wave comes nobody
-	remembers. This reads them back out and writes the answer onto the village itself, as the private
-	note the game keeps on its info page, so it is there when you are looking at the incoming rather
-	than in a spreadsheet you have to go and find.</p>
-<p class="text-muted small">Everything here happens because you pressed it. The same thing can run on
-	its own - the <em>Report analysis</em> section of the config, off by default - noting a few villages a
-	cycle instead of all of them at once. Worth looking at this list first either way.</p>
-
-<div class="card mb-3">
-	<div class="card-body py-2">
-		<div class="form-row align-items-end">
-			<div class="form-group col-6 col-md-2 mb-1">
-				<label>Attack size at least</label>
-				<input type="number" class="form-control form-control-sm" id="dc-units" min="0" value="5000">
-			</div>
-			<div class="form-group col-6 col-md-2 mb-1">
-				<label>Of which lost</label>
-				<div class="input-group input-group-sm">
-					<input type="number" class="form-control form-control-sm" id="dc-pct" min="0" max="100" value="90">
-					<div class="input-group-append"><span class="input-group-text">%</span></div>
-				</div>
-			</div>
-			<div class="form-group col-6 col-md-2 mb-1">
-				<label>Clear</label>
-				<select class="form-control form-control-sm" id="dc-state" onchange="dcRender()">
-					<option value="dead">dead</option>
-					<option value="alive">still alive</option>
-					<option value="">both</option>
-				</select>
-			</div>
-			<div class="form-group col-6 col-md-2 mb-1">
-				<label>Attacker</label>
-				<select class="form-control form-control-sm" id="dc-owner" onchange="dcRender()">
-					<option value="">everyone</option>
-				</select>
-			</div>
-			<div class="form-group col-12 col-md-3 mb-1">
-				<label>Note <small class="text-muted">(the date is added)</small></label>
-				<div class="input-group input-group-sm">
-					<input type="text" class="form-control form-control-sm" id="dc-prefix" value="Clear dood"
-						title="written on a village whose clear died">
-					<input type="text" class="form-control form-control-sm" id="dc-prefix-alive" value="Clear leeft"
-						title="written on a village whose clear is still alive">
-				</div>
-			</div>
-			<div class="form-group col-auto mb-1">
-				<button class="btn btn-sm btn-outline-secondary" onclick="dcLoad()">Find them</button>
-			</div>
-			<div class="form-group col-auto mb-1">
-				<button class="btn btn-sm btn-warning" id="dc-write-all" onclick="dcWriteAll()" disabled>Write every note</button>
-			</div>
-			<div class="form-group col mb-1"><small id="dc-note" class="text-muted"></small></div>
-		</div>
-		<small class="text-muted d-block">Writing keeps whatever the note already says - the line is added,
-			never written over - and a village that already carries the same line is left alone, so this can
-			be run again after the next wave without repeating itself.</small>
-	</div>
-</div>
-
-<div class="card">
-	<div class="card-header py-2"><strong>Villages whose clear died</strong>
-		<small class="text-muted ml-2" id="dc-count"></small></div>
-	<div class="table-responsive">
-		<table class="table table-sm def-table mb-0" id="dc-table">
-			<thead><tr>
-				<th>When</th><th></th><th>Village</th><th>Owner</th>
-				<th class="text-right">Sent</th><th class="text-right">Lost</th>
-				<th>Hit</th><th>Note</th><th></th>
-			</tr></thead>
-			<tbody><tr><td colspan="9" class="text-muted small">Press &ldquo;Find them&rdquo;.</td></tr></tbody>
-		</table>
-	</div>
-</div>
-</div><!-- /pane-deadclears -->
 {% endblock %}
 
 {% block scripts %}
@@ -850,7 +772,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe', 'deadclears'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -1266,6 +1188,16 @@ function csnipeKindChanged(prefix) {
 		: 'if the cancel fails the troops attack it and walk home on their own';
 }
 
+/* The one thing worth saying when a village cannot be found: it is always
+   the same cause - the bot has not run it yet - and a reload once it has is
+   the whole fix. */
+function csnipeNoVillage(villageId) {
+	alert('Village #' + villageId + ' is not in the dashboard\u2019s village list yet.\n\n'
+		+ 'That happens with a village the bot has not run since it was taken - its\n'
+		+ 'incoming attacks are tracked, but nothing else about it is known yet.\n'
+		+ 'Reload the page once the bot has been round to it.');
+}
+
 function csnipeCollectUnits(unitClass) {
 	const units = {};
 	document.querySelectorAll('.' + unitClass).forEach(function(inp) {
@@ -1371,6 +1303,13 @@ function csnipeVillageIncomings(villageId) {
    where the strip says so. */
 const CS_GAP_EDGE_MS = 25;
 const CS_GAP_TIGHT_MS = 80;
+/* Past this the next command is not a deadline at all. The return is never
+   more than a few hundred ms late and a rolled slot costs 2s, so a gap wider
+   than this cannot be missed - and the engine caps the window at 1900ms
+   anyway, so asking for a 45-minute one silently became 1.9s of retry budget
+   spent on nothing. Spaced attacks are gaps of minutes; only a train makes
+   the narrow kind. */
+const CS_GAP_DEADLINE_MAX_MS = 3000;
 
 function csnipeGapStrip(villageId) {
 	const el = document.getElementById('cs-gaps');
@@ -1392,14 +1331,17 @@ function csnipeGapStrip(villageId) {
 		const next = list[i + 1];
 		const width = next ? (next.ms - item.ms) : null;
 		const tight = width !== null && width < CS_GAP_TIGHT_MS;
+		// Wide enough that the command behind it cannot be hit by mistake.
+		const wide = width !== null && width > CS_GAP_DEADLINE_MAX_MS;
 		strip.insertAdjacentHTML('beforeend',
 			'<button class="btn btn-sm cs-gap' + (tight ? ' cs-gap-tight' : '') +
 			'" data-gap="' + i + '" onclick="csnipePickGap(' + i + ')">' +
 			'after <strong>.' + pad(item.ms % 1000, 3) + '</strong>' +
-			(next ? ' before <strong>.' + pad(next.ms % 1000, 3) + '</strong>' +
+			(next && !wide ? ' before <strong>.' + pad(next.ms % 1000, 3) + '</strong>' +
 				'<small class="d-block">' + width + ' ms' +
 				(tight ? ' · tight' : '') + '</small>'
-			      : '<small class="d-block">last · no deadline</small>') +
+			      : '<small class="d-block">' + (next ? fmtDur(width / 1000) + ' of room'
+											     : 'last') + ' · no deadline</small>') +
 			'</button>');
 	});
 	csnipeMarkGap();
@@ -1425,15 +1367,18 @@ function csnipePickGap(i) {
 	csForm.incoming_id = item.c.command_id;
 	csForm.arrival = Math.floor(item.ms / 1000);
 	document.getElementById('cs-hit-ms').value = item.ms % 1000;
-	if (next) {
-		const width = next.ms - item.ms;
+	const width = next ? (next.ms - item.ms) : null;
+	if (next && width <= CS_GAP_DEADLINE_MAX_MS) {
 		const aim = Math.max(1, Math.min(CS_GAP_EDGE_MS, Math.floor(width / 4)));
 		const latest = Math.max(aim + 1, width - CS_GAP_EDGE_MS);
 		document.getElementById('cs-aim-ms').value = aim;
 		document.getElementById('cs-latest-ms').value = latest;
 	} else {
-		// Nothing behind it, so there is no deadline to miss and no reason to
-		// crowd the hit: the lone-incoming advice applies.
+		// Minutes of room, or nothing behind it at all: no deadline to miss and
+		// no reason to crowd the hit, so the lone-incoming advice applies
+		// however many commands are on the village. A 45-minute gap asked for a
+		// 2,722,463ms window, which the engine capped to 1.9s and then spent
+		// its whole retry budget chasing.
 		document.getElementById('cs-aim-ms').value = 400;
 		document.getElementById('cs-latest-ms').value = '';
 	}
@@ -1512,7 +1457,10 @@ function fmtAge(seconds) {
 
 function csnipeOpenForm(villageId, commandId, arrival, arrivalMs) {
 	const v = CSNIPE.villages[String(villageId)];
-	if (!v) return;
+	// A village the page lists an attack on but cannot look up here used to
+	// make this button do nothing at all - no form, no message, nothing to
+	// tell a dead button from a slow one. Say so instead.
+	if (!v) { csnipeNoVillage(villageId); return; }
 	csForm = { village_id: String(villageId), incoming_id: commandId, arrival: arrival };
 	const d = new Date(arrival * 1000);
 	document.getElementById('cs-context').textContent =
@@ -1693,7 +1641,7 @@ function snipeLandMs() {
 
 function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 	const v = SNIPE.villages[String(villageId)];
-	if (!v) return;
+	if (!v) { csnipeNoVillage(villageId); return; }
 	// A different incoming is a different landing: the amounts typed for the
 	// last one, and the record of what was already armed against it, do not
 	// carry over.
@@ -2318,166 +2266,6 @@ function snipeArm() {
 	snipePostArm(options, document.getElementById('sn-arm-result'), function() {
 		document.querySelectorAll('.sn-row .sn-opt').forEach(function(cb) { cb.checked = false; });
 	});
-}
-
-/* ---------- dead clears -------------------------------------------------
-   The reports hold the answer already; this is the reading and the writing of
-   it. Nothing here runs on its own: the list is asked for, and each note is
-   written because it was pressed. Enemy villages carry notes the player wrote
-   by hand, and losing one of those to a bot that decided to tidy up would cost
-   more than the whole feature is worth - so the write is additive and the
-   panel says so. */
-let DC_ROWS = [];
-
-function dcLine(row) {
-	// What became of this village's clear, and when - so the word follows the
-	// row rather than the panel, and a mixed list writes the right thing on
-	// each village.
-	const id = row.state === 'alive' ? 'dc-prefix-alive' : 'dc-prefix';
-	const prefix = ((document.getElementById(id) || {}).value || '').trim();
-	return (prefix ? prefix + ' ' : '') + row.date;
-}
-
-function dcLoad() {
-	const note = document.getElementById('dc-note');
-	const units = parseInt(document.getElementById('dc-units').value, 10) || 0;
-	const pct = parseInt(document.getElementById('dc-pct').value, 10);
-	note.innerHTML = '<span class="text-muted">reading the reports…</span>';
-	fetch('/app/dead-clears?min_units=' + units + '&min_loss_pct=' + (isNaN(pct) ? 90 : pct))
-		.then(r => r.json()).then(function(res) {
-			DC_ROWS = res.rows || [];
-			// One entry per attacker actually present, so the filter offers only
-			// choices that mean something.
-			const sel = document.getElementById('dc-owner');
-			const seen = {};
-			DC_ROWS.forEach(function(r) {
-				if (r.owner && !seen[r.owner]) { seen[r.owner] = r.owner_name || ('#' + r.owner); }
-			});
-			const keep = sel.value;
-			sel.innerHTML = '<option value="">everyone (' + DC_ROWS.length + ')</option>' +
-				Object.keys(seen).map(function(id) {
-					const n = DC_ROWS.filter(function(r) { return String(r.owner) === id; }).length;
-					return '<option value="' + id + '">' + esc(seen[id]) + ' (' + n + ')</option>';
-				}).join('');
-			if (keep) sel.value = keep;
-			note.innerHTML = DC_ROWS.length
-				? '<span class="text-muted">from the reports already on disk — nothing was asked of the game</span>'
-				: '<span class="text-muted">no attack that big has died on you</span>';
-			dcRender();
-		})
-		.catch(function(e) { note.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>'; });
-}
-
-/* The rows on screen: everything found, or one attacker's share of it. Kept as
-   a view over DC_ROWS rather than a re-fetch, because the scan is free and the
-   filter is a question about the same answer. */
-function dcVisible() {
-	const owner = (document.getElementById('dc-owner') || {}).value || '';
-	const state = (document.getElementById('dc-state') || {}).value || '';
-	return DC_ROWS.map(function(r, i) { return {row: r, i: i}; })
-		.filter(function(x) { return !owner || String(x.row.owner) === owner; })
-		.filter(function(x) { return !state || x.row.state === state; });
-}
-
-function dcRender() {
-	const body = document.querySelector('#dc-table tbody');
-	const shown = dcVisible();
-	document.getElementById('dc-count').textContent = shown.length
-		? shown.length + ' village' + (shown.length === 1 ? '' : 's') +
-		  (shown.length === DC_ROWS.length ? '' : ' of ' + DC_ROWS.length) +
-		  ' \u00b7 ' + DC_ROWS.filter(function(r) { return r.state === 'dead'; }).length +
-		  ' dead, ' + DC_ROWS.filter(function(r) { return r.state === 'alive'; }).length + ' alive'
-		: '';
-	document.getElementById('dc-write-all').disabled = !shown.length;
-	if (!shown.length) {
-		body.innerHTML = '<tr><td colspan="9" class="text-muted small">Nothing matches.</td></tr>';
-		return;
-	}
-	body.innerHTML = shown.map(function(x) {
-		const r = x.row, i = x.i;
-		// Most enemy villages are outside the bot's map cache, so the name is
-		// often unknown until the note is read - which fetches the info page
-		// anyway. Until then the id is what there is, and saying so is better
-		// than an empty cell.
-		const where = r.coords ? '<span class="coord text-muted">' + r.coords[0] + '|' + r.coords[1] + '</span>' : '';
-		const who = r.owner_name ? esc(r.owner_name)
-			: (r.owner ? '<span class="text-muted">#' + r.owner + '</span>' : '<span class="text-muted">?</span>');
-		return '<tr id="dc-row-' + i + '">' +
-			'<td class="small">' + esc(r.date) + '</td>' +
-			'<td>' + (r.state === 'alive'
-				? '<span class="badge badge-danger">alive</span>'
-				: '<span class="badge badge-success">dead</span>') + '</td>' +
-			'<td><small>' + (r.name ? '<strong>' + esc(r.name) + '</strong> ' : '<span class="text-muted">#' + esc(r.village_id) + '</span> ') +
-				where + '</small></td>' +
-			'<td><small>' + who + '</small></td>' +
-			'<td class="text-right mono">' + r.sent.toLocaleString() + '</td>' +
-			'<td class="text-right mono">' + r.lost.toLocaleString() +
-				' <small class="text-muted">' + r.loss_pct + '%</small></td>' +
-			'<td><small class="text-muted">' + esc(r.target_name || '') +
-				// A nuke that died on a village you have since lost still died.
-				(r.target_held ? '' : ' <span class="text-warning">(since lost)</span>') + '</small></td>' +
-			'<td class="small dc-note" id="dc-note-' + i + '"></td>' +
-			'<td class="text-right"><button class="btn btn-sm btn-outline-warning py-0" ' +
-				'id="dc-btn-' + i + '" onclick="dcWrite(' + i + ')">note it</button></td></tr>';
-	}).join('');
-}
-
-function dcWrite(i) {
-	const row = DC_ROWS[i];
-	if (!row) return Promise.resolve(false);
-	const cell = document.getElementById('dc-note-' + i);
-	const button = document.getElementById('dc-btn-' + i);
-	if (button) button.disabled = true;
-	cell.innerHTML = '<span class="text-muted">writing…</span>';
-	const body = new URLSearchParams({village_id: row.village_id, line: dcLine(row)});
-	return fetch('/app/village/note', {method: 'POST', body: body})
-		.then(r => r.json()).then(function(res) {
-			if (!res.ok) {
-				cell.innerHTML = '<span class="text-danger">' + esc(res.reason || 'failed') + '</span>';
-				if (button) button.disabled = false;
-				return false;
-			}
-			// The write reads the page first, so it comes back knowing what the
-			// list could not: fill the row in from it.
-			if (res.name && !row.name) { row.name = res.name; }
-			if (res.coords && !row.coords) { row.coords = res.coords; }
-			cell.innerHTML = res.skipped
-				? '<span class="text-muted">already noted</span>'
-				: '<span class="text-success">✓ ' + esc(dcLine(row)) + '</span>';
-			if (button) button.textContent = 'again';
-			if (button) button.disabled = false;
-			return true;
-		})
-		.catch(function(e) {
-			cell.innerHTML = '<span class="text-danger">' + esc(String(e)) + '</span>';
-			if (button) button.disabled = false;
-			return false;
-		});
-}
-
-/* One at a time, on purpose: each note is two requests against the account
-   (read the page, save the note) and firing forty of them at once is the kind
-   of traffic that gets noticed. */
-function dcWriteAll() {
-	const button = document.getElementById('dc-write-all');
-	const note = document.getElementById('dc-note');
-	button.disabled = true;
-	// Only what is on screen: the filter is the selection.
-	const shown = dcVisible();
-	let done = 0;
-	const step = function(n) {
-		if (n >= shown.length) {
-			note.innerHTML = '<span class="text-success">' + done + ' of ' + shown.length + ' written</span>';
-			button.disabled = false;
-			return;
-		}
-		note.innerHTML = '<span class="text-muted">writing ' + (n + 1) + ' of ' + shown.length + '…</span>';
-		dcWrite(shown[n].i).then(function(ok) {
-			if (ok) done++;
-			setTimeout(function() { step(n + 1); }, 400);
-		});
-	};
-	step(0);
 }
 
 function snipeCancel(id) {

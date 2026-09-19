@@ -53,15 +53,14 @@ help_file = {
     'events': 'The rotating in-game events (the weekly themed mini-game). The bot notices whichever event is running from a page it already loads, and can play it for you - see the Events page.',
     'events.auto_play': 'Let the bot play the running event. Its energy bar refills on a timer and stops refilling once full, so every hour it sits capped is an action thrown away - this spends the bar down every cycle. Off by default; nothing is ever played until you switch it on.',
     'events.option': 'Which choice to make: "auto" picks whichever option is worth the most right now (the jackpots move, so the best choice moves with them), or set a number to always take that one.',
-    'report_analysis': 'ALPHA. Reads your reports back out and writes what they mean onto the map. An attack that dies takes the attacker\'s nuke with it and rebuilding one takes weeks, so every defence that held is a fact about his next wave - that village cannot be in it. This finds those villages and writes the date onto each one as the private note the game keeps on its info page, where it is on screen the moment you click an incoming. See Defense -> Dead clears to look before switching it on.',
-    'report_analysis.enabled': 'Let the bot write the notes on its own. Off by default and it never turns itself on. The Dead clears tab does the same thing on demand, which is the way to try it first.',
+    'report_analysis': 'ALPHA. Reads your reports back out and writes what they mean onto the map. An attack that dies takes the attacker\'s nuke with it and rebuilding one takes weeks, so every defence that held is a fact about his next wave - that village cannot be in it. This finds those villages and writes the date onto each one as the private note the game keeps on its info page, where it is on screen the moment you click an incoming. It runs only when you press \"Let the bot write these\" on the Report analysis page: the bot writes that selection once, on its next cycle, and costs nothing the rest of the time. The settings here are the defaults the page starts from.',
     'report_analysis.min_units': 'How big an attack has to be before losing it counts as losing a clear. Below this it is a probe, a fake or snipe-bait rather than a nuke.',
     'report_analysis.min_loss_pct': 'How much of that attack has to have died. In practice this is near-binary - an attack either breaks on the wall or walks through it - so anything from about 80 upwards picks out the same set.',
     'report_analysis.alive_max_loss_pct': 'How little an attack can have lost and still count as a nuke that walked through - proof the village HAS one. The middle ground, a stack that lost most of itself but not all, is deliberately left out of both piles: it is neither gone nor intact, and guessing would put a wrong word on the map.',
-    'report_analysis.note_prefix': 'What the note says about a village whose clear died, with the date added after it. "Clear dood" gives "Clear dood 12-09-2026".',
-    'report_analysis.note_alive': 'Also note the villages whose clear is still alive. A dead clear is the one that changes what you do about the next wave, so that is what gets noted by default; this marks out the rest of his hitting power as well. Which a village is follows the newest report of each kind, so one that lost a clear and later walked another through reads as alive again.',
+    'report_analysis.note_prefix': 'What the note says about a village whose clear died. The village type goes in front and the date after it: "clear dood" gives "OFF - clear dood 12-09-2026". An older line written by this module is replaced, never stacked.',
     'report_analysis.note_prefix_alive': 'What the note says about a village whose clear is still alive, with the date it was last seen walking through.',
-    'report_analysis.max_per_run': 'How many villages to note in one cycle. Each one costs two requests (read the note, save it), so a first run on a long war is spread over several cycles instead of going out in a burst.',
+    'report_analysis.rebuild_days': 'How many days after a clear died it is probably back. A dead clear is not dead forever: past this date the Report analysis page marks it "rebuilt?" and the note says so, because the only way to know then is to scout it. 0 leaves the date off and never assumes.',
+    'report_analysis.note_rebuild': 'Put in front of the rebuild date on a dead clear\'s note. "herbouwd ~" gives "OFF - clear dood 12-09-2026 (herbouwd ~26-09)".',
     'building.manage_buildings': 'Automatically manage buildings',
     'building': 'The automatic creation of buildings',
     'building.default': 'The default template to use, village configs override this variable',
@@ -139,10 +138,12 @@ help_file = {
     'world.archers_enabled': 'Are archers / marchers enabled on the world',
     'world.building_destruction_enabled': 'Are rams / catpults enabled on the world',
     'world.boosters_enabled': 'The world has resource/recruitment boosters (item boosts) enabled.',
-    'flags': 'Manage village flags. Independent of the world capability marker - turn this on to let the bot keep a chosen flag assigned per village.',
-    'flags.manage': 'Master switch for flag management. When ON the bot keeps each village\'s chosen flag (see the per-village flag_type) assigned, picking the highest level you own.',
-    'flags.auto_upgrade': 'When ON, combine 3 flags of the same type/level into one of the next level. OFF by default so the bot never consumes your flags unless you ask.',
-    'village.flag_type': 'Which flag to keep on this village: 1 Resource, 2 Recruitment, 3 Attack, 4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul. Off = never assign a flag. Needs flag management enabled on the Flags tab.',
+    'flags': 'ALPHA. Manage village flags from a group -> flag type plan. Flags are an account-wide pool - you own a number of each type and level, and every one sits on exactly one village - so who gets what is a question about supply, and it is answered in one pass for the whole account. Build the plan on the Flags page; these are the switches it runs under.',
+    'flags.manage': 'Master switch. While OFF nothing is ever assigned - the Flags page still reads your inventory, which is the way to look before handing them over. While ON, the plan is applied when you press Apply (and daily if auto_assign is on).',
+    'flags.auto_assign': 'Re-apply the plan once a day on its own, on the first cycle in active hours. OFF by default: the normal way to use this is to build a plan and press Apply on the Flags page, so nothing moves a flag you did not ask it to.',
+    'flags.auto_upgrade': 'When ON, combine 3 spare flags of the same type and level into one of the next level. OFF by default so the bot never consumes your flags unless you ask, and a flag standing on a village is never one of the three.',
+    'flags.max_reads_per_run': 'How many village flag screens to read in one pass. Each is one request, and the reading is cached for half a day (a flag only moves when the bot moves it), so this only bites on the first run of a large account - which is then spread over a few cycles instead of going out as a burst.',
+    'village.flag_type': 'Which flag this village keeps when NO row on the Flags page matches it: 1 Resource, 2 Recruitment, 3 Attack, 4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul. Off = never assign a flag. A group row on the Flags page beats this.',
     'village_template': 'The default template for villages to use',
     'village.building': 'Build template for this village, or Off to construct nothing here (building levels are still read, so recruiting keeps working). Off only affects this village, the global Building master switch stays as it is.',
     'village.units': 'Recruitment / farm template for this village, or Off to recruit nothing here. Off only affects this village, the global Recruiting master switch stays as it is.',
@@ -242,14 +243,21 @@ section_setup = {
 """,
     'flags': """
 <div class="card config-card border-info">
-  <div class="card-header bg-info text-white">How flag management works</div>
+  <div class="card-header bg-info text-white">How flags actually work</div>
   <div class="card-body">
-    <p class="mb-2 small">Turn on <b>manage</b> to let the bot keep a flag assigned to each
-       village. The flag is chosen <b>per village</b> (set <b>flag_type</b> on the Default
-       village template tab and on each village's own page). The bot always assigns the
-       highest level of that flag type you own.</p>
-    <p class="mb-1 small"><b>Flag types</b> (match the order shown on the in-game flags
-       screen):</p>
+    <p class="mb-2 small">A flag is not a per-village setting. Flags are an
+       <b>account-wide inventory</b>: you own some number of them of each type and level,
+       and every one you own sits on <b>exactly one village</b>. Giving village B a flag
+       takes it off village A. You cannot have twenty villages on a resource flag while
+       owning three of them.</p>
+    <p class="mb-2 small">So who gets what is decided in one pass for the whole account, from
+       a <b>group &rarr; flag type</b> plan you build on the
+       <a href="/flags">Flags page</a>. Rows apply top to bottom and the later row wins:
+       give every village the resource flag, then give [OFF] the attack flag. A village no
+       row matches keeps its own <b>flag_type</b>. When there are not enough flags to go
+       round, the more specific row is served first and the rest are listed as unmet &mdash;
+       nothing is taken off a village that already has what it wants.</p>
+    <p class="mb-1 small"><b>Flag types</b> (the order the in-game flags screen shows them):</p>
     <div class="row small">
       <div class="col-6"><ul class="mb-0">
         <li>1 &mdash; Resource production</li>
@@ -264,9 +272,8 @@ section_setup = {
         <li>8 &mdash; Haul capacity</li>
       </ul></div>
     </div>
-    <small class="d-block text-muted mt-2"><b>auto_upgrade</b> is off by default, so the bot
-      won't combine your flags into higher levels unless you enable it. Whether the world has
-      flags at all is a separate marker on the World tab.</small>
+    <small class="d-block text-muted mt-2">Whether the world has flags at all is a separate
+      marker on the World tab.</small>
   </div>
 </div>
 """,
@@ -278,9 +285,9 @@ section_setup = {
 # newly added keys are never dropped.
 config_groups = {
     'report_analysis': [
-        ('What counts', ['enabled', 'min_units', 'min_loss_pct',
-                         'alive_max_loss_pct', 'max_per_run']),
-        ('What to write', ['note_prefix', 'note_alive', 'note_prefix_alive']),
+        ('What counts', ['min_units', 'min_loss_pct', 'alive_max_loss_pct',
+                         'rebuild_days']),
+        ('What to write', ['note_prefix', 'note_prefix_alive', 'note_rebuild']),
     ],
     'notifications': [
         ('Connection', ['enabled', 'token', 'channel_id']),
@@ -354,6 +361,8 @@ config_groups = {
         ('Premium', ['trade_for_premium']),
     ],
     'flags': [
-        ('Flag management', ['manage', 'auto_upgrade']),
+        ('On/off', ['manage', 'auto_assign']),
+        ('Upgrading', ['auto_upgrade']),
+        ('Cost', ['max_reads_per_run']),
     ],
 }

@@ -66,6 +66,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     reportanalysis = None
 
 try:
+    from game import flags as flagmodule
+except Exception:  # pragma: no cover - dashboard still works without it
+    flagmodule = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         incoming_session_state, field_distance, unit_travel_seconds,
@@ -1144,7 +1149,15 @@ class DataReader:
         if csnipe is None:
             return None, "c-snipe engine unavailable"
         village_id = str(village_id)
-        managed = DataReader.cache_grab("managed")
+        # Including the villages the bot has not run yet: a village taken this
+        # afternoon is exactly the one being sniped for, and looking it up in
+        # the raw snapshot cache refused to arm with "unknown village" while
+        # the page listed its four incoming attacks quite happily.
+        managed = OverviewBuilder._with_attacked_targets(
+            DataReader.cache_grab("managed") or {},
+            DataReader.cache_grab("villages") or {},
+            OverviewBuilder._build_incomings(
+                DataReader.cache_grab("villages") or {}))
         origin = managed.get(village_id) or {}
         pub = origin.get("public") or {}
         loc = pub.get("location")
@@ -1386,6 +1399,107 @@ class DataReader:
         except (OSError, ValueError):
             return False
 
+    # -- village flags ------------------------------------------------------
+    # Same shape as the Account Manager plan, and kept out of config.json for
+    # the same reason: the all-settings editor renders every key of a section
+    # as one control and would flatten a list of rows into a string.
+
+    @staticmethod
+    def flag_plan_path():
+        return DataReader.data_path("cache", "flag_plan.json")
+
+    @staticmethod
+    def flag_plan_grab():
+        """The saved group -> flag type plan: {"rows": [...], "run_now",
+        "refresh"}."""
+        if flagmodule is None:
+            return {"rows": [], "run_now": False, "refresh": False}
+        return flagmodule.load_plan(path=DataReader.flag_plan_path())
+
+    @staticmethod
+    def flag_plan_save(rows):
+        """Replace the whole plan. Row order is the plan's meaning - rows apply
+        top to bottom and the later one wins - so the list is stored exactly as
+        the page sent it. The group name rides along so a row whose group was
+        renamed in game can still be labelled (and still matches by name)."""
+        if flagmodule is None:
+            return False
+        clean = []
+        for row in rows or []:
+            group_id = str((row or {}).get("group_id") or "").strip()
+            try:
+                flag_type = int((row or {}).get("flag_type"))
+            except (TypeError, ValueError):
+                continue
+            if not group_id or flag_type < 0:
+                continue
+            clean.append({"group_id": group_id, "flag_type": flag_type,
+                          "group_name": str(row.get("group_name") or "")})
+        DataReader.ensure_data_dir("cache")
+        flagmodule.update_plan(lambda plan: plan.update({"rows": clean}),
+                               path=DataReader.flag_plan_path())
+        return True
+
+    @staticmethod
+    def flag_request(kind):
+        """Ask the bot to apply the plan ("run_now") or to re-read the flag
+        screen ("refresh") on its next cycle. The bot owns every game request:
+        it is the process with the session, the pacing and the captcha
+        handling."""
+        if kind not in ("run_now", "refresh") or flagmodule is None:
+            return False
+        DataReader.ensure_data_dir("cache")
+        flagmodule.update_plan(lambda plan: plan.update({kind: True}),
+                               path=DataReader.flag_plan_path())
+        return True
+
+    @staticmethod
+    def flag_state_grab():
+        """What the bot last read off the flag screen."""
+        try:
+            path = DataReader.data_path("cache", "flag_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    @staticmethod
+    def balancer_state_grab():
+        """The resource balancer's own bookkeeping (cache/balancer.json)."""
+        try:
+            path = DataReader.data_path("cache", "balancer.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    @staticmethod
+    def report_analysis_request(job):
+        """Queue one notes job for the bot: the page's selection, written on
+        the bot's next cycle and then never again until asked."""
+        if reportanalysis is None:
+            return False
+        DataReader.ensure_data_dir("cache")
+        reportanalysis.queue_job(job, path=DataReader.data_path(
+            "cache", "report_analysis.json"))
+        return True
+
+    @staticmethod
+    def report_analysis_state_grab():
+        """What the report-analysis pass has already written onto the map."""
+        try:
+            path = DataReader.data_path("cache", "report_analysis.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
+
     @staticmethod
     def am_state_grab():
         """What the bot last read off the Account Manager screens."""
@@ -1408,7 +1522,13 @@ class DataReader:
             return [], ["snipe engine unavailable"]
         if not (field_distance and unit_travel_seconds):
             return [], ["travel-time helpers unavailable"]
-        managed = DataReader.cache_grab("managed")
+        # Same reason as csnipe_arm: the village being sniped for may be one the
+        # bot has not reached yet.
+        managed = OverviewBuilder._with_attacked_targets(
+            DataReader.cache_grab("managed") or {},
+            DataReader.cache_grab("villages") or {},
+            OverviewBuilder._build_incomings(
+                DataReader.cache_grab("villages") or {}))
         target_village_id = str(target_village_id)
         target = managed.get(target_village_id) or {}
         tpub = target.get("public") or {}
@@ -1927,7 +2047,39 @@ class DataReader:
         return fresh
 
     @staticmethod
-    def dead_clears(min_units=None, min_loss_pct=None, alive_max_loss_pct=None):
+    def world_players():
+        """{player_id: name} for the world, from the public map file, cached
+        like world_villages() and falling back to a stale copy the same way."""
+        if worldvillages is None or not hasattr(worldvillages, "fetch_players"):
+            return {}
+        path = DataReader.data_path(*worldvillages.PLAYERS_REL)
+        try:
+            if os.path.exists(path) and \
+                    time.time() - os.path.getmtime(path) < worldvillages.TTL:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+        except (OSError, ValueError):
+            pass
+        session = DataReader.get_session() or {}
+        fresh = worldvillages.fetch_players(session.get("endpoint") or "")
+        if not fresh:
+            try:
+                with open(path) as handle:
+                    return json.load(handle) or {}
+            except (OSError, ValueError):
+                return {}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                json.dump(fresh, handle)
+        except OSError:
+            pass
+        return fresh
+
+    @staticmethod
+    def dead_clears(min_units=None, min_loss_pct=None, alive_max_loss_pct=None,
+                    rebuild_days=None, prefix=None, prefix_alive=None,
+                    rebuild_word=None):
         """Every enemy village that has thrown a stack at us, and what became
         of its clear - newest event first, each row carrying "dead" or "alive".
 
@@ -1937,7 +2089,11 @@ class DataReader:
         """
         if reportanalysis is None:
             return []
-        return reportanalysis.find_clear_states(
+        ra = reportanalysis
+        settings = (DataReader.config_grab() or {}).get("report_analysis") or {}
+        if rebuild_days is None:
+            rebuild_days = settings.get("rebuild_days", ra.DEFAULT_REBUILD_DAYS)
+        rows = reportanalysis.find_clear_states(
             DataReader.cache_grab("reports") or {},
             DataReader.cache_grab("managed") or {},
             DataReader.cache_grab("villages") or {},
@@ -1946,7 +2102,23 @@ class DataReader:
             int(min_loss_pct if min_loss_pct is not None
                 else reportanalysis.DEFAULT_MIN_LOSS_PCT),
             int(alive_max_loss_pct if alive_max_loss_pct is not None
-                else reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT))
+                else reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT),
+            int(rebuild_days or 0))
+        # The line each village would get, worked out here rather than in the
+        # page so the page can never write something the bot would not.
+        players = DataReader.world_players() if rows else {}
+        for row in rows:
+            if row.get("owner") and not row.get("owner_name"):
+                row["owner_name"] = players.get(str(row["owner"]))
+            row["line"] = ra.note_line(
+                row,
+                prefix if prefix is not None
+                else settings.get("note_prefix", ra.DEFAULT_NOTE_PREFIX),
+                prefix_alive if prefix_alive is not None
+                else settings.get("note_prefix_alive", ra.DEFAULT_NOTE_PREFIX_ALIVE),
+                rebuild_word if rebuild_word is not None
+                else settings.get("note_rebuild", ra.DEFAULT_NOTE_REBUILD))
+        return rows
 
     @staticmethod
     def village_note_read(village_id):
@@ -1964,7 +2136,7 @@ class DataReader:
             home_village=home)
 
     @staticmethod
-    def village_note_add(village_id, line):
+    def village_note_add(village_id, line, replace_prefixes=None):
         """Add one line to a village's note without losing what is there.
 
         Reads first, folds the line in with villagenotes.compose (which returns
@@ -1976,8 +2148,18 @@ class DataReader:
         current = DataReader.village_note_read(village_id)
         if not current.get("ok"):
             return current
-        merged = villagenotes.compose(current.get("note"), line)
+        replace = None
+        if replace_prefixes is not None and reportanalysis is not None:
+            # An older line of the Report analysis module's own - written with
+            # the prefixes the page used, the configured ones or the defaults -
+            # is replaced rather than stacked under the new one.
+            settings = (DataReader.config_grab() or {}).get("report_analysis") or {}
+            replace = reportanalysis.own_line_matcher(
+                list(replace_prefixes) + reportanalysis.own_prefixes(settings))
+        merged = villagenotes.compose(current.get("note"), line, replace)
         if merged is None:
+            if replace is not None:
+                DataReader._report_analysis_noted(village_id, line)
             return {"ok": True, "skipped": "already noted",
                     "note": current.get("note")}
         session = DataReader.get_session() or {}
@@ -1986,7 +2168,19 @@ class DataReader:
             str(village_id), merged, session.get("cookies") or {},
             session.get("endpoint") or "", DataReader._bot_user_agent(),
             current.get("csrf"), home_village=home)
+        if result.get("ok") and replace is not None:
+            DataReader._report_analysis_noted(village_id, line)
         return result
+
+    @staticmethod
+    def _report_analysis_noted(village_id, line):
+        """Tell the bot's job a Report analysis line is already on a village,
+        so it does not spend a page read finding out."""
+        try:
+            reportanalysis.record_noted(village_id, line, path=DataReader.data_path(
+                "cache", "report_analysis.json"))
+        except OSError:
+            pass
 
     @staticmethod
     def live_home_troops(village_id):
@@ -3653,6 +3847,12 @@ class CSnipeOverview:
         village_db = data.get("villages", {}) or {}
         now = int(time.time())
 
+        # A village under attack has to be in here, whether or not the bot has
+        # run it yet: this map is what the arm button looks the village up in,
+        # and a village missing from it made the button do nothing at all.
+        managed = OverviewBuilder._with_attacked_targets(
+            managed, village_db, OverviewBuilder._build_incomings(village_db))
+
         world_cfg = (DataReader.cache_grab("world") or {}).get("config") or {}
         cancel_seconds = int(world_cfg.get("command_cancel_time") or 600)
         ws, us, speeds = DataReader.world_speeds()
@@ -3760,6 +3960,11 @@ class SnipeOverview:
     def build(cls, data):
         managed = data.get("bot", {}) or {}
         village_db = data.get("villages", {}) or {}
+
+        # As in the c-snipe tab: the village the options are being computed FOR
+        # has to be in this map or the button that opens them does nothing.
+        managed = OverviewBuilder._with_attacked_targets(
+            managed, village_db, OverviewBuilder._build_incomings(village_db))
 
         # Same live reading the Defense table and the c-snipe form use; a
         # village's own available_troops snapshot is too old to decide which
@@ -4318,6 +4523,345 @@ class MintingOverview:
             "last_coins": coins_from(state.get("last_total") or {}),
             "last_asks": state.get("last_asks") or [],
             "pending": bool(state.get("run_now")),
+        }
+
+
+class FlagsOverview:
+    """What the Flags page shows: the plan, the pool, and who is carrying what.
+
+    Flags are an account-wide inventory - one flag sits on exactly one village -
+    so the page's job is to put demand and supply next to each other. "48
+    villages want a defence flag and you own three" is the thing the old
+    per-village setting could never say, and the thing that explains every
+    outcome underneath it.
+
+    Everything here is a read. The page never talks to TribalWars itself; it
+    asks the bot to, which is the process that owns the session and its pacing.
+    """
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("flags", {}) or {}
+        plan = DataReader.flag_plan_grab()
+        state = DataReader.flag_state_grab()
+        managed = DataReader.cache_grab("managed") or {}
+        groups = DataReader.groups_grab()
+        village_ids = [str(v) for v in (config.get("villages") or {})]
+
+        def _name(village_id):
+            entry = managed.get(str(village_id)) or {}
+            return entry.get("name") or str(village_id)
+
+        # The plan's own reading of itself, so the page and the bot cannot
+        # disagree about which village a row covers.
+        desired = flagmodule.resolve_desired(
+            plan.get("rows"), groups, village_ids, config) if flagmodule else {}
+        readings = state.get("readings") or {}
+        inventory = flagmodule._inventory(state) if flagmodule else {}
+
+        # Who is standing on what, so "owned" can be split into placed + spare.
+        placed = {}
+        for reading in readings.values():
+            flag = (reading or {}).get("flag")
+            if flag:
+                placed[int(flag[0])] = placed.get(int(flag[0]), 0) + 1
+
+        wanted = flagmodule.demand(desired) if flagmodule else {}
+        types = []
+        for type_id in (flagmodule.FLAG_TYPE_ORDER if flagmodule else ()):
+            levels = inventory.get(type_id) or {}
+            owned = sum(levels.values())
+            name, effect = flagmodule.FLAG_TYPES[type_id]
+            types.append({
+                "id": type_id, "name": name, "effect": effect,
+                "owned": owned,
+                "levels": [{"level": lvl, "count": levels[lvl]}
+                           for lvl in sorted(levels, reverse=True)],
+                "best": max(levels) if levels else None,
+                "placed": placed.get(type_id, 0),
+                "spare": max(0, owned - placed.get(type_id, 0)),
+                "want": wanted.get(type_id, 0),
+                # The number that decides whether the plan can be met at all.
+                "short": max(0, wanted.get(type_id, 0) - owned),
+            })
+
+        members = {str(g.get("id")): [str(v) for v in (g.get("villages") or [])]
+                   for g in groups}
+        rows = []
+        for row in plan.get("rows") or []:
+            group_id = str(row.get("group_id") or "")
+            known = group_id in ("0", "all") or group_id in members
+            rows.append({
+                "group_id": group_id,
+                "group_name": row.get("group_name") or group_id,
+                "flag_type": int(row.get("flag_type") or 0),
+                "flag_name": flagmodule.flag_name(row.get("flag_type"))
+                             if flagmodule else str(row.get("flag_type")),
+                "villages": len(village_ids) if group_id in ("0", "all")
+                            else len(members.get(group_id) or []),
+                # A group renamed or deleted in game stops matching rather than
+                # quietly pointing somewhere else, so say so on the row.
+                "missing": not known,
+            })
+
+        villages = []
+        for village_id in village_ids:
+            want = desired.get(village_id) or {}
+            reading = readings.get(village_id) or {}
+            current = reading.get("flag")
+            want_type = int(want.get("flag_type") or 0)
+            villages.append({
+                "id": village_id,
+                "name": _name(village_id),
+                "want": want_type,
+                "want_name": flagmodule.flag_name(want_type)
+                             if (flagmodule and want_type) else None,
+                "source": want.get("source"),
+                "group": want.get("group"),
+                "current": int(current[0]) if current else None,
+                "current_name": flagmodule.flag_name(current[0])
+                                if (flagmodule and current) else None,
+                "level": int(current[1]) if current else None,
+                "read": bool(reading),
+                "ok": bool(current) and int(current[0]) == want_type,
+            })
+        villages.sort(key=lambda v: (v["ok"], str(v["name"]).lower()))
+
+        unmet = []
+        for entry in state.get("unmet") or []:
+            unmet.append({
+                "id": entry.get("village_id"),
+                "name": _name(entry.get("village_id")),
+                "flag_type": entry.get("flag_type"),
+                "flag_name": flagmodule.flag_name(entry.get("flag_type"))
+                             if flagmodule else None,
+            })
+
+        results = []
+        for entry in state.get("last_result") or []:
+            results.append(dict(entry, name=_name(entry.get("village_id")),
+                                flag_name=flagmodule.flag_name(entry.get("flag_type"))
+                                if flagmodule else None))
+
+        return {
+            "available": flagmodule is not None,
+            "manage": bool(settings.get("manage")),
+            "auto_assign": bool(settings.get("auto_assign")),
+            "auto_upgrade": bool(settings.get("auto_upgrade")),
+            "world_has_flags": (config.get("world") or {}).get("flags_enabled"),
+            "rows": rows,
+            "groups": [{"id": "0", "name": "All villages", "type": "all",
+                        "villages": len(village_ids)}] +
+                      [{"id": str(g.get("id")), "name": g.get("name"),
+                        "type": g.get("type"),
+                        "villages": len(g.get("villages") or [])} for g in groups],
+            "types": types,
+            "villages": villages,
+            "unmet": unmet,
+            "placed_total": sum(placed.values()),
+            "owned_total": sum(t["owned"] for t in types),
+            "raw": state.get("raw"),
+            "read_when": state.get("read_when"),
+            "cooldown": bool(state.get("cooldown")),
+            "unread": [{"id": v, "name": _name(v)}
+                       for v in (state.get("unread") or [])],
+            "last_result": results,
+            "last_result_when": state.get("last_result_when"),
+            "last_result_source": state.get("last_result_source"),
+            "last_run": state.get("last_run"),
+            "last_run_ts": state.get("last_run_ts"),
+            "upgraded": state.get("upgraded") or 0,
+            "pending_run": bool(plan.get("run_now")),
+            "pending_refresh": bool(plan.get("refresh")),
+        }
+
+
+class BalancerOverview:
+    """What the Resource balancing page shows: who fed whom, and what is still
+    on the road.
+
+    The balancer's whole difficulty is that a delivery already travelling is
+    invisible to the receiver's own snapshot, so it writes every send down
+    together with the moment it lands (cache/balancer.json). That file is what
+    this reads: convoys in the air, the senders' cooldowns, and the measured
+    merchant speed the arrival times are computed from.
+    """
+
+    @staticmethod
+    def _total(amounts):
+        return sum(int(v or 0) for v in (amounts or {}).values())
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("balancer", {}) or {}
+        state = DataReader.balancer_state_grab()
+        managed = DataReader.cache_grab("managed") or {}
+        now = time.time()
+
+        def _name(village_id):
+            entry = managed.get(str(village_id)) or {}
+            return entry.get("name") or str(village_id)
+
+        cooldown = int(settings.get("send_cooldown_minutes", 60) or 60) * 60
+
+        # Per-sender rows. The bookkeeping keys a village id straight onto the
+        # top level, so the underscore-prefixed keys are the module's own.
+        senders = []
+        for key, entry in state.items():
+            if key.startswith("_") or not isinstance(entry, dict):
+                continue
+            if "last_send" not in entry:
+                continue
+            last = int(entry.get("last_send") or 0)
+            senders.append({
+                "id": key, "name": _name(key),
+                "last_send": last,
+                "target_id": entry.get("last_target"),
+                "target_name": _name(entry.get("last_target")),
+                "amounts": entry.get("last_amounts") or {},
+                "total": cls._total(entry.get("last_amounts")),
+                # Negative means the cooldown has already run out, which is the
+                # normal state - it is only interesting while it is positive.
+                "ready_in": max(0, int(last + cooldown - now)),
+            })
+        senders.sort(key=lambda s: -s["last_send"])
+
+        # Convoys that have not landed yet, and what each receiver has had.
+        inflight, received = [], {}
+        day_ago = now - 86400
+        for village_id, flights in (state.get("_inflight") or {}).items():
+            for flight in flights or []:
+                arrival = int(flight.get("arrival") or 0)
+                if arrival > now:
+                    inflight.append({
+                        "to": str(village_id), "to_name": _name(village_id),
+                        "sent": int(flight.get("sent") or 0),
+                        "arrival": arrival,
+                        "amounts": flight.get("amounts") or {},
+                        "total": cls._total(flight.get("amounts")),
+                    })
+        inflight.sort(key=lambda f: f["arrival"])
+
+        for village_id, stamps in (state.get("_deliveries") or {}).items():
+            stamps = [int(s) for s in stamps or []]
+            if not stamps:
+                continue
+            received[str(village_id)] = {
+                "id": str(village_id), "name": _name(village_id),
+                "total": len(stamps),
+                "day": len([s for s in stamps if s >= day_ago]),
+                "last": max(stamps),
+            }
+        receivers = sorted(received.values(), key=lambda r: -r["last"])
+
+        merchant = state.get("_merchant") or {}
+        no_market = [{"id": str(v), "name": _name(v), "when": int(t or 0)}
+                     for v, t in (state.get("_no_market") or {}).items()]
+        no_market.sort(key=lambda m: -m["when"])
+
+        return {
+            "enabled": bool(settings.get("enabled")),
+            "settings": {
+                "sender_min_points": settings.get("sender_min_points"),
+                "receiver_max_points": settings.get("receiver_max_points"),
+                "target_fill_pct": settings.get("target_fill_pct"),
+                "fill_mode": settings.get("fill_mode"),
+                "sender_order": settings.get("sender_order"),
+                "target_order": settings.get("target_order"),
+                "send_cooldown_minutes": settings.get("send_cooldown_minutes"),
+                "max_sends_per_receiver": settings.get("max_sends_per_receiver"),
+                "reserve_merchants": settings.get("reserve_merchants"),
+                "sender_keep": settings.get("sender_keep"),
+                "min_send_amount": settings.get("min_send_amount"),
+            },
+            "senders": senders,
+            "inflight": inflight,
+            "inflight_total": sum(f["total"] for f in inflight),
+            "receivers": receivers,
+            "delivered_day": sum(r["day"] for r in receivers),
+            "delivered_total": sum(r["total"] for r in receivers),
+            "merchant": {
+                "minutes_per_field": merchant.get("minutes_per_field"),
+                "measured": merchant.get("measured"),
+                "over_fields": merchant.get("over_fields"),
+                "seconds": merchant.get("seconds"),
+            },
+            "no_market": no_market,
+            "last_turn": max([int(t or 0) for t in
+                              (state.get("_turns") or {}).values()] or [0]),
+        }
+
+
+class ReportAnalysisOverview:
+    """What the Report analysis page shows: the switches, and what has already
+    been written onto the map.
+
+    The reading itself (which villages have a dead clear) is done on demand by
+    /app/dead-clears, because it is a scan of every report on disk and there is
+    no reason to pay for it on a page load nobody asked it of. This is the part
+    that is cheap: the settings the panel should start from, and the notes the
+    unattended pass has written.
+    """
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        settings = config.get("report_analysis", {}) or {}
+        state = DataReader.report_analysis_state_grab()
+        noted = state.get("noted") or {}
+        managed = DataReader.cache_grab("managed") or {}
+
+        rows = []
+        for village_id, line in noted.items():
+            entry = managed.get(str(village_id)) or {}
+            rows.append({"id": str(village_id),
+                         "name": entry.get("name") or str(village_id),
+                         "line": line})
+        rows.sort(key=lambda r: str(r["line"]), reverse=True)
+
+        defaults = {}
+        if reportanalysis is not None:
+            defaults = {
+                "min_units": reportanalysis.DEFAULT_MIN_UNITS,
+                "min_loss_pct": reportanalysis.DEFAULT_MIN_LOSS_PCT,
+                "alive_max_loss_pct": reportanalysis.DEFAULT_ALIVE_MAX_LOSS_PCT,
+                "note_prefix": reportanalysis.DEFAULT_NOTE_PREFIX,
+                "note_prefix_alive": reportanalysis.DEFAULT_NOTE_PREFIX_ALIVE,
+                "note_rebuild": reportanalysis.DEFAULT_NOTE_REBUILD,
+                "rebuild_days": reportanalysis.DEFAULT_REBUILD_DAYS,
+            }
+        # Where the scout button points: the rally point of a village of ours
+        # with the target filled in, so checking whether a nuke is back is one
+        # click and one send.
+        session = DataReader.get_session() or {}
+        endpoint = session.get("endpoint") or ""
+        game_base = (endpoint.rsplit("/", 1)[0]
+                     if endpoint.startswith("http") else "")
+
+        return {
+            "available": reportanalysis is not None,
+            "job": state.get("job") or {},
+            "min_units": settings.get("min_units", defaults.get("min_units")),
+            "min_loss_pct": settings.get("min_loss_pct",
+                                         defaults.get("min_loss_pct")),
+            "alive_max_loss_pct": settings.get(
+                "alive_max_loss_pct", defaults.get("alive_max_loss_pct")),
+            "note_prefix": settings.get("note_prefix",
+                                        defaults.get("note_prefix")),
+            "note_prefix_alive": settings.get(
+                "note_prefix_alive", defaults.get("note_prefix_alive")),
+            "note_rebuild": settings.get("note_rebuild",
+                                         defaults.get("note_rebuild")),
+            "rebuild_days": settings.get("rebuild_days",
+                                         defaults.get("rebuild_days")),
+            "game_base": game_base,
+            "home": next(iter(managed), ""),
+            "noted": rows,
+            "noted_count": len(rows),
+            "last_run": state.get("last_run"),
+            "reports": len(DataReader.cache_grab("reports") or {}),
         }
 
 

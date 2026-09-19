@@ -32,7 +32,7 @@ RESOURCES = ("wood", "stone", "iron")
 MERCHANT_CAPACITY = 1000
 # Last-resort guess at the market's speed, used only until the world has been
 # measured: the classic TW market runs at 30 minutes per field divided by the
-# world speed. Do not trust it - nl116 has speed 1.5, so this predicts 20
+# world speed. Do not trust it - on a speed 1.5 world this predicts 20
 # minutes per field and the game's own confirmation page says 1. Every send
 # reads the real trip time off that page and stores it (see
 # _record_merchant_speed), so this only ever decides sends made before the
@@ -293,7 +293,7 @@ class ResourceBalancer:
         # One bad reading used to become the world's speed for good, and a rate
         # that is too FAST is the dangerous direction: every convoy then looks
         # delivered while it is still travelling, and the receivers overfill.
-        # Seen live on nl116 - a banked 1.0 min/field against a real 4.01 put
+        # Seen live - a banked 1.0 min/field against a real 4.01 put
         # 23k of clay into a 22k warehouse.
         #
         # The bounds are deliberately wide. The world model (30 / world speed)

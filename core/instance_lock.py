@@ -15,7 +15,7 @@ half of it is dead and a restart "fixes" it only until the next double start.
 
 The lock is keyed on the game endpoint rather than on the --world name on
 purpose. A bot started without --world (project-root config.json) and one
-started with `--world nl115` are two different worlds to the dashboard but the
+started with `--world nl99` are two different worlds to the dashboard but the
 same account to TribalWars - which is exactly how a second instance gets
 launched by accident (start.bat opens one, the dashboard's "Start bot" button
 does not recognise it, and opens another).
@@ -45,7 +45,7 @@ class InstanceLock:
 
     @staticmethod
     def key_for(endpoint):
-        """A filesystem-safe account key: the game host, e.g. nl115.tribalwars.nl.
+        """A filesystem-safe account key: the game host, e.g. nl99.tribalwars.nl.
 
         Falls back to a sanitised copy of whatever was passed when the endpoint
         is not a parsable URL, so a malformed config still gets *a* lock rather

@@ -475,7 +475,7 @@
 				two behind the nukes.</li>
 		</ol>
 		<textarea id="p_text" class="form-control form-control-sm" rows="5"
-			placeholder="569|444->564|454,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1"></textarea>
+			placeholder="512|507->507|517,11.18,axe,Attack,2026-08-14 08:03:00.000,03:21:14.000,2026-08-14 04:41:46.000,1"></textarea>
 		<div class="mt-2 mb-2">
 			<button id="p_parse" class="btn btn-outline-primary btn-sm">Read plan</button>
 			<span class="small text-muted ml-2">reads the paste above; nothing is sent</span>
@@ -608,7 +608,7 @@
 				<div class="form-group mb-2">
 					<label class="small mb-1">Target<span class="text-muted">s — paste as many as you like</span></label>
 					<textarea id="nb_targets" rows="2" class="form-control form-control-sm"
-						placeholder="582|436 580|436 586|434 585|435"></textarea>
+						placeholder="525|503 523|503 529|501 528|500"></textarea>
 					<small class="text-muted">Separated by spaces, commas or new lines. Everything below
 						applies to all of them, and they are prioritised in the order pasted.</small>
 					<div id="nb_targets_note" class="small text-muted mt-1"></div>
@@ -1833,7 +1833,7 @@ function nbAdd() {
 	const msg = document.getElementById('nb_msg');
 	const targets = nbParseTargets(document.getElementById('nb_targets').value);
 	if (!targets.length) {
-		msg.innerHTML = '<span class="text-danger">no coordinates found - they look like 582|436</span>';
+		msg.innerHTML = '<span class="text-danger">no coordinates found - they look like 525|503</span>';
 		return;
 	}
 	msg.textContent = 'Adding ' + targets.length + '…';
