@@ -903,7 +903,8 @@ def dodge_cancel():
 def snipe_arm():
     """Arm one support-snipe per selected option. Expects JSON: incoming_id,
     target_village_id, land_ms (epoch ms the support must land), options
-    [{village_id, pace_unit, units {unit: count}}], shortfall, min_pct, boost."""
+    [{village_id, pace_unit, units {unit: count}}], shortfall, min_pct, boost,
+    max_delta_ms, hit_ms (epoch ms the attack itself lands)."""
     body = request.get_json(silent=True) or {}
     armed, errors = DataReader.snipe_arm_batch(
         incoming_id=body.get("incoming_id"),
@@ -914,6 +915,7 @@ def snipe_arm():
         min_pct=body.get("min_pct"),
         boost=body.get("boost"),
         max_delta_ms=body.get("max_delta_ms"),
+        hit_ms=body.get("hit_ms"),
     )
     return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
 
