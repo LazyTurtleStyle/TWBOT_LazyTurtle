@@ -791,28 +791,28 @@
 
 <div class="card mb-3">
 	<div class="card-header py-2"><strong>Settings</strong>
-		<small class="text-muted">saved as you change them</small>
+		<small class="text-muted">saved as you change them &middot; also under Settings &rarr; Defence</small>
 		<small id="dg_saved" class="text-success ml-2" style="display:none">saved</small></div>
 	<div class="card-body py-2">
 		<div class="form-row">
 			<div class="col-6 col-md-2 mb-2">
 				<label class="small mb-0">Dodging</label>
-				<select class="form-control form-control-sm dg-set" data-key="dodge.enabled">
+				<select class="form-control form-control-sm dg-set" data-key="defence.dodge">
 					<option value="false" {{ '' if ds.enabled else 'selected' }}>off</option>
 					<option value="true" {{ 'selected' if ds.enabled else '' }}>on</option>
 				</select></div>
 			<div class="col-6 col-md-4 mb-2">
 				<label class="small mb-0">Trigger text in the attack's name</label>
-				<input class="form-control form-control-sm dg-set" data-key="dodge.trigger" value="{{ ds.trigger }}"></div>
+				<input class="form-control form-control-sm dg-set" data-key="defence.dodge_trigger" value="{{ ds.trigger }}"></div>
 			<div class="col-4 col-md-2 mb-2">
 				<label class="small mb-0">Leave before (s)</label>
-				<input type="number" min="30" class="form-control form-control-sm dg-set" data-key="dodge.leave_before_seconds" value="{{ ds.leave_before_seconds }}"></div>
+				<input type="number" min="30" class="form-control form-control-sm dg-set" data-key="defence.dodge_leave_before_seconds" value="{{ ds.leave_before_seconds }}"></div>
 			<div class="col-4 col-md-2 mb-2">
 				<label class="small mb-0">Back after (s)</label>
-				<input type="number" min="1" class="form-control form-control-sm dg-set" data-key="dodge.return_after_seconds" value="{{ ds.return_after_seconds }}"></div>
+				<input type="number" min="1" class="form-control form-control-sm dg-set" data-key="defence.dodge_return_after_seconds" value="{{ ds.return_after_seconds }}"></div>
 			<div class="col-4 col-md-2 mb-2">
 				<label class="small mb-0">One trip if within (s)</label>
-				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="dodge.merge_seconds" value="{{ ds.merge_seconds }}"></div>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_merge_seconds" value="{{ ds.merge_seconds }}"></div>
 		</div>
 	</div>
 </div>

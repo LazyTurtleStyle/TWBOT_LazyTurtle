@@ -95,11 +95,25 @@ logger = logging.getLogger("Dodge")
 
 # -- settings -----------------------------------------------------------------
 
+# Where each setting lives in config.json: the "defence" section, next to
+# whatever else defends a village, with the dodge's keys prefixed.
+CONFIG_SECTION = "defence"
+CONFIG_KEYS = {
+    "enabled": "dodge",
+    "trigger": "dodge_trigger",
+    "leave_before_seconds": "dodge_leave_before_seconds",
+    "return_after_seconds": "dodge_return_after_seconds",
+    "merge_seconds": "dodge_merge_seconds",
+}
+
+
 def settings_from(config):
-    """The dodge section of a config dict, with defaults filled in."""
-    raw = (config or {}).get("dodge") or {}
+    """The dodge settings from a config dict, with defaults filled in."""
+    raw = (config or {}).get(CONFIG_SECTION) or {}
     out = dict(DEFAULTS)
-    out.update({k: v for k, v in raw.items() if k in DEFAULTS and v is not None})
+    for key, config_key in CONFIG_KEYS.items():
+        if raw.get(config_key) is not None:
+            out[key] = raw[config_key]
     out["enabled"] = bool(out["enabled"])
     out["trigger"] = str(out["trigger"] or "").strip()
     for key in ("leave_before_seconds", "return_after_seconds", "merge_seconds"):

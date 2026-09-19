@@ -62,12 +62,12 @@
     "research": false,
     "auto_setup": false
   },
-  "dodge": {
-    "enabled": false,
-    "trigger": "DODGE THIS",
-    "leave_before_seconds": 90,
-    "return_after_seconds": 5,
-    "merge_seconds": 300
+  "defence": {
+    "dodge": false,
+    "dodge_trigger": "DODGE THIS",
+    "dodge_leave_before_seconds": 90,
+    "dodge_return_after_seconds": 5,
+    "dodge_merge_seconds": 300
   },
   "minting": {
     "enabled": false,

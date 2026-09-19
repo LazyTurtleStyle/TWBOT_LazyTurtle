@@ -1443,6 +1443,7 @@ QUICK_TOGGLES = {
     # which is exactly the kind of thing worth handing over with one click.
     "event": ("Play the event", "events.auto_play"),
     "mint": ("Feed the coin village", "minting.enabled"),
+    "dodge": ("Dodge tagged attacks", "defence.dodge"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global
