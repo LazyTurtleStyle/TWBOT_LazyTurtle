@@ -699,8 +699,8 @@
 			<div class="form-group col-6 col-md-3">
 				<label>Keep only within <small class="text-muted">(ms, 0 = keep all)</small></label>
 				<input type="number" class="form-control form-control-sm" id="sn-maxdelta" min="0" max="5000"
-					value="0" title="After firing, the bot reads back where the command actually lands. Outside this many milliseconds it is recalled straight away.">
-				<small class="text-muted">Arm several and keep the ones that land inside it.</small>
+					value="0" title="After firing, the bot reads back where the command actually lands. More than this many milliseconds from the aim, or on the wrong side of the hit, it is recalled straight away.">
+				<small class="text-muted">Arm several and keep the ones that land inside it. Never kept on the wrong side of the hit: aimed before it, a landing at or after the hit is recalled, however close.</small>
 			</div>
 		</div>
 		<div class="form-row align-items-end" id="sn-template-row" style="display:none">
@@ -1633,10 +1633,14 @@ function fmtMs(ms) {
 	});
 })();
 
-function snipeLandMs() {
+function snipeHitMs() {
 	const hit = parseInt(document.getElementById('sn-hit-ms').value, 10) || 0;
+	return snForm.arrival * 1000 + hit;
+}
+
+function snipeLandMs() {
 	const off = parseInt(document.getElementById('sn-offset').value, 10) || 0;
-	return snForm.arrival * 1000 + hit + off;
+	return snipeHitMs() + off;
 }
 
 function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
@@ -2039,6 +2043,7 @@ function snipePostArm(options, noteEl, onArmed, skipped) {
 			incoming_id: snForm.incoming_id,
 			target_village_id: snForm.target_id,
 			land_ms: snipeLandMs(),
+			hit_ms: snipeHitMs(),
 			options: options,
 			shortfall: document.getElementById('sn-shortfall').value,
 			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),

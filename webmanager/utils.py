@@ -1514,7 +1514,7 @@ class DataReader:
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
-                        shortfall, min_pct, boost, max_delta_ms=0):
+                        shortfall, min_pct, boost, max_delta_ms=0, hit_ms=None):
         """Arm one snipe per selected option: each sends `units` as support
         from its own village so they land at land_ms (epoch milliseconds) in
         the target village. Returns (armed_entries, per_option_errors)."""
@@ -1550,6 +1550,12 @@ class DataReader:
             max_delta_ms = max(0, int(float(max_delta_ms or 0)))
         except (TypeError, ValueError):
             max_delta_ms = 0
+        # The attack's own landing ms: the limit never keeps a snipe that lands
+        # on the wrong side of it (see snipe.keep_verdict).
+        try:
+            hit_ms = int(float(hit_ms)) if hit_ms not in (None, "") else None
+        except (TypeError, ValueError):
+            hit_ms = None
         if boost <= 0:
             boost = 1.0
         now = time.time()
@@ -1613,6 +1619,7 @@ class DataReader:
                 "shortfall": shortfall,
                 "min_pct": min_pct,
                 "max_delta_ms": max_delta_ms,
+                "hit_ms": hit_ms,
                 "distance": round(field_distance(oloc, tloc), 1),
                 "travel_est": int(travel),
                 "send_est_ts": int(send_est),
