@@ -52,7 +52,8 @@ from core.filemanager import FileManager
 from core.notification import Notification
 from core.server_clock import GameClock
 from game import attack_scheduler, csnipe
-from game.incomings import field_distance, load_world_speeds, unit_travel_seconds
+from game.incomings import (field_distance, incoming_tag_warning,
+                            load_world_speeds, unit_travel_seconds)
 
 DODGE_FILE = "cache/dodges.json"
 
@@ -388,6 +389,9 @@ def replan(settings, now_ms, path=None):
     dashboard's rows stay put."""
     incomings = _load_incomings()
     cancel_window = csnipe._cancel_window_ms()
+    by_id = {str(i.get("command_id")): i for i in incomings}
+    speeds = load_world_speeds()
+    fresh_warnings = []   # (village, text) for dodges planned this pass
 
     def mut(entries):
         busy, covered, planned = {}, set(), {}
@@ -405,15 +409,29 @@ def replan(settings, now_ms, path=None):
         keep = [e for e in entries if e.get("status") != "planned"]
         for f in fresh:
             old = planned.get((f["village_id"], f["incoming_ids"][0]))
+            # A name the flight time rules out - above all the "Ram" that can
+            # only be a noble, where dodging hands the noble an empty village.
+            # Not refused (it may be meant), but said, once, where it is seen.
+            warnings = []
+            for cid in f["incoming_ids"]:
+                w = incoming_tag_warning(by_id.get(cid) or {}, speeds)
+                if w:
+                    warnings.append(w["text"])
+            f["warnings"] = warnings
             if old:
                 # Same dodge, possibly with an attack added or dropped: keep
                 # its id, attempts and log, take the new timing.
+                new_warnings = [w for w in warnings
+                                if w not in (old.get("warnings") or [])]
                 old.update(f)
                 f = old
             else:
                 f["id"] = "dg%x%s" % (int(time.time() * 1000) & 0xffffffff,
                                       f["incoming_ids"][0][-4:])
                 f["created"] = int(time.time())
+                new_warnings = warnings
+            if f["status"] == "planned":
+                fresh_warnings.extend((f["village_id"], w) for w in new_warnings)
             if f["status"] == "skipped":
                 # A skip is final: recorded once, with its reason.
                 f["finished"] = int(time.time())
@@ -431,7 +449,15 @@ def replan(settings, now_ms, path=None):
 
     # Recalled or untagged attacks simply drop out of `incomings`, and with
     # them the planned dodge that was waiting for them.
-    return _update(mut, path)
+    planned = _update(mut, path)
+    # Sent after the file lock is released: a slow Telegram call must not hold
+    # up the dashboard.
+    for vid, text in fresh_warnings:
+        Notification.send("TWB dodge warning (village %s): the attack %s. "
+                          "Dodging it lets it land on an empty village - "
+                          "cancel the dodge on the Defense page if that is "
+                          "not what you want." % (vid, text), category="attack")
+    return planned
 
 
 def _send(wrapper, clock, entry, path):

@@ -78,6 +78,7 @@ except Exception:  # pragma: no cover - dashboard still works without it
 try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
+        tag_check, exact_distance,
         incoming_session_state, field_distance, unit_travel_seconds,
         DEFAULT_UNIT_SPEEDS, UNIT_ORDER,
     )
@@ -86,6 +87,8 @@ except Exception:  # pragma: no cover - dashboard still works without travel tim
     travel_table = None
     slowest_floor = None
     rename_command_ingame = None
+    tag_check = None
+    exact_distance = None
     incoming_session_state = None
     field_distance = None
     unit_travel_seconds = None
@@ -2958,6 +2961,7 @@ class OverviewBuilder:
 
             units = []
             tag_auto = None
+            tag_warning = None
             if speeds and distance and arrival and slowest_floor:
                 table = travel_table(distance, speeds, world_speed, unit_speed)
                 # The attack has been in the air at least (arrival - first_seen),
@@ -2965,6 +2969,19 @@ class OverviewBuilder:
                 # fastest unit still consistent with that - the tightest estimate.
                 remaining_detect = arrival - first_seen
                 tag_auto = slowest_floor(table, remaining_detect)
+                # A name that claims a unit the flight time rules out - the
+                # "Ram" that can only be a noble. Checked on the in-game name
+                # first, then on the dashboard tag.
+                if tag_check:
+                    # Exact distance: the cached one is rounded (see
+                    # incomings.exact_distance).
+                    exact = travel_table(exact_distance(entry) or distance,
+                                         speeds, world_speed, unit_speed)
+                    for field in ("game_label", "tag"):
+                        tag_warning = tag_check(entry.get(field),
+                                                remaining_detect, exact)
+                        if tag_warning:
+                            break
                 for unit in UNIT_ORDER:
                     if unit not in table:
                         continue
@@ -2994,6 +3011,7 @@ class OverviewBuilder:
                 "game_label": entry.get("game_label"),
                 "tag": entry.get("tag"),
                 "tag_auto": tag_auto,
+                "tag_warning": tag_warning,
                 "units": units,
                 "enemy_points": enemy.get("points"),
                 "enemy_tribe": enemy.get("tribe"),
@@ -3825,6 +3843,7 @@ def live_incomings(managed, village_db):
                 "arrival_ms": c.get("arrival_ms"),
                 "eta": c.get("eta"),
                 "tag": c.get("tag") or c.get("game_label") or c.get("tag_auto"),
+                "tag_warning": c.get("tag_warning"),
             })
     incomings.sort(key=OverviewBuilder._arrival_key)
     return incomings
@@ -3994,6 +4013,15 @@ class DodgeOverview:
                                "coords": pub.get("location")}
         now_ms = int(time.time() * 1000)
 
+        # Which tagged attacks carry a name the flight time rules out, by
+        # command id - the same check the Overview shows (tag_check).
+        warnings = {}
+        for cmds in OverviewBuilder._build_incomings(
+                data.get("villages", {}) or {}).values():
+            for c in cmds:
+                if c.get("tag_warning"):
+                    warnings[str(c.get("command_id"))] = c["tag_warning"]["text"]
+
         tagged = []
         if dodge_engine:
             for inc in (DataReader.cache_grab("incomings") or {}).values():
@@ -4014,6 +4042,7 @@ class DodgeOverview:
                                            {f: inc.get(f)},
                                            settings.get("trigger"))), ""),
                         "hit_ms": hit,
+                        "warning": warnings.get(str(inc.get("command_id"))),
                     })
         tagged.sort(key=lambda r: r["hit_ms"])
 
@@ -4022,6 +4051,9 @@ class DodgeOverview:
             row = dict(d)
             v = names.get(str(d.get("village_id"))) or {}
             row["village_name"] = v.get("name") or d.get("village_id")
+            # Live for dodges still to come; the bot's note for finished ones.
+            row["warnings"] = [warnings[i] for i in d.get("incoming_ids") or []
+                               if i in warnings] or list(d.get("warnings") or [])
             row["coords"] = v.get("coords")
             dodges.append(row)
         active = [d for d in dodges if d.get("status") in ("planned", "out")]

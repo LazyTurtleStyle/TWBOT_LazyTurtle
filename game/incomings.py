@@ -134,6 +134,112 @@ def slowest_floor(table, remaining_seconds):
     return min(candidates, key=lambda item: item[1])[0]
 
 
+# Words a player (or the game's own auto-name) uses for a unit in an incoming's
+# name, Dutch and English. Matched as whole words, case-insensitive; the first
+# one in the name is the unit it claims. "Aanval" and trigger texts like
+# "DODGE THIS" name no unit and are never checked.
+LABEL_UNIT_WORDS = {
+    "spy": ["verkenner", "verkenners", "verk", "spy", "spion", "scout"],
+    "light": ["lichte cavalerie", "lichte", "lc", "lcav", "light"],
+    "marcher": ["bereden boogschutter", "bereden", "marcher", "bb"],
+    "heavy": ["zware cavalerie", "zware", "zc", "heavy", "hc"],
+    "axe": ["bijlstrijder", "bijl", "axe"],
+    "archer": ["boogschutter", "boog", "archer"],
+    "spear": ["speervechter", "speer", "spear"],
+    "sword": ["zwaardvechter", "zwaard", "sword"],
+    "ram": ["ram", "rammen"],
+    "catapult": ["katapult", "kata", "catapult", "cat"],
+    "snob": ["edelman", "edel", "adel", "noble", "snob"],
+}
+_LABEL_UNIT_RE = re.compile(
+    r"(?<![\w])(" + "|".join(sorted(
+        (re.escape(w) for words in LABEL_UNIT_WORDS.values() for w in words),
+        key=len, reverse=True)) + r")(?![\w])", re.IGNORECASE)
+_LABEL_WORD_UNIT = {w: u for u, words in LABEL_UNIT_WORDS.items() for w in words}
+# Slack before a name counts as ruled out: the game's whole-second trips, plus
+# a share of the trip for the world speeds being cached rounded (0.6667 for
+# 2/3), which adds up over a 60-field march. A ruled-out name is wrong by far
+# more - a noble walks 17% slower than a ram.
+TAG_CHECK_SLACK_S = 2
+TAG_CHECK_SLACK_SHARE = 0.002
+UNIT_NAMES = {
+    "spy": "scout", "light": "light cavalry", "marcher": "mounted archer",
+    "heavy": "heavy cavalry", "axe": "axe", "archer": "archer", "spear": "spear",
+    "sword": "sword", "ram": "ram", "catapult": "catapult", "snob": "noble",
+    "knight": "paladin",
+}
+
+
+def exact_distance(incoming):
+    """Field distance from the command's own coordinates. The cached
+    `distance` is rounded to 2 decimals, which over 60 fields at a ram's pace
+    is +-9 seconds - enough to make a ram look impossibly slow."""
+    a, b = incoming.get("origin_coords"), incoming.get("target_coords")
+    if isinstance(a, list) and isinstance(b, list) and len(a) == 2 and len(b) == 2:
+        return field_distance(a, b)
+    return incoming.get("distance")
+
+
+def label_unit(label):
+    """The unit an incoming's name claims, or None when it names none."""
+    match = _LABEL_UNIT_RE.search(label or "")
+    return _LABEL_WORD_UNIT.get(match.group(1).lower()) if match else None
+
+
+def tag_check(label, remaining_seconds, table):
+    """Is the unit this name claims possible at all, given the flight time?
+
+    The attack was seen `remaining_seconds` before it lands, so its slowest
+    unit needs a trip at least that long (see slowest_floor). A name claiming
+    a unit whose whole trip is shorter is provably wrong - the "Ram" that was
+    already under way longer than any ram could be is a noble. A name claiming
+    a slower unit than needed is merely unproven, and is not flagged.
+
+    Returns None, or {"named", "possible", "text"}."""
+    named = label_unit(label)
+    if not named or named not in table or not remaining_seconds:
+        return None
+    def fits(unit):
+        trip = table[unit]
+        return trip + TAG_CHECK_SLACK_S + trip * TAG_CHECK_SLACK_SHARE \
+            >= remaining_seconds
+    if fits(named):
+        return None
+    possible = [u for u in UNIT_ORDER if u in table and fits(u)]
+    if possible:
+        can_be = ("can only be a %s" % UNIT_NAMES.get(possible[0], possible[0])
+                  if len(possible) == 1 else
+                  "can only be: %s" % ", ".join(UNIT_NAMES.get(u, u) for u in possible))
+    else:
+        can_be = "matches no unit (the flight time reads inconsistent)"
+    return {
+        "named": named,
+        "possible": possible,
+        "text": ("named %s, but it was seen %d min before landing and a %s "
+                 "needs only %d min for this distance - it %s"
+                 % (UNIT_NAMES.get(named, named), round(remaining_seconds / 60),
+                    UNIT_NAMES.get(named, named), round(table[named] / 60),
+                    can_be)),
+    }
+
+
+def incoming_tag_warning(incoming, speeds=None):
+    """tag_check for a cached incoming, on its in-game name and dashboard tag.
+    speeds: (world_speed, unit_speed, {unit: base}) - loaded when omitted."""
+    arrival, first_seen = incoming.get("arrival"), incoming.get("first_seen")
+    distance = exact_distance(incoming)
+    if not (arrival and first_seen and distance):
+        return None
+    world_speed, unit_speed, base = speeds or load_world_speeds()
+    table = travel_table(distance, base, world_speed, unit_speed)
+    for field in ("game_label", "tag"):
+        warning = tag_check(incoming.get(field), arrival - first_seen, table)
+        if warning:
+            warning["field"] = field
+            return warning
+    return None
+
+
 def load_world_speeds():
     """Return (world_speed, unit_speed, {unit: base_speed}) from cache.
 

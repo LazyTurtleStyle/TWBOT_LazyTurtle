@@ -225,6 +225,7 @@
 							<div class="inc-row">
 								<span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
 								{% if c.game_label %}<span class="badge badge-secondary" title="{{ c.game_label }}">{{ c.game_label|truncate(22, True, '…') }}</span>{% endif %}
+								{% if c.tag_warning %}<span class="badge badge-danger" title="{{ c.tag_warning.text }}">&#9888; {{ 'noble' if c.tag_warning.possible == ['snob'] else 'wrong tag' }}</span>{% endif %}
 								<span class="text-muted inc-player">{{ c.player_name }}</span>
 								<span class="tag-cell">
 									<input id="vtag-{{ c.command_id }}" class="form-control form-control-sm"
@@ -844,7 +845,8 @@
 				<td class="small"><span class="ms" data-ms="{{ d.return_actual_ms or d.return_planned_ms or d.return_ms }}">…</span></td>
 				<td class="coord small">{% if d.target %}{{ d.target.x }}|{{ d.target.y }}{% if d.travel_seconds %}
 					<small class="text-muted d-block">{{ d.travel_seconds // 60 }} min walk</small>{% endif %}{% else %}—{% endif %}</td>
-				<td class="small">{{ d.result or '—' }}</td>
+				<td class="small">{{ d.result or '—' }}
+					{% for w in d.warnings or [] %}<div class="text-danger mt-1">&#9888; {{ w }}{% if d.status == 'planned' %} &mdash; dodging it lets it land on an empty village{% endif %}</div>{% endfor %}</td>
 				<td class="text-right">
 					{% if d.status == 'planned' %}
 					<button class="btn btn-sm btn-outline-secondary" onclick="dodgeCancel('{{ d.id }}', false)">don't dodge</button>
@@ -871,7 +873,8 @@
 			<tbody>
 			{% for r in dodge.tagged %}
 			<tr><td><strong>{{ r.village_name }}</strong> <small class="text-muted">#{{ r.village_id }}</small></td>
-				<td class="small"><code>{{ r.label }}</code></td>
+				<td class="small"><code>{{ r.label }}</code>
+					{% if r.warning %}<div class="text-danger mt-1">&#9888; {{ r.warning }}</div>{% endif %}</td>
 				<td class="small"><span class="ms" data-ms="{{ r.hit_ms }}">…</span></td></tr>
 			{% else %}
 			<tr><td colspan="3" class="text-muted">None.</td></tr>
@@ -1072,6 +1075,12 @@ function voRender() {
 					esc(label.length > 30 ? label.slice(0, 30) + '\u2026' : label) + '</span>'
 				         : '<span class="text-muted">?</span>')
 				: '<span class="text-muted">\u2014</span>';
+			// The name claims a unit the flight time rules out.
+			const warn = (r.attack && c.tag_warning)
+				? ' <span class="badge badge-danger" title="' + esc(c.tag_warning.text) + '">\u26a0 ' +
+				  (c.tag_warning.possible.length === 1 && c.tag_warning.possible[0] === 'snob'
+					? 'noble' : 'wrong tag') + '</span>'
+				: '';
 			// Only an attack can be sniped, and only one that has not landed.
 			const snipe = r.attack
 				? '<button class="btn btn-sm btn-outline-warning py-0" ' +
@@ -1104,7 +1113,7 @@ function voRender() {
 				'<td>' + kind + '</td>' +
 				'<td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
 				'<td class="ms" data-ms="' + (c.arrival_ms || at * 1000) + '"></td>' +
-				'<td>' + looks + '</td>' +
+				'<td>' + looks + warn + '</td>' +
 				'<td><small>' + esc(c.origin_name || '') + ' <span class="coord text-muted">' +
 					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
 				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
