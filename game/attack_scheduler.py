@@ -450,7 +450,8 @@ def launch_wait(arrival, duration, network_lead=NETWORK_LEAD, clock=None, comman
     return server_wait, "aimed on the server clock, rtt %dms" % int(clock.rtt * 1000)
 
 
-def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
+def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None,
+                    keep=None):
     """Open the rally point and run the confirm step, but do NOT launch yet.
 
     Returns (confirm_data, server_duration, error). confirm_data is the ready-to
@@ -472,7 +473,12 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
         splits into, so it is never quietly reduced.
 
     A command that ends up with nothing left to hit with is stopped rather than
-    sent - see the scout-packet check below."""
+    sent - see the scout-packet check below.
+
+    `keep` ({unit: count}) leaves that many of a unit at home out of an "all":
+    the dodge that keeps a small blocker behind for fakes. It comes off the
+    live count read here, never off a snapshot, so what stays is what was
+    asked for."""
     units = dict(units or {})
     want_all = [u for u in units if str(units[u]).strip().lower() == "all"]
     fixed = {}
@@ -518,8 +524,9 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None):
         return None, 0, "no troops at home at all"
 
     resolved, short = {}, []
+    keep = keep or {}
     for u in want_all:
-        at_home = int(home.get(u, 0) or 0)
+        at_home = int(home.get(u, 0) or 0) - max(0, int(keep.get(u, 0) or 0))
         if at_home > 0:
             resolved[u] = at_home
     for u, want in fixed.items():

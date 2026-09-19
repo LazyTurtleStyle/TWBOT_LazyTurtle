@@ -4028,9 +4028,11 @@ class DodgeOverview:
                 if not isinstance(inc, dict):
                     continue
                 hit = dodge_engine._hit_ms(inc)
-                if hit and hit > now_ms and dodge_engine.is_tagged(
-                        inc, settings.get("trigger")):
+                mode = dodge_engine.dodge_mode(inc, settings)
+                if hit and hit > now_ms and mode:
                     v = names.get(str(inc.get("target_id"))) or {}
+                    trigger = settings.get("keep_trigger" if mode == "keep"
+                                           else "trigger")
                     tagged.append({
                         "id": str(inc.get("command_id")),
                         "village_id": str(inc.get("target_id")),
@@ -4039,8 +4041,8 @@ class DodgeOverview:
                         # name and the dashboard tag can differ.
                         "label": next((inc.get(f) for f in ("game_label", "tag")
                                        if dodge_engine.is_tagged(
-                                           {f: inc.get(f)},
-                                           settings.get("trigger"))), ""),
+                                           {f: inc.get(f)}, trigger)), ""),
+                        "mode": mode,
                         "hit_ms": hit,
                         "warning": warnings.get(str(inc.get("command_id"))),
                     })

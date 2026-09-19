@@ -67,7 +67,11 @@
     "dodge_trigger": "DODGE THIS",
     "dodge_leave_before_seconds": 90,
     "dodge_return_after_seconds": 5,
-    "dodge_merge_seconds": 300
+    "dodge_merge_seconds": 300,
+    "dodge_keep_trigger": "DODGE KEEP",
+    "dodge_keep_spear": 100,
+    "dodge_keep_sword": 100,
+    "dodge_keep_spy": 10
   },
   "minting": {
     "enabled": false,

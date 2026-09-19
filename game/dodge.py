@@ -63,7 +63,14 @@ DEFAULTS = {
     "leave_before_seconds": 90,
     "return_after_seconds": 5,
     "merge_seconds": 300,
+    # The second kind: dodge, but keep a small blocker home so fakes hit
+    # something instead of an empty village.
+    "keep_trigger": "DODGE KEEP",
+    "keep_spear": 100,
+    "keep_sword": 100,
+    "keep_spy": 10,
 }
+KEEP_UNITS = ("spear", "sword", "spy")
 
 # The send has to have happened this long before the hit, or it is too late to
 # try: a send takes a few requests, and a dodge that leaves as the attack lands
@@ -105,6 +112,10 @@ CONFIG_KEYS = {
     "leave_before_seconds": "dodge_leave_before_seconds",
     "return_after_seconds": "dodge_return_after_seconds",
     "merge_seconds": "dodge_merge_seconds",
+    "keep_trigger": "dodge_keep_trigger",
+    "keep_spear": "dodge_keep_spear",
+    "keep_sword": "dodge_keep_sword",
+    "keep_spy": "dodge_keep_spy",
 }
 
 
@@ -117,7 +128,9 @@ def settings_from(config):
             out[key] = raw[config_key]
     out["enabled"] = bool(out["enabled"])
     out["trigger"] = str(out["trigger"] or "").strip()
-    for key in ("leave_before_seconds", "return_after_seconds", "merge_seconds"):
+    out["keep_trigger"] = str(out["keep_trigger"] or "").strip()
+    for key in ("leave_before_seconds", "return_after_seconds", "merge_seconds",
+                "keep_spear", "keep_sword", "keep_spy"):
         try:
             out[key] = max(0, int(float(out[key])))
         except (TypeError, ValueError):
@@ -138,6 +151,22 @@ def is_tagged(incoming, trigger):
         if needle in str(incoming.get(field) or "").lower():
             return True
     return False
+
+
+def dodge_mode(incoming, settings):
+    """Which dodge a name asks for: "full" (everything leaves), "keep" (a
+    blocker stays for fakes) or None. A name matching both triggers takes the
+    longer one - it is the more specific, and one trigger may well contain the
+    other ("DODGE" and "DODGE KEEP")."""
+    hits = [(len(settings.get(key) or ""), mode)
+            for key, mode in (("trigger", "full"), ("keep_trigger", "keep"))
+            if is_tagged(incoming, settings.get(key))]
+    return max(hits)[1] if hits else None
+
+
+def keep_units(settings):
+    """The blocker a "keep" dodge leaves home, without the zeros."""
+    return {u: settings["keep_" + u] for u in KEEP_UNITS if settings.get("keep_" + u)}
 
 
 def max_trip_ms(cancel_window_ms):
@@ -180,7 +209,8 @@ def plan(incomings, settings, now_ms, cancel_window_ms, busy_until=None,
 
     by_village = {}
     for inc in incomings:
-        if not is_tagged(inc, settings["trigger"]):
+        mode = dodge_mode(inc, settings)
+        if not mode:
             continue
         hit = _hit_ms(inc)
         vid = inc.get("target_id")
@@ -189,31 +219,37 @@ def plan(incomings, settings, now_ms, cancel_window_ms, busy_until=None,
             continue
         if hit <= busy_until.get(str(vid), 0):
             continue  # the troops are already out for this one
-        by_village.setdefault(str(vid), []).append((hit, cid))
+        by_village.setdefault(str(vid), []).append((hit, cid, mode))
 
     out = []
     for vid, hits in sorted(by_village.items()):
         hits.sort()
         clusters = [[hits[0]]]
-        for hit, cid in hits[1:]:
+        for hit, cid, mode in hits[1:]:
             cur = clusters[-1]
             first = cur[0][0]
             if hit - cur[-1][0] <= split_gap \
                     and hit + ret - (first - lead) <= trip_max:
-                cur.append((hit, cid))
+                cur.append((hit, cid, mode))
             else:
-                clusters.append([(hit, cid)])
+                clusters.append([(hit, cid, mode)])
         busy = busy_until.get(vid, 0)
         for cluster in clusters:
             first, last = cluster[0][0], cluster[-1][0]
             send_at = max(first - lead, busy + TURNAROUND_MS if busy else 0)
+            # A blocker only stays when every hit in the trip asked for one:
+            # a "keep" hit sharing a trip with a full dodge's nuke would leave
+            # the blocker standing in the nuke.
+            keep = keep_units(settings) \
+                if all(m == "keep" for _, _, m in cluster) else None
             entry = {
                 "village_id": vid,
-                "incoming_ids": [cid for _, cid in cluster],
-                "hits_ms": [hit for hit, _ in cluster],
+                "incoming_ids": [cid for _, cid, _ in cluster],
+                "hits_ms": [hit for hit, _, _ in cluster],
                 "send_at_ms": int(send_at),
                 "return_ms": int(last + ret),
                 "status": "planned",
+                "keep": keep,
             }
             if send_at > first - MIN_SEND_BEFORE_HIT_MS:
                 entry["status"] = "skipped"
@@ -493,15 +529,21 @@ def _send(wrapper, clock, entry, path):
         return False
 
     units = {u: "all" for u in attack_scheduler.UNIT_KEYS}
+    keep = entry.get("keep") or None
     for tvid, (tx, ty) in targets[:MAX_TARGET_TRIES]:
         confirm, duration, err = attack_scheduler.prepare_command(
-            wrapper, vid, tx, ty, units, support=True, clock=clock)
+            wrapper, vid, tx, ty, units, support=True, clock=clock, keep=keep)
         if err and "only scouts" in err:
             confirm, duration, err = attack_scheduler.prepare_command(
-                wrapper, vid, tx, ty, {"spy": "all"}, support=True, clock=clock)
+                wrapper, vid, tx, ty, {"spy": "all"}, support=True, clock=clock,
+                keep=keep)
         if err and "no troops at home" in err:
             _finish(did, "done", "nothing at home to dodge with", path=path,
                     notify=False)
+            return False
+        if err and keep and "nothing the command asks for" in err:
+            _finish(did, "done", "only the blocker is home - nothing left to "
+                    "dodge with, it all stays", path=path, notify=False)
             return False
         if err:
             _event(did, "could not prepare the send to %s|%s: %s"
@@ -551,9 +593,11 @@ def _send(wrapper, clock, entry, path):
                return_planned_ms=int(send_low + 2000 * k),
                travel_seconds=int(duration),
                target={"id": tvid, "x": tx, "y": ty})
-        _event(did, "out: everything at home left as support to %s|%s "
+        _event(did, "out: everything at home%s left as support to %s|%s "
                "(%d min walk) - cancel in %ds, back at %s"
-               % (tx, ty, duration // 60, (cancel_at - clock.server_now_ms()) // 1000,
+               % (" except the blocker (%s)" % ", ".join(
+                   "%d %s" % (n, u) for u, n in keep.items()) if keep else "",
+                  tx, ty, duration // 60, (cancel_at - clock.server_now_ms()) // 1000,
                   _clock_text(send_low + 2000 * k)), path=path)
         return True
     _event(did, "none of the nearest villages is far enough away for the "

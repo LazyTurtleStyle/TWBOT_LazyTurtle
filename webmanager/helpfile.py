@@ -47,6 +47,10 @@ help_file = {
     'defence.dodge_trigger': 'The text that marks an incoming attack for dodging: its name only has to contain it, and upper/lower case does not matter. "DODGE THIS" matches "Ram >>>> DODGE THIS <<<<" (the unit in front is only the speed tag); use your own words or language, e.g. "dit ontwijken", and only names containing those are dodged.',
     'defence.dodge_leave_before_seconds': 'How long before the first tagged attack lands the troops leave. Shorter keeps them home longer, but leaves less time to retry if a send fails. Minimum 30.',
     'defence.dodge_return_after_seconds': 'How long after the last tagged attack lands the troops are back home.',
+    'defence.dodge_keep_trigger': 'A second trigger: attacks whose name contains this are dodged too, but a small blocker stays home (the three numbers below) so fakes hit something instead of an empty village. If one trip also covers a plain dodge, everything leaves - a blocker left for a nuke only dies. A name matching both triggers uses the longer one.',
+    'defence.dodge_keep_spear': 'Spears the keep-a-blocker dodge leaves home. Fewer at home than this means all of them stay.',
+    'defence.dodge_keep_sword': 'Swords the keep-a-blocker dodge leaves home.',
+    'defence.dodge_keep_spy': 'Scouts the keep-a-blocker dodge leaves home, so fake scouting runs are stopped too.',
     'defence.dodge_merge_seconds': 'Tagged attacks on the same village landing at most this far apart are dodged in one trip: out before the first, back after the last. One trip can last at most about twice the world\'s cancel time.',
     'minting': 'Coin minting: keep one village stocked so it can mint gold coins without you carrying resources by hand. See the Minting page.',
     'minting.enabled': 'Let the bot top up the coin village. Off by default; it only ever requests resources - it never mints, never switches on auto-minting and never touches a flag.',
@@ -369,6 +373,8 @@ config_groups = {
     'defence': [
         ('Dodge (alpha)', ['dodge', 'dodge_trigger', 'dodge_leave_before_seconds',
                            'dodge_return_after_seconds', 'dodge_merge_seconds']),
+        ('Dodge, keep a blocker (alpha)', ['dodge_keep_trigger', 'dodge_keep_spear',
+                                          'dodge_keep_sword', 'dodge_keep_spy']),
     ],
     'flags': [
         ('On/off', ['manage', 'auto_assign']),

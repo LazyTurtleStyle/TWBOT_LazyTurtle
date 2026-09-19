@@ -780,6 +780,8 @@
 	within {{ ds.merge_seconds // 60 }} min of each other are dodged in one trip. One trip lasts at most
 	{{ dodge.trip_max_min }} min on this world (commands can only be cancelled for
 	{{ dodge.cancel_seconds // 60 }} min), so a longer run of attacks gets several trips.
+	Names containing <code>{{ ds.keep_trigger or '—' }}</code> dodge the same way but leave a blocker home for
+	fakes ({{ ds.keep_spear }} spear, {{ ds.keep_sword }} sword, {{ ds.keep_spy }} scouts).
 	A cancel that fails leaves the troops as support in your own village: alive, just not home.
 	In-game renames are seen when the incoming poller next runs (every few minutes), so tag early
 	or tag here.</p>
@@ -815,6 +817,22 @@
 				<label class="small mb-0">One trip if within (s)</label>
 				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_merge_seconds" value="{{ ds.merge_seconds }}"></div>
 		</div>
+		<div class="form-row">
+			<div class="col-12 small text-muted mb-1">Dodge but <strong>keep a blocker</strong> home for fakes: names
+				containing this text dodge everything except the units below. A name matching both triggers uses the longer one.</div>
+			<div class="col-6 col-md-4 mb-2">
+				<label class="small mb-0">Keep-a-blocker trigger text</label>
+				<input class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_trigger" value="{{ ds.keep_trigger }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep spear</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_spear" value="{{ ds.keep_spear }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep sword</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_sword" value="{{ ds.keep_sword }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep scouts</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_spy" value="{{ ds.keep_spy }}"></div>
+		</div>
 	</div>
 </div>
 
@@ -833,6 +851,7 @@
 							'skipped': 'danger', 'cancelled': 'secondary'} %}
 			<tr>
 				<td><span class="badge badge-{{ badge.get(d.status, 'dark') }}">{{ d.status }}</span>
+					{% if d.keep %}<span class="badge badge-dark d-block mt-1" title="a blocker stays home for fakes">keeps {% for u, n in d.keep.items() %}{{ n }} {{ u }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
 					{% if d.events %}
 					<details class="mt-1"><summary class="small text-muted">log</summary>
 						<div class="snipe-log text-muted">{{ d.events|join('\n') }}</div>
@@ -874,6 +893,7 @@
 			{% for r in dodge.tagged %}
 			<tr><td><strong>{{ r.village_name }}</strong> <small class="text-muted">#{{ r.village_id }}</small></td>
 				<td class="small"><code>{{ r.label }}</code>
+					<span class="badge badge-{{ 'dark' if r.mode == 'keep' else 'secondary' }}">{{ 'dodge, keep blocker' if r.mode == 'keep' else 'dodge all' }}</span>
 					{% if r.warning %}<div class="text-danger mt-1">&#9888; {{ r.warning }}</div>{% endif %}</td>
 				<td class="small"><span class="ms" data-ms="{{ r.hit_ms }}">…</span></td></tr>
 			{% else %}
