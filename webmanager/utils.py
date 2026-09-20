@@ -1288,6 +1288,14 @@ class DataReader:
             return None
         return dodge_engine.cancel(str(dodge_id), path=DataReader.dodge_path())
 
+    @staticmethod
+    def dodge_restore(dodge_id):
+        """Take a cancel back: the dodge is planned again from the attack names
+        as they stand when the bot next replans (within seconds)."""
+        if dodge_engine is None:
+            return None
+        return dodge_engine.restore(str(dodge_id), path=DataReader.dodge_path())
+
     SNIPE_REL = ("cache", "snipes.json")
 
     @staticmethod
@@ -4057,6 +4065,10 @@ class DodgeOverview:
             row["warnings"] = [warnings[i] for i in d.get("incoming_ids") or []
                                if i in warnings] or list(d.get("warnings") or [])
             row["coords"] = v.get("coords")
+            # Cancelled, but its attacks have not all landed: the page offers
+            # it back (the bot plans it again, game/dodge.py restore()).
+            row["can_restore"] = bool(dodge_engine) \
+                and dodge_engine.restorable(d, now_ms)
             dodges.append(row)
         active = [d for d in dodges if d.get("status") in ("planned", "out")]
         past = [d for d in dodges if d.get("status") not in ("planned", "out")]

@@ -364,8 +364,9 @@ def _finish(dodge_id, status, result, path=None, notify=True, **fields):
 
 def cancel(dodge_id, path=None):
     """The dashboard's cancel button. A planned dodge is dropped (and its
-    attacks are not planned again); one that is out is brought home now -
-    which may be before the hit, and the page says so."""
+    attacks are not planned again, until restore() takes the entry back); one
+    that is out is brought home now - which may be before the hit, and the
+    page says so."""
     def mut(entries):
         for e in entries:
             if e.get("id") != dodge_id:
@@ -378,6 +379,42 @@ def cancel(dodge_id, path=None):
             if e.get("status") == "out":
                 e["recall_now"] = True
                 return "recall_requested"
+        return None
+    return _update(mut, path)
+
+
+def restorable(entry, now_ms=None):
+    """Can this cancelled dodge still be planned again?
+
+    A cancel is not an undo button by itself: the entry stays in the queue and
+    keeps its attacks on replan's covered list, so nothing is dodged again
+    until the entry is gone. It is only worth taking back while at least one of
+    its attacks has not landed yet, with enough left of it to get the troops
+    out (MIN_SEND_BEFORE_HIT_MS) - once they have all hit there is nothing to
+    dodge, and the row stays as the record of what happened."""
+    if entry.get("status") != "cancelled":
+        return False
+    hits = [h for h in entry.get("hits_ms") or [] if h]
+    now = time.time() * 1000 if now_ms is None else now_ms
+    return bool(hits) and max(hits) > now + MIN_SEND_BEFORE_HIT_MS
+
+
+def restore(dodge_id, path=None):
+    """Undo a cancel: drop the cancelled entry so its attacks are free again.
+
+    Nothing is planned here. The entry simply stops covering its attacks, and
+    the runner's next replan (REPLAN_SECONDS) builds the dodge from the names
+    as they stand at that moment - an attack renamed or recalled meanwhile is
+    not dodged, and one that has landed is left out. Returns "restored", or
+    None when the id is unknown or too late to be worth planning again."""
+    def mut(entries):
+        for i, e in enumerate(entries):
+            if e.get("id") != dodge_id:
+                continue
+            if not restorable(e):
+                return None
+            del entries[i]
+            return "restored"
         return None
     return _update(mut, path)
 

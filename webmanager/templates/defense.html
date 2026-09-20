@@ -788,7 +788,10 @@
 	take the trigger out of the name and nothing leaves &mdash; the dodge ends as
 	<span class="badge badge-secondary">untagged</span> and the village blocks. Putting the trigger back
 	arms it again, but only from the next poll (every few minutes), so a late <em>new</em> tag can be
-	too late: tag early, or tag here.</p>
+	too late: tag early, or tag here.
+	A <strong>don't dodge</strong> here is not forever either: while the attack is still on its way the
+	row keeps a <strong>dodge after all</strong> button, which plans the dodge again from the names as
+	they stand &mdash; for when what looked like a wall of fakes turns out to carry real clears.</p>
 
 {% if not ds.enabled and dodge.tagged %}
 <div class="alert alert-warning py-2 small">Dodging is <strong>off</strong>, and {{ dodge.tagged|length }}
@@ -875,6 +878,12 @@
 					<button class="btn btn-sm btn-outline-secondary" onclick="dodgeCancel('{{ d.id }}', false)">don't dodge</button>
 					{% elif d.status == 'out' %}
 					<button class="btn btn-sm btn-outline-danger" onclick="dodgeCancel('{{ d.id }}', true)">bring home now</button>
+					{% elif d.can_restore and ds.enabled %}
+					<button class="btn btn-sm btn-outline-info" id="dg-undo-{{ d.id }}"
+						title="plan this dodge again from the attack names as they stand now"
+						onclick="dodgeRestore('{{ d.id }}')">dodge after all</button>
+					{% elif d.can_restore %}
+					<small class="text-muted">switch dodging on to plan it again</small>
 					{% endif %}
 				</td>
 			</tr>
@@ -1753,6 +1762,27 @@ document.querySelectorAll('.dg-set').forEach(function(el) {
 			});
 	});
 });
+// The bot replans every 10s (REPLAN_SECONDS in game/dodge.py) and the dodge
+// only comes back with it, so the row is empty for a moment: say so, and
+// reload once it is there rather than showing a gap.
+function dodgeRestore(id) {
+	const btn = document.getElementById('dg-undo-' + id);
+	fetch('/app/dodge/restore?id=' + encodeURIComponent(id))
+		.then(r => r.json()).then(function(res) {
+			if (!res.ok) {
+				alert('Too late for that one - its attacks have landed. ' +
+					'Tag a later attack to dodge that instead.');
+				return;
+			}
+			if (btn) {
+				btn.disabled = true;
+				btn.textContent = 'planning again…';
+			}
+			location.hash = '#dodge';
+			setTimeout(function() { location.reload(); }, 12000);
+		});
+}
+
 function dodgeCancel(id, out) {
 	if (out && !confirm('Bring the troops home now? If the attack has not landed yet, they may walk back into it.'))
 		return;
