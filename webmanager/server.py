@@ -899,6 +899,15 @@ def dodge_cancel():
     return jsonify({"ok": bool(state), "state": state})
 
 
+@app.route('/app/dodge/restore', methods=['GET', 'POST'])
+def dodge_restore():
+    """Take back a cancelled dodge: it is planned again from the attack names
+    as they stand, as long as one of its attacks is still on its way."""
+    did = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.dodge_restore(did)
+    return jsonify({"ok": bool(state), "state": state})
+
+
 @app.route('/app/snipe/arm', methods=['POST'])
 def snipe_arm():
     """Arm one support-snipe per selected option. Expects JSON: incoming_id,
