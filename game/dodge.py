@@ -731,8 +731,15 @@ def _send(wrapper, clock, entry, settings, path):
 def _cancel(wrapper, clock, entry, path):
     did = entry["id"]
     recall = bool(entry.get("recall_now"))
-    if not recall:
+    if not recall and clock.offset_ms is not None:
         clock.sleep_until(int(entry["cancel_at_ms"]), lead=False)
+    elif not recall:
+        # No server clock to wait by (the sync above failed too). The runner
+        # only gets here once the moment is due by the host clock, and a cancel
+        # a second early costs a couple of seconds of the trip - a cancel that
+        # never fires costs the troops a walk to the far end of the map.
+        _event(did, "cancelling on the host clock: the server clock could "
+               "not be read", path=path)
     res = wrapper.get_url(entry["cancel_url"])
     if res is None:
         res = wrapper.get_url(entry["cancel_url"])
@@ -816,6 +823,23 @@ class Runner:
         outs = [e for e in entries if e.get("status") == "out"]
         for e in sorted(outs, key=lambda e: e.get("cancel_at_ms", 0)):
             if e.get("recall_now") or e.get("cancel_at_ms", 0) <= now + 1500:
+                # A dodge that was out when the bot restarted meets a runner
+                # whose clock has never been read - the sync belongs to the
+                # send, and this dodge was sent by the process before. Read it
+                # here too, or the cancel cannot be timed at all.
+                if self.clock.offset_ms is None:
+                    try:
+                        self.clock.sync(
+                            self.wrapper, "game.php?village=%s&screen=overview"
+                            % e["village_id"])
+                    except Exception as exc:
+                        logger.debug("clock sync before cancel failed: %s", exc)
+                    if self.clock.offset_ms is None:
+                        # Keep trying: the cancel is due for minutes, and the
+                        # troops only come home if it goes out at all.
+                        _event(e["id"], "could not read the server clock - "
+                               "trying the cancel again", path=path)
+                        return 1.0
                 try:
                     _cancel(self.wrapper, self.clock, e, path)
                 except Exception as exc:
