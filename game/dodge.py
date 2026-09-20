@@ -664,9 +664,16 @@ def _send(wrapper, clock, entry, settings, path):
             _finish(did, "done", "nothing at home to dodge with", path=path,
                     notify=False)
             return False
-        if err and keep and "nothing the command asks for" in err:
-            _finish(did, "done", "only the blocker is home - nothing left to "
-                    "dodge with, it all stays", path=path, notify=False)
+        if err and "nothing the command asks for" in err:
+            # Nothing sendable is standing here. With a blocker configured that
+            # is the blocker holding everything back; without one it is a unit
+            # the dodge cannot move anyway (militia). Either way the troops are
+            # not going anywhere, so retrying only spends rally-point requests
+            # on a village that has nothing to give.
+            _finish(did, "done",
+                    "only the blocker is home - nothing left to dodge with, "
+                    "it all stays" if keep else "nothing at home to dodge with",
+                    path=path, notify=False)
             return False
         if err:
             _event(did, "could not prepare the send to %s|%s: %s"

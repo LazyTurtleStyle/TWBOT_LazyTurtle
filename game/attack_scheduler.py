@@ -508,15 +508,20 @@ def prepare_command(wrapper, origin_id, x, y, units, support=False, clock=None,
     # only the ones that said "all": a fixed count the village cannot cover
     # would otherwise have the game refuse the command whole.
     home = Extractor.units_in_place(pre)
-    if not home:
-        # An empty reading is ambiguous on its own: the (N) "select all"
-        # links are only rendered for units that actually have troops
-        # standing at home, so a village with nothing home reads exactly
-        # like a page that was never the send form (a dropped session, bot
-        # protection, a redirect). The unit inputs themselves are always
-        # rendered, so they tell the two apart - and they are worth telling
-        # apart, because one of them means retrying is pointless and the
-        # other means the session needs looking at.
+    if not any(int(n or 0) > 0 for n in home.values()):
+        # An empty village and a page that was never the send form (a dropped
+        # session, bot protection, a redirect) both read as nothing available
+        # here, and they are worth telling apart: one means retrying is
+        # pointless, the other means the session needs looking at. The unit
+        # inputs themselves are always rendered, so they decide it.
+        #
+        # Both shapes of "nothing available" have to be caught. The rally
+        # point renders the (N) "select all" link as "(0)" for units with
+        # none at home, so an empty village comes back as a full dict of
+        # zeros, not as no entries at all - reading only `if not home` let
+        # that fall through to the per-unit reconciliation below and report
+        # an empty village as "nothing the command asks for is at home",
+        # which callers cannot tell from troops they failed to move.
         form = {name for name, _ in Extractor.attack_form(pre)}
         if not form.intersection(UNIT_KEYS):
             return None, 0, ("the rally point did not return a send form - "
