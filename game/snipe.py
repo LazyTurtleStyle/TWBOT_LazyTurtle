@@ -44,6 +44,52 @@ PRESTAGE_SECONDS = 90
 DEFAULT_MIN_PCT = 80
 DEFAULT_OFFSET_MS = -100
 
+
+def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
+    """Whether a fired snipe is kept, and if not, why. Pure.
+
+    The limit is measured from the aim (land_ms), but the hit is a wall: the
+    support has to land on the same side of it as the aim. Aimed before the
+    hit, a landing at or after it is a miss however close - support that
+    arrives 2ms after the nuke defended nothing, and the old two-sided
+    "within N ms of the aim" kept exactly that as a hit. Aimed after the hit
+    on purpose (a positive offset, e.g. behind a clearing nuke), a landing at
+    or before it is the miss. limit_ms 0 keeps everything, as it always has.
+    hit_ms None (a snipe armed before the hit was recorded, whose incoming is
+    no longer cached) falls back to the aim-only check.
+
+    Returns (keep, reason)."""
+    if not limit_ms or limit_ms <= 0:
+        return True, None
+    delta = arrival_ms - land_ms
+    if abs(delta) > limit_ms:
+        return False, "landed %+dms, outside the %dms limit" % (delta, limit_ms)
+    if hit_ms is None:
+        return True, None
+    after = arrival_ms - hit_ms
+    if land_ms <= hit_ms:
+        if after >= 0:
+            return False, ("landed %+dms vs the aim - %s the hit it was meant "
+                           "to beat" % (delta, "ON" if after == 0
+                                        else "%dms AFTER" % after))
+    elif after <= 0:
+        return False, ("landed %+dms vs the aim - %dms BEFORE the hit it was "
+                       "meant to follow" % (delta, -after))
+    return True, None
+
+
+def _hit_of(snipe):
+    """The attack's landing ms the snipe was armed against: stored at arming
+    since this change, otherwise read from the incoming it was armed from."""
+    if snipe.get("hit_ms"):
+        return int(snipe["hit_ms"])
+    inc = FileManager.load_json_file(
+        "cache/incomings/%s.json" % snipe.get("incoming_id")) \
+        if snipe.get("incoming_id") else None
+    if isinstance(inc, dict) and inc.get("arrival_ms"):
+        return int(inc["arrival_ms"])
+    return None
+
 logger = logging.getLogger("Snipe")
 
 
@@ -221,21 +267,19 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
             limit = int(limit) if limit not in (None, "") else 0
         except (TypeError, ValueError):
             limit = 0
-        if limit > 0 and abs(delta) > limit:
+        keep, why = keep_verdict(arrival_ms, land_ms, _hit_of(snipe), limit)
+        if not keep:
             recalled = False
             if cancel_url:
                 recalled = wrapper.get_url(cancel_url) is not None
             if recalled:
-                return _finish(sid, "missed",
-                               "landed %+dms, outside the %dms limit - "
-                               "recalled" % (delta, limit), path=path,
+                return _finish(sid, "missed", "%s - recalled" % why, path=path,
                                outgoing_id=command_id,
                                arrival_actual_ms=int(arrival_ms),
                                delta_ms=int(delta))
             return _finish(sid, "done",
-                           "landed %+dms, outside the %dms limit, but it could "
-                           "NOT be recalled - the troops are on their way"
-                           % (delta, limit), path=path,
+                           "%s, but it could NOT be recalled - the troops are "
+                           "on their way" % why, path=path,
                            outgoing_id=command_id,
                            arrival_actual_ms=int(arrival_ms),
                            delta_ms=int(delta))

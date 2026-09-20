@@ -24,7 +24,7 @@ You will reach the point where other players can attack you.
 They might think your village is an easy target but with the right parameters set you will have a very good army.
 
 Whenever an incoming attack is detected the bot will stop the farming process and automatically set the highest "defence bonus" flag.
-Valuable (or crappy defensive) units will be evacuated whenever you have more then one village.
+Attacks you tag with the dodge trigger (default `DODGE THIS`) are dodged: everything at home leaves just before the hit and comes back seconds after it. See the Dodge tab on the Defense page.
 
 If the bot also has the "manage_defence" option enabled it will send defensive units as support.
 This part can be configured per village

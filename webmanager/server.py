@@ -8,17 +8,20 @@ from flask import Flask, jsonify, request, render_template, redirect, Response
 
 try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
-                                     section_setup, unit_building, unit_list)
+                                     section_setup, unit_building, unit_list,
+                                     retired_settings)
     from webmanager.utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                                   UnitTemplateManager, OverviewBuilder, AttackPlanner,
                                   DefenseOverview, CSnipeOverview, SnipeOverview,
+                                  DodgeOverview,
                                   PlayerFarmOverview, PlanImport,
                                   AccountManagerOverview, EventOverview,
                                   MintingOverview, FlagsOverview,
                                   BalancerOverview, ReportAnalysisOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
-                          section_setup, unit_building, unit_list)
+                          section_setup, unit_building, unit_list,
+                          retired_settings)
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
                        AccountManagerOverview, EventOverview, MintingOverview,
@@ -364,6 +367,8 @@ def render_grouped(group_key, ctrl_prefix, fields, village_id=None):
     """Render a config section's fields as grouped cards (helpfile.config_groups)."""
     rows = {}
     for parameter, value in fields.items():
+        if parameter in retired_settings:
+            continue
         kvp = '%s.%s' % (ctrl_prefix, parameter)
         rows[parameter] = setting_row(kvp, control_for(kvp, value, village_id))
 
@@ -776,7 +781,8 @@ def defense_page():
     return render_template('defense.html', data=data,
                            defense=DefenseOverview.build(data),
                            csnipe=CSnipeOverview.build(data),
-                           snipe=SnipeOverview.build(data))
+                           snipe=SnipeOverview.build(data),
+                           dodge=DodgeOverview.build(data))
 
 
 @app.route('/app/csnipe/arm', methods=['POST'])
@@ -885,11 +891,20 @@ def csnipe_cancel():
     return jsonify({"ok": bool(state), "state": state})
 
 
+@app.route('/app/dodge/cancel', methods=['GET', 'POST'])
+def dodge_cancel():
+    """Drop a planned dodge, or bring the troops of one that is out home now."""
+    did = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    state = DataReader.dodge_cancel(did)
+    return jsonify({"ok": bool(state), "state": state})
+
+
 @app.route('/app/snipe/arm', methods=['POST'])
 def snipe_arm():
     """Arm one support-snipe per selected option. Expects JSON: incoming_id,
     target_village_id, land_ms (epoch ms the support must land), options
-    [{village_id, pace_unit, units {unit: count}}], shortfall, min_pct, boost."""
+    [{village_id, pace_unit, units {unit: count}}], shortfall, min_pct, boost,
+    max_delta_ms, hit_ms (epoch ms the attack itself lands)."""
     body = request.get_json(silent=True) or {}
     armed, errors = DataReader.snipe_arm_batch(
         incoming_id=body.get("incoming_id"),
@@ -900,6 +915,7 @@ def snipe_arm():
         min_pct=body.get("min_pct"),
         boost=body.get("boost"),
         max_delta_ms=body.get("max_delta_ms"),
+        hit_ms=body.get("hit_ms"),
     )
     return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
 
@@ -1429,6 +1445,7 @@ QUICK_TOGGLES = {
     # which is exactly the kind of thing worth handing over with one click.
     "event": ("Play the event", "events.auto_play"),
     "mint": ("Feed the coin village", "minting.enabled"),
+    "dodge": ("Dodge tagged attacks", "defence.dodge"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global

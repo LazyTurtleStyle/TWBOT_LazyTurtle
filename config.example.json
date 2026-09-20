@@ -62,6 +62,17 @@
     "research": false,
     "auto_setup": false
   },
+  "defence": {
+    "dodge": false,
+    "dodge_trigger": "DODGE THIS",
+    "dodge_leave_before_seconds": 90,
+    "dodge_return_after_seconds": 5,
+    "dodge_merge_seconds": 300,
+    "dodge_keep_trigger": "DODGE KEEP",
+    "dodge_keep_spear": 100,
+    "dodge_keep_sword": 100,
+    "dodge_keep_spy": 10
+  },
   "minting": {
     "enabled": false,
     "village": "",
@@ -119,7 +130,6 @@
     "scavenge_unlock_hq_3": 8,
     "scavenge_unlock_hq_4": 15,
     "snobs": 0,
-    "evacuate_fragile_units_on_attack": false,
     "support_others": false,
     "support_others_factor": 0.25,
     "support_others_max_villages": 2,

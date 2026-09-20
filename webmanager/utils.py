@@ -51,6 +51,11 @@ except Exception:  # pragma: no cover - dashboard still works without live reads
     read_home_troops = None
 
 try:
+    from game import dodge as dodge_engine
+except Exception:  # pragma: no cover - dashboard still works without it
+    dodge_engine = None
+
+try:
     from game import villagenotes
 except Exception:  # pragma: no cover - dashboard still works without notes
     villagenotes = None
@@ -73,6 +78,7 @@ except Exception:  # pragma: no cover - dashboard still works without it
 try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
+        tag_check, exact_distance,
         incoming_session_state, field_distance, unit_travel_seconds,
         DEFAULT_UNIT_SPEEDS, UNIT_ORDER,
     )
@@ -81,6 +87,8 @@ except Exception:  # pragma: no cover - dashboard still works without travel tim
     travel_table = None
     slowest_floor = None
     rename_command_ingame = None
+    tag_check = None
+    exact_distance = None
     incoming_session_state = None
     field_distance = None
     unit_travel_seconds = None
@@ -1186,6 +1194,13 @@ class DataReader:
             return None, "no units selected"
 
         return_ms = first_hit_ms + aim_ms
+        # Home BEFORE the hit: the late side is now the fatal one, and the
+        # one-shot mode is only late-safe, so a deadline short of the hit is
+        # required - the engine re-fires until inside it, or brings the troops
+        # home early (see csnipe.execute).
+        if aim_ms < 0 and (not window_ms or aim_ms + window_ms >= 0):
+            return None, ("coming home before the hit needs a \"no later than\" "
+                          "below 0, so the return can never drift past the hit")
         now = time.time()
         if return_ms / 1000.0 - now < 120:
             return None, "too late - the return moment is under 2 minutes away"
@@ -1251,6 +1266,27 @@ class DataReader:
         if csnipe is None:
             return None
         return csnipe.disarm(str(snipe_id), path=DataReader.csnipe_path())
+
+    DODGE_REL = ("cache", "dodges.json")
+
+    @staticmethod
+    def dodge_path():
+        """World-aware path of the dodge plan the bot reads/writes."""
+        return DataReader.data_path(*DataReader.DODGE_REL)
+
+    @staticmethod
+    def dodge_grab():
+        """World-aware read of the dodge plan. Always returns a list."""
+        if dodge_engine is None:
+            return []
+        return dodge_engine.load_dodges(path=DataReader.dodge_path())
+
+    @staticmethod
+    def dodge_cancel(dodge_id):
+        """Drop a planned dodge, or bring one that is out home now."""
+        if dodge_engine is None:
+            return None
+        return dodge_engine.cancel(str(dodge_id), path=DataReader.dodge_path())
 
     SNIPE_REL = ("cache", "snipes.json")
 
@@ -1514,7 +1550,7 @@ class DataReader:
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
-                        shortfall, min_pct, boost, max_delta_ms=0):
+                        shortfall, min_pct, boost, max_delta_ms=0, hit_ms=None):
         """Arm one snipe per selected option: each sends `units` as support
         from its own village so they land at land_ms (epoch milliseconds) in
         the target village. Returns (armed_entries, per_option_errors)."""
@@ -1550,6 +1586,12 @@ class DataReader:
             max_delta_ms = max(0, int(float(max_delta_ms or 0)))
         except (TypeError, ValueError):
             max_delta_ms = 0
+        # The attack's own landing ms: the limit never keeps a snipe that lands
+        # on the wrong side of it (see snipe.keep_verdict).
+        try:
+            hit_ms = int(float(hit_ms)) if hit_ms not in (None, "") else None
+        except (TypeError, ValueError):
+            hit_ms = None
         if boost <= 0:
             boost = 1.0
         now = time.time()
@@ -1613,6 +1655,7 @@ class DataReader:
                 "shortfall": shortfall,
                 "min_pct": min_pct,
                 "max_delta_ms": max_delta_ms,
+                "hit_ms": hit_ms,
                 "distance": round(field_distance(oloc, tloc), 1),
                 "travel_est": int(travel),
                 "send_est_ts": int(send_est),
@@ -2918,6 +2961,7 @@ class OverviewBuilder:
 
             units = []
             tag_auto = None
+            tag_warning = None
             if speeds and distance and arrival and slowest_floor:
                 table = travel_table(distance, speeds, world_speed, unit_speed)
                 # The attack has been in the air at least (arrival - first_seen),
@@ -2925,6 +2969,19 @@ class OverviewBuilder:
                 # fastest unit still consistent with that - the tightest estimate.
                 remaining_detect = arrival - first_seen
                 tag_auto = slowest_floor(table, remaining_detect)
+                # A name that claims a unit the flight time rules out - the
+                # "Ram" that can only be a noble. Checked on the in-game name
+                # first, then on the dashboard tag.
+                if tag_check:
+                    # Exact distance: the cached one is rounded (see
+                    # incomings.exact_distance).
+                    exact = travel_table(exact_distance(entry) or distance,
+                                         speeds, world_speed, unit_speed)
+                    for field in ("game_label", "tag"):
+                        tag_warning = tag_check(entry.get(field),
+                                                remaining_detect, exact)
+                        if tag_warning:
+                            break
                 for unit in UNIT_ORDER:
                     if unit not in table:
                         continue
@@ -2954,6 +3011,7 @@ class OverviewBuilder:
                 "game_label": entry.get("game_label"),
                 "tag": entry.get("tag"),
                 "tag_auto": tag_auto,
+                "tag_warning": tag_warning,
                 "units": units,
                 "enemy_points": enemy.get("points"),
                 "enemy_tribe": enemy.get("tribe"),
@@ -3785,6 +3843,7 @@ def live_incomings(managed, village_db):
                 "arrival_ms": c.get("arrival_ms"),
                 "eta": c.get("eta"),
                 "tag": c.get("tag") or c.get("game_label") or c.get("tag_auto"),
+                "tag_warning": c.get("tag_warning"),
             })
     incomings.sort(key=OverviewBuilder._arrival_key)
     return incomings
@@ -3934,6 +3993,89 @@ class CSnipeOverview:
             # instead of presenting a reading from ten minutes ago as fact.
             "home_age": reading_age,
             "now": now,
+        }
+
+
+class DodgeOverview:
+    """View-model for the Defense page's Dodge tab: the switch and timings,
+    which incoming attacks carry the trigger right now, and every dodge the
+    bot has planned, sent or finished (game/dodge.py does the work)."""
+
+    @classmethod
+    def build(cls, data):
+        config = DataReader.config_grab() or {}
+        settings = dodge_engine.settings_from(config) if dodge_engine else {}
+        managed = data.get("bot", {}) or {}
+        names = {}
+        for vid, vdata in managed.items():
+            pub = vdata.get("public", {}) or {}
+            names[str(vid)] = {"name": vdata.get("name") or pub.get("name") or vid,
+                               "coords": pub.get("location")}
+        now_ms = int(time.time() * 1000)
+
+        # Which tagged attacks carry a name the flight time rules out, by
+        # command id - the same check the Overview shows (tag_check).
+        warnings = {}
+        for cmds in OverviewBuilder._build_incomings(
+                data.get("villages", {}) or {}).values():
+            for c in cmds:
+                if c.get("tag_warning"):
+                    warnings[str(c.get("command_id"))] = c["tag_warning"]["text"]
+
+        tagged = []
+        if dodge_engine:
+            for inc in (DataReader.cache_grab("incomings") or {}).values():
+                if not isinstance(inc, dict):
+                    continue
+                hit = dodge_engine._hit_ms(inc)
+                mode = dodge_engine.dodge_mode(inc, settings)
+                if hit and hit > now_ms and mode:
+                    v = names.get(str(inc.get("target_id"))) or {}
+                    trigger = settings.get("keep_trigger" if mode == "keep"
+                                           else "trigger")
+                    tagged.append({
+                        "id": str(inc.get("command_id")),
+                        "village_id": str(inc.get("target_id")),
+                        "village_name": v.get("name") or inc.get("target_id"),
+                        # Whichever name carries the trigger - the in-game
+                        # name and the dashboard tag can differ.
+                        "label": next((inc.get(f) for f in ("game_label", "tag")
+                                       if dodge_engine.is_tagged(
+                                           {f: inc.get(f)}, trigger)), ""),
+                        "mode": mode,
+                        "hit_ms": hit,
+                        "warning": warnings.get(str(inc.get("command_id"))),
+                    })
+        tagged.sort(key=lambda r: r["hit_ms"])
+
+        dodges = []
+        for d in DataReader.dodge_grab():
+            row = dict(d)
+            v = names.get(str(d.get("village_id"))) or {}
+            row["village_name"] = v.get("name") or d.get("village_id")
+            # Live for dodges still to come; the bot's note for finished ones.
+            row["warnings"] = [warnings[i] for i in d.get("incoming_ids") or []
+                               if i in warnings] or list(d.get("warnings") or [])
+            row["coords"] = v.get("coords")
+            dodges.append(row)
+        active = [d for d in dodges if d.get("status") in ("planned", "out")]
+        past = [d for d in dodges if d.get("status") not in ("planned", "out")]
+        active.sort(key=lambda d: d.get("send_at_ms") or 0)
+        past.sort(key=lambda d: d.get("finished") or d.get("created") or 0,
+                  reverse=True)
+
+        world_cfg = (DataReader.cache_grab("world") or {}).get("config") or {}
+        cancel_seconds = int(world_cfg.get("command_cancel_time") or 600)
+        trip_max = dodge_engine.max_trip_ms(cancel_seconds * 1000) \
+            if dodge_engine else 0
+        return {
+            "settings": settings,
+            "tagged": tagged,
+            "dodges": active + past[:40],
+            "active_count": len(active),
+            "out_count": sum(1 for d in active if d.get("status") == "out"),
+            "cancel_seconds": cancel_seconds,
+            "trip_max_min": trip_max // 60000,
         }
 
 

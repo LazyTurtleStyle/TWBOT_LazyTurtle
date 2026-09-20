@@ -209,9 +209,6 @@ class Village:
         self.def_man.allow_support_recv = self.get_village_config(
             self.village_id, parameter="request_support_on_attack", default=False
         )
-        self.def_man.auto_evacuate = self.get_village_config(
-            self.village_id, parameter="evacuate_fragile_units_on_attack", default=False
-        )
         self.def_man.update(
             data.text,
             with_defence=self.get_config(
@@ -1112,12 +1109,6 @@ class Village:
                 "Village %s: skipping the rest of this pass, no game state",
                 self.village_id)
             return
-        # Dodge the fragile units now that the troop counts are fresh. This is
-        # deliberately independent of the global units.manage_defence switch:
-        # the per-village toggle alone decides.
-        if self.def_man and self.def_man.under_attack and self.def_man.auto_evacuate:
-            if self.def_man.evacuate():
-                self.units.update_totals()
         self.run_unit_upgrades()
         self.run_snob_recruit()
         self.do_recruit()

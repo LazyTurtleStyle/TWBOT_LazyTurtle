@@ -125,6 +125,9 @@
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
+	<li class="nav-item"><a class="nav-link" href="#dodge" data-pane="dodge">Dodge
+		<span class="badge badge-warning">alpha</span>
+		{% if dodge.active_count %}<span class="badge badge-{{ 'danger' if dodge.out_count else 'info' }}">{{ dodge.active_count }}</span>{% endif %}</a></li>
 </ul>
 
 <div id="pane-overview">
@@ -222,6 +225,7 @@
 							<div class="inc-row">
 								<span class="def-eta" data-arrival="{{ (defense.now or 0) + c.eta }}">…</span>
 								{% if c.game_label %}<span class="badge badge-secondary" title="{{ c.game_label }}">{{ c.game_label|truncate(22, True, '…') }}</span>{% endif %}
+								{% if c.tag_warning %}<span class="badge badge-danger" title="{{ c.tag_warning.text }}">&#9888; {{ 'noble' if c.tag_warning.possible == ['snob'] else 'wrong tag' }}</span>{% endif %}
 								<span class="text-muted inc-player">{{ c.player_name }}</span>
 								<span class="tag-cell">
 									<input id="vtag-{{ c.command_id }}" class="form-control form-control-sm"
@@ -388,13 +392,13 @@
 					oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
-				<label>Land +ms after it</label>
-				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="1" max="5000"
+				<label>Land ms vs it <small class="text-muted">(&lt;0 = before)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cs-aim-ms" min="-5000" max="5000"
 					value="{{ csnipe.default_aim_ms }}" oninput="csnipeReturnNote()">
 			</div>
 			<div class="form-group col-6 col-md-2">
-				<label>No later than +ms <small class="text-muted">(alpha)</small></label>
-				<input type="number" class="form-control form-control-sm" id="cs-latest-ms" min="2" max="5000"
+				<label>No later than ms <small class="text-muted">(alpha)</small></label>
+				<input type="number" class="form-control form-control-sm" id="cs-latest-ms" min="-5000" max="5000"
 					placeholder="empty = no cap">
 			</div>
 			<div class="form-group col-6 col-md-2">
@@ -699,8 +703,8 @@
 			<div class="form-group col-6 col-md-3">
 				<label>Keep only within <small class="text-muted">(ms, 0 = keep all)</small></label>
 				<input type="number" class="form-control form-control-sm" id="sn-maxdelta" min="0" max="5000"
-					value="0" title="After firing, the bot reads back where the command actually lands. Outside this many milliseconds it is recalled straight away.">
-				<small class="text-muted">Arm several and keep the ones that land inside it.</small>
+					value="0" title="After firing, the bot reads back where the command actually lands. More than this many milliseconds from the aim, or on the wrong side of the hit, it is recalled straight away.">
+				<small class="text-muted">Arm several and keep the ones that land inside it. Never kept on the wrong side of the hit: aimed before it, a landing at or after the hit is recalled, however close.</small>
 			</div>
 		</div>
 		<div class="form-row align-items-end" id="sn-template-row" style="display:none">
@@ -765,6 +769,146 @@
 </div>
 </div><!-- /pane-snipe -->
 
+<div id="pane-dodge" style="display:none">
+{% set ds = dodge.settings %}
+<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span>
+	Keeps a village's troops alive through the attacks you mark. Rename an incoming attack so its
+	name contains <code>{{ ds.trigger or '—' }}</code> (in game, or with the tag box on the Overview and
+	Village tabs) and the bot takes <strong>everything at home</strong> out {{ ds.leave_before_seconds }}s before
+	it lands, as support to the nearest village of yours that is far enough away, and cancels halfway
+	so the troops are back {{ ds.return_after_seconds }}s after it. Tagged attacks on one village landing
+	within {{ ds.merge_seconds // 60 }} min of each other are dodged in one trip. One trip lasts at most
+	{{ dodge.trip_max_min }} min on this world (commands can only be cancelled for
+	{{ dodge.cancel_seconds // 60 }} min), so a longer run of attacks gets several trips.
+	Names containing <code>{{ ds.keep_trigger or '—' }}</code> dodge the same way but leave a blocker home for
+	fakes ({{ ds.keep_spear }} spear, {{ ds.keep_sword }} sword, {{ ds.keep_spy }} scouts).
+	A cancel that fails leaves the troops as support in your own village: alive, just not home.
+	The names are read again in the minute the troops leave, so a change of plan still gets through:
+	rename it into <code>{{ ds.keep_trigger or '—' }}</code> and the blocker stays home after all, or
+	take the trigger out of the name and nothing leaves &mdash; the dodge ends as
+	<span class="badge badge-secondary">untagged</span> and the village blocks. Putting the trigger back
+	arms it again, but only from the next poll (every few minutes), so a late <em>new</em> tag can be
+	too late: tag early, or tag here.</p>
+
+{% if not ds.enabled and dodge.tagged %}
+<div class="alert alert-warning py-2 small">Dodging is <strong>off</strong>, and {{ dodge.tagged|length }}
+	incoming attack{{ '' if dodge.tagged|length == 1 else 's' }} carr{{ 'ies' if dodge.tagged|length == 1 else 'y' }}
+	the trigger. Nothing will leave until you switch it on below.</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Settings</strong>
+		<small class="text-muted">saved as you change them &middot; also under Settings &rarr; Defence</small>
+		<small id="dg_saved" class="text-success ml-2" style="display:none">saved</small></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="col-6 col-md-2 mb-2">
+				<label class="small mb-0">Dodging</label>
+				<select class="form-control form-control-sm dg-set" data-key="defence.dodge">
+					<option value="false" {{ '' if ds.enabled else 'selected' }}>off</option>
+					<option value="true" {{ 'selected' if ds.enabled else '' }}>on</option>
+				</select></div>
+			<div class="col-6 col-md-4 mb-2">
+				<label class="small mb-0">Trigger text in the attack's name</label>
+				<input class="form-control form-control-sm dg-set" data-key="defence.dodge_trigger" value="{{ ds.trigger }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">Leave before (s)</label>
+				<input type="number" min="30" class="form-control form-control-sm dg-set" data-key="defence.dodge_leave_before_seconds" value="{{ ds.leave_before_seconds }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">Back after (s)</label>
+				<input type="number" min="1" class="form-control form-control-sm dg-set" data-key="defence.dodge_return_after_seconds" value="{{ ds.return_after_seconds }}"></div>
+			<div class="col-4 col-md-2 mb-2">
+				<label class="small mb-0">One trip if within (s)</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_merge_seconds" value="{{ ds.merge_seconds }}"></div>
+		</div>
+		<div class="form-row">
+			<div class="col-12 small text-muted mb-1">Dodge but <strong>keep a blocker</strong> home for fakes: names
+				containing this text dodge everything except the units below. A name matching both triggers uses the longer one.</div>
+			<div class="col-6 col-md-4 mb-2">
+				<label class="small mb-0">Keep-a-blocker trigger text</label>
+				<input class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_trigger" value="{{ ds.keep_trigger }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep spear</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_spear" value="{{ ds.keep_spear }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep sword</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_sword" value="{{ ds.keep_sword }}"></div>
+			<div class="col-2 col-md-2 mb-2">
+				<label class="small mb-0">Keep scouts</label>
+				<input type="number" min="0" class="form-control form-control-sm dg-set" data-key="defence.dodge_keep_spy" value="{{ ds.keep_spy }}"></div>
+		</div>
+	</div>
+</div>
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Dodges,</strong>
+		<small class="text-muted">active first</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Status</th><th>Village</th><th>Attacks</th><th>Leaves</th><th>Back</th>
+				<th>Walks to</th><th>Result</th><th></th>
+			</tr></thead>
+			<tbody>
+			{% for d in dodge.dodges %}
+			{% set badge = {'planned': 'info', 'out': 'warning', 'done': 'success', 'failed': 'danger',
+							'skipped': 'danger', 'cancelled': 'secondary', 'untagged': 'secondary'} %}
+			<tr>
+				<td><span class="badge badge-{{ badge.get(d.status, 'dark') }}">{{ d.status }}</span>
+					{% if d.keep %}<span class="badge badge-dark d-block mt-1" title="a blocker stays home for fakes">keeps {% for u, n in d.keep.items() %}{{ n }} {{ u }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
+					{% if d.events %}
+					<details class="mt-1"><summary class="small text-muted">log</summary>
+						<div class="snipe-log text-muted">{{ d.events|join('\n') }}</div>
+					</details>
+					{% endif %}</td>
+				<td><strong>{{ d.village_name }}</strong>
+					<small class="text-muted d-block">{% if d.coords %}{{ d.coords[0] }}|{{ d.coords[1] }} · {% endif %}#{{ d.village_id }}</small></td>
+				<td class="small">{% for h in d.hits_ms or [] %}<span class="ms d-block" data-ms="{{ h }}">…</span>{% endfor %}</td>
+				<td class="small"><span class="ms" data-ms="{{ d.send_ms or d.send_at_ms }}">…</span></td>
+				<td class="small"><span class="ms" data-ms="{{ d.return_actual_ms or d.return_planned_ms or d.return_ms }}">…</span></td>
+				<td class="coord small">{% if d.target %}{{ d.target.x }}|{{ d.target.y }}{% if d.travel_seconds %}
+					<small class="text-muted d-block">{{ d.travel_seconds // 60 }} min walk</small>{% endif %}{% else %}—{% endif %}</td>
+				<td class="small">{{ d.result or '—' }}
+					{% for w in d.warnings or [] %}<div class="text-danger mt-1">&#9888; {{ w }}{% if d.status == 'planned' %} &mdash; dodging it lets it land on an empty village{% endif %}</div>{% endfor %}</td>
+				<td class="text-right">
+					{% if d.status == 'planned' %}
+					<button class="btn btn-sm btn-outline-secondary" onclick="dodgeCancel('{{ d.id }}', false)">don't dodge</button>
+					{% elif d.status == 'out' %}
+					<button class="btn btn-sm btn-outline-danger" onclick="dodgeCancel('{{ d.id }}', true)">bring home now</button>
+					{% endif %}
+				</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="8" class="text-muted">No dodges yet.{% if ds.enabled %} Tag an incoming attack
+				with <code>{{ ds.trigger }}</code> and it shows up here within seconds of the bot seeing it.{% endif %}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+
+<div class="card">
+	<div class="card-header py-2"><strong>Tagged attacks,</strong>
+		<small class="text-muted">incoming attacks whose name contains the trigger right now</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr><th>Village</th><th>Name</th><th>Lands</th></tr></thead>
+			<tbody>
+			{% for r in dodge.tagged %}
+			<tr><td><strong>{{ r.village_name }}</strong> <small class="text-muted">#{{ r.village_id }}</small></td>
+				<td class="small"><code>{{ r.label }}</code>
+					<span class="badge badge-{{ 'dark' if r.mode == 'keep' else 'secondary' }}">{{ 'dodge, keep blocker' if r.mode == 'keep' else 'dodge all' }}</span>
+					{% if r.warning %}<div class="text-danger mt-1">&#9888; {{ r.warning }}</div>{% endif %}</td>
+				<td class="small"><span class="ms" data-ms="{{ r.hit_ms }}">…</span></td></tr>
+			{% else %}
+			<tr><td colspan="3" class="text-muted">None.</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+</div><!-- /pane-dodge -->
+
 {% endblock %}
 
 {% block scripts %}
@@ -772,7 +916,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe', 'dodge'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -955,6 +1099,12 @@ function voRender() {
 					esc(label.length > 30 ? label.slice(0, 30) + '\u2026' : label) + '</span>'
 				         : '<span class="text-muted">?</span>')
 				: '<span class="text-muted">\u2014</span>';
+			// The name claims a unit the flight time rules out.
+			const warn = (r.attack && c.tag_warning)
+				? ' <span class="badge badge-danger" title="' + esc(c.tag_warning.text) + '">\u26a0 ' +
+				  (c.tag_warning.possible.length === 1 && c.tag_warning.possible[0] === 'snob'
+					? 'noble' : 'wrong tag') + '</span>'
+				: '';
 			// Only an attack can be sniped, and only one that has not landed.
 			const snipe = r.attack
 				? '<button class="btn btn-sm btn-outline-warning py-0" ' +
@@ -987,7 +1137,7 @@ function voRender() {
 				'<td>' + kind + '</td>' +
 				'<td><span class="def-eta" data-arrival="' + at + '">\u2026</span></td>' +
 				'<td class="ms" data-ms="' + (c.arrival_ms || at * 1000) + '"></td>' +
-				'<td>' + looks + '</td>' +
+				'<td>' + looks + warn + '</td>' +
 				'<td><small>' + esc(c.origin_name || '') + ' <span class="coord text-muted">' +
 					(c.origin_coords ? c.origin_coords[0] + '|' + c.origin_coords[1] : '') + '</span></small></td>' +
 				'<td><small>' + esc(c.player_name || '') + '</small></td>' +
@@ -1315,18 +1465,25 @@ function csnipeGapStrip(villageId) {
 	const el = document.getElementById('cs-gaps');
 	if (!el) return;
 	const list = csnipeVillageIncomings(villageId);
-	if (list.length < 2) {
-		// One command, so there is no gap to choose - it is the lone-incoming
-		// case the "land +ms after it" default already covers.
+	if (!list.length) {
 		el.innerHTML = '';
 		return;
 	}
 	CS_GAPS = list;
-	el.innerHTML = '<div class="small text-muted mb-1">' + list.length +
-		' commands land on this village. Pick the gap to come home in — ' +
-		'usually the one after the first noble, since that is the one the ' +
-		'attacker loads:</div><div class="cs-gap-strip"></div>';
+	el.innerHTML = '<div class="small text-muted mb-1">' + (list.length > 1
+		? list.length + ' commands land on this village. Pick the gap to come ' +
+		  'home in — usually the one after the first noble, since that is the ' +
+		  'one the attacker loads — or come home before the first to meet it:'
+		: 'Come home after the hit (out for it), or before it (home to meet it):') +
+		'</div><div class="cs-gap-strip"></div>';
 	const strip = el.querySelector('.cs-gap-strip');
+	// Before the first command: home in time to stand in it rather than be
+	// out for it. Every later "before" is already the gap after the command
+	// in front of it.
+	strip.insertAdjacentHTML('beforeend',
+		'<button class="btn btn-sm cs-gap" data-gap="before" onclick="csnipePickBefore()">' +
+		'before <strong>.' + pad(list[0].ms % 1000, 3) + '</strong>' +
+		'<small class="d-block">home to meet it</small></button>');
 	list.forEach(function(item, i) {
 		const next = list[i + 1];
 		const width = next ? (next.ms - item.ms) : null;
@@ -1349,6 +1506,30 @@ function csnipeGapStrip(villageId) {
 
 let CS_GAPS = [];
 let CS_GAP_PICKED = null;
+
+/* Home BEFORE the first command. The deadline is the hit itself, less the
+   usual edge, and it is not optional here: the engine is late-safe, never
+   early-safe, so without it a slow send could drift past the hit - which is
+   the one outcome this is meant to rule out. Aimed well clear of the hit so
+   the engine's own +30-150ms lands inside the window at the first try. */
+const CS_BEFORE_AIM_MS = -400;
+function csnipePickBefore() {
+	const item = CS_GAPS[0];
+	if (!item) return;
+	CS_GAP_PICKED = 'before';
+	csForm.incoming_id = item.c.command_id;
+	csForm.arrival = Math.floor(item.ms / 1000);
+	document.getElementById('cs-hit-ms').value = item.ms % 1000;
+	document.getElementById('cs-aim-ms').value = CS_BEFORE_AIM_MS;
+	document.getElementById('cs-latest-ms').value = -CS_GAP_EDGE_MS;
+	const d = new Date(item.ms);
+	document.getElementById('cs-context').textContent =
+		'· ' + (CSNIPE.villages[csForm.village_id] || {}).name +
+		', home before ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' +
+		pad(d.getSeconds()) + '.' + pad(item.ms % 1000, 3);
+	csnipeMarkGap();
+	csnipeReturnNote();
+}
 
 function csnipeMarkGap() {
 	document.querySelectorAll('#cs-gaps .cs-gap').forEach(function(b) {
@@ -1405,6 +1586,20 @@ function csnipeReturnNote() {
 	const aim = parseInt(document.getElementById('cs-aim-ms').value, 10) || 0;
 	const hitMs = csForm.arrival * 1000 + hit;
 	const back = hitMs + aim;
+	if (aim < 0) {
+		// Home before it: the hit is the deadline, so that is what is spelled out.
+		const latestB = parseInt(document.getElementById('cs-latest-ms').value, 10);
+		el.innerHTML = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
+			'. Your troops walk back in at </span><strong>' + fmtMs(back) +
+			'</strong><span class="text-muted"> \u2014 ' + (-aim) + ' ms <em>before</em> it, home ' +
+			'to meet it. </span>' + (isNaN(latestB) || latestB >= 0
+				? '<strong class="text-danger">Set \u201cno later than\u201d below 0, or a slow send ' +
+				  'could come home after the hit.</strong>'
+				: '<span class="text-muted">No later than ' + fmtMs(hitMs + latestB) + ', ' + (-latestB) +
+				  ' ms clear of the hit; a send that cannot make that is cancelled at once and ' +
+				  'the troops come home early instead.</span>');
+		return;
+	}
 	let html = '<span class="text-muted">The hit lands ' + fmtMs(hitMs) +
 		'. Your troops are out for it and walk back in at </span><strong>' +
 		fmtMs(back) + '</strong><span class="text-muted"> \u2014 ' + aim +
@@ -1497,10 +1692,16 @@ function csnipeArm() {
 		const latest = parseInt(latestRaw, 10);
 		if (!(latest > aimMs)) {
 			document.getElementById('cs-error').textContent =
-				'"no later than" must be greater than "land +ms after it" (' + aimMs + ')';
+				'"no later than" must be greater than "land ms vs it" (' + aimMs + ')';
 			return;
 		}
 		windowMs = latest - aimMs;
+	}
+	if (aimMs < 0 && (!windowMs || aimMs + windowMs >= 0)) {
+		document.getElementById('cs-error').textContent =
+			'coming home before the hit needs "no later than" below 0, so the ' +
+			'return can never drift past the hit';
+		return;
 	}
 	const body = {
 		village_id: csForm.village_id,
@@ -1536,6 +1737,28 @@ function csnipeDisarm(id) {
 	fetch('/app/csnipe/cancel?id=' + encodeURIComponent(id))
 		.then(r => r.json()).then(function() {
 			if (PANES.indexOf(location.hash.slice(1)) <= 0) location.hash = '#csnipe';
+			location.reload();
+		});
+}
+
+// --- dodge tab ---
+document.querySelectorAll('.dg-set').forEach(function(el) {
+	el.addEventListener('change', function() {
+		fetch('/app/config/set?parameter=' + encodeURIComponent(this.dataset.key) +
+			'&value=' + encodeURIComponent(this.value))
+			.then(function() {
+				const note = document.getElementById('dg_saved');
+				note.style.display = '';
+				setTimeout(function() { note.style.display = 'none'; }, 2500);
+			});
+	});
+});
+function dodgeCancel(id, out) {
+	if (out && !confirm('Bring the troops home now? If the attack has not landed yet, they may walk back into it.'))
+		return;
+	fetch('/app/dodge/cancel?id=' + encodeURIComponent(id))
+		.then(r => r.json()).then(function() {
+			location.hash = '#dodge';
 			location.reload();
 		});
 }
@@ -1633,10 +1856,14 @@ function fmtMs(ms) {
 	});
 })();
 
-function snipeLandMs() {
+function snipeHitMs() {
 	const hit = parseInt(document.getElementById('sn-hit-ms').value, 10) || 0;
+	return snForm.arrival * 1000 + hit;
+}
+
+function snipeLandMs() {
 	const off = parseInt(document.getElementById('sn-offset').value, 10) || 0;
-	return snForm.arrival * 1000 + hit + off;
+	return snipeHitMs() + off;
 }
 
 function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
@@ -2039,6 +2266,7 @@ function snipePostArm(options, noteEl, onArmed, skipped) {
 			incoming_id: snForm.incoming_id,
 			target_village_id: snForm.target_id,
 			land_ms: snipeLandMs(),
+			hit_ms: snipeHitMs(),
 			options: options,
 			shortfall: document.getElementById('sn-shortfall').value,
 			min_pct: parseInt(document.getElementById('sn-minpct').value, 10),
