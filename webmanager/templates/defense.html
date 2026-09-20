@@ -783,8 +783,12 @@
 	Names containing <code>{{ ds.keep_trigger or '—' }}</code> dodge the same way but leave a blocker home for
 	fakes ({{ ds.keep_spear }} spear, {{ ds.keep_sword }} sword, {{ ds.keep_spy }} scouts).
 	A cancel that fails leaves the troops as support in your own village: alive, just not home.
-	In-game renames are seen when the incoming poller next runs (every few minutes), so tag early
-	or tag here.</p>
+	The names are read again in the minute the troops leave, so a change of plan still gets through:
+	rename it into <code>{{ ds.keep_trigger or '—' }}</code> and the blocker stays home after all, or
+	take the trigger out of the name and nothing leaves &mdash; the dodge ends as
+	<span class="badge badge-secondary">untagged</span> and the village blocks. Putting the trigger back
+	arms it again, but only from the next poll (every few minutes), so a late <em>new</em> tag can be
+	too late: tag early, or tag here.</p>
 
 {% if not ds.enabled and dodge.tagged %}
 <div class="alert alert-warning py-2 small">Dodging is <strong>off</strong>, and {{ dodge.tagged|length }}
@@ -848,7 +852,7 @@
 			<tbody>
 			{% for d in dodge.dodges %}
 			{% set badge = {'planned': 'info', 'out': 'warning', 'done': 'success', 'failed': 'danger',
-							'skipped': 'danger', 'cancelled': 'secondary'} %}
+							'skipped': 'danger', 'cancelled': 'secondary', 'untagged': 'secondary'} %}
 			<tr>
 				<td><span class="badge badge-{{ badge.get(d.status, 'dark') }}">{{ d.status }}</span>
 					{% if d.keep %}<span class="badge badge-dark d-block mt-1" title="a blocker stays home for fakes">keeps {% for u, n in d.keep.items() %}{{ n }} {{ u }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}

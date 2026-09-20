@@ -309,7 +309,7 @@ class IncomingManager:
         FileManager.create_directories([INCOMINGS_DIR, "cache/world"])
         self.ensure_world_data()
         self.ensure_groups()
-        commands = self.update_incomings()
+        commands = self.update_incomings() or []
         self.update_supports()
         self.reset_overview_view()
         return commands
@@ -522,15 +522,23 @@ class IncomingManager:
     # -- incoming commands --------------------------------------------------
 
     def update_incomings(self):
-        """Scrape the incomings overview and merge it into the cache."""
+        """Scrape the incomings overview and merge it into the cache.
+
+        Returns the commands the page listed, or None when the page could not
+        be read at all (request failed, logged out, captcha). The difference
+        matters to a caller that acts on what is *not* there any more: an empty
+        list is the server saying there are no incomings, None is us not
+        knowing.
+        """
         url = (
             f"game.php?village={self.village_id}"
             "&screen=overview_villages&mode=incomings&subtype=attacks&group=0"
         )
+        FileManager.create_directories([INCOMINGS_DIR])
         self._session_ok = False
         res = self.wrapper.get_url(url)
         if not res:
-            return []
+            return None
 
         status = self._session_status(res)
         if status != "ok":
@@ -538,7 +546,7 @@ class IncomingManager:
             # we are silently missing attacks and should warn.
             if status == "logged_out":
                 self._note_logged_out()
-            return []
+            return None
         self._note_logged_in()
         self._session_ok = True
 
@@ -810,7 +818,10 @@ class IncomingManager:
         if command.get("arrival_ms") is None and existing.get("arrival_ms"):
             command["arrival_ms"] = existing["arrival_ms"]
         command["last_seen"] = now
-        FileManager.save_json_file(command, path)
+        # Atomic: the dodge runner re-reads these names in its own thread just
+        # before it sends, so two threads can write this file while the
+        # dashboard reads it.
+        FileManager.save_json_file_atomic(command, path)
 
     def _prune(self, seen, now):
         """Drop commands no longer present whose arrival is already in the past."""

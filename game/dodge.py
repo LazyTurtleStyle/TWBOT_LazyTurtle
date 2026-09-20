@@ -25,6 +25,11 @@ How one dodge runs:
   command returns at S + 2k whole seconds (see game/csnipe.py for the live
   measurements); the cancel moment is planned with the c-snipe engine's own
   arithmetic, which never brings troops back early.
+- The names are read once more in the minute the troops leave. A name is the
+  arming and tactics change, so the name as it stands then is the one that
+  counts: an attack renamed out of the trigger is dropped (and with nothing
+  tagged left, the troops stay home to block after all), and one renamed from
+  the dodge trigger into the keep trigger leaves the blocker behind.
 - A cancel that fails leaves the troops standing as support in your own
   village: alive, just not home. That is why the target is always one of your
   villages and never a barbarian one, where a failed cancel is a fight.
@@ -52,8 +57,9 @@ from core.filemanager import FileManager
 from core.notification import Notification
 from core.server_clock import GameClock
 from game import attack_scheduler, csnipe
-from game.incomings import (field_distance, incoming_tag_warning,
-                            load_world_speeds, unit_travel_seconds)
+from game.incomings import (IncomingManager, field_distance,
+                            incoming_tag_warning, load_world_speeds,
+                            unit_travel_seconds)
 
 DODGE_FILE = "cache/dodges.json"
 
@@ -84,6 +90,9 @@ CANCEL_WINDOW_SLACK_MS = 90_000
 # The destination must still be this far away at the cancel moment, so a cancel
 # that fires late still catches the troops walking.
 CANCEL_ARRIVAL_MARGIN_MS = 120_000
+# How long a re-read of the attack names stays good. A send that is retried
+# seconds later goes with what the page just said instead of asking again.
+TAG_RECHECK_TTL_MS = 30_000
 # Time the troops need at home between two dodges before they can leave again.
 TURNAROUND_MS = 5_000
 # Sends start this early by default, plus this much per other send due first:
@@ -196,8 +205,9 @@ def plan(incomings, settings, now_ms, cancel_window_ms, busy_until=None,
     covered     - incoming ids an earlier dodge has already dealt with (sent,
                   finished, failed or cancelled by you) - never planned again
 
-    Returns a list of dicts: village_id, incoming_ids, hits_ms, send_at_ms,
-    return_ms, and status "planned" or "skipped" with a reason.
+    Returns a list of dicts: village_id, incoming_ids, hits_ms, modes (the
+    dodge each name asks for, by attack), send_at_ms, return_ms, and status
+    "planned" or "skipped" with a reason.
     """
     busy_until = busy_until or {}
     covered = set(covered or ())
@@ -246,6 +256,7 @@ def plan(incomings, settings, now_ms, cancel_window_ms, busy_until=None,
                 "village_id": vid,
                 "incoming_ids": [cid for _, cid, _ in cluster],
                 "hits_ms": [hit for hit, _, _ in cluster],
+                "modes": {cid: mode for _, cid, mode in cluster},
                 "send_at_ms": int(send_at),
                 "return_ms": int(last + ret),
                 "status": "planned",
@@ -436,7 +447,11 @@ def replan(settings, now_ms, path=None):
             if status == "planned":
                 planned[(e["village_id"], e["incoming_ids"][0])] = e
                 continue
-            covered.update(e.get("incoming_ids") or [])
+            if status != "untagged":
+                # "untagged" is the one finished status that leaves its attacks
+                # free to be planned again: the name was taken away, and
+                # putting it back has to arm the dodge once more.
+                covered.update(e.get("incoming_ids") or [])
             if status == "out":
                 vid = str(e["village_id"])
                 busy[vid] = max(busy.get(vid, 0), int(e.get("return_ms", 0)))
@@ -496,11 +511,119 @@ def replan(settings, now_ms, path=None):
     return planned
 
 
-def _send(wrapper, clock, entry, path):
+def _check_tags(wrapper, entry, settings, path):
+    """Read the attack names once more, just before the troops leave.
+
+    The cached names are up to a poll cycle old (5-10 minutes), and the name is
+    the arming: tactics change, and a "DODGE THIS" that has meanwhile become a
+    "DODGE KEEP" - or a name with no trigger at all, because this one should be
+    blocked after all - has to reach the dodge before it leaves, not after. So
+    the incomings page is read once more here and the names as they now stand
+    decide what goes out.
+
+    An attack that lost its trigger drops out of the dodge, and when none is
+    left the dodge does not go at all. An attack the page does not list
+    (recalled, already landed, or simply on a page this read did not cover)
+    keeps the name it was planned with: a dodge too many costs a walk, a dodge
+    too few costs the troops.
+
+    This is the incoming poller's own page read, so the refreshed names land
+    in the shared cache for the dashboard and the next replan too. It leaves
+    the villages overview on the incomings view until the poller's next pass
+    puts it back - one cosmetic screen, not worth a second request while an
+    attack is landing.
+
+    Returns (go, reason). The entry is patched - in the file and in the
+    caller's dict - with the names as they now are.
+    """
+    did = entry["id"]
+    ids = [str(c) for c in entry.get("incoming_ids") or []]
+    hits = dict(zip(ids, entry.get("hits_ms") or []))
+    planned = dict(entry.get("modes") or {})
+    try:
+        commands = IncomingManager(village_id=entry["village_id"],
+                                   wrapper=wrapper).update_incomings()
+    except Exception as exc:
+        logger.debug("[%s] tag re-read crashed: %s", did, exc)
+        commands = None
+    if commands is None:
+        # Logged out, captcha, or the request failed. This dodge was armed by a
+        # name that really was there; a page we cannot read is no reason to
+        # leave the troops standing in the hit.
+        _event(did, "could not re-read the attack names - going with the "
+               "names as they were", path=path)
+        return True, None
+
+    on_page = {str(c.get("command_id")) for c in commands}
+    # The refreshed cache, not the parsed page: it carries the dashboard tag
+    # too, which arms a dodge just as the in-game name does.
+    fresh = {str(i.get("command_id")): i for i in _load_incomings()}
+    modes, dropped, missing = {}, [], []
+    for cid in ids:
+        if cid not in on_page:
+            missing.append(cid)
+            modes[cid] = planned.get(cid) or "full"
+            continue
+        mode = dodge_mode(fresh.get(cid) or {}, settings)
+        if mode:
+            modes[cid] = mode
+        else:
+            dropped.append(cid)
+    if missing:
+        _event(did, "%d attack%s of this dodge %s no longer on the incomings "
+               "page (recalled, or already landed) - dodging for %s anyway"
+               % (len(missing), "" if len(missing) == 1 else "s",
+                  "is" if len(missing) == 1 else "are",
+                  "it" if len(missing) == 1 else "them"), path=path)
+    if not modes:
+        return False, ("renamed since it was planned: %s, so the troops stay "
+                       "home" % ("the attack no longer carries the trigger"
+                                 if len(ids) == 1 else
+                                 "none of the %d attacks carries the trigger"
+                                 % len(ids)))
+
+    surviving = [cid for cid in ids if cid in modes]
+    keep = keep_units(settings) \
+        if all(m == "keep" for m in modes.values()) else None
+    fields = {
+        "incoming_ids": surviving,
+        "hits_ms": [hits[cid] for cid in surviving if cid in hits]
+                   or list(entry.get("hits_ms") or []),
+        "modes": modes,
+        "keep": keep,
+        "tags_checked_at": int(time.time() * 1000),
+    }
+    if dropped:
+        # The trip keeps the timing it was planned with: it was built around
+        # the whole cluster, and coming home later than strictly needed is the
+        # harmless half of being wrong.
+        _event(did, "%d attack%s renamed out of the trigger and dropped from "
+               "this dodge" % (len(dropped), "" if len(dropped) == 1 else "s"),
+               path=path)
+    if keep != (entry.get("keep") or None):
+        _event(did, "renamed since it was planned: %s" % (
+            "a blocker stays home (%s)" % ", ".join(
+                "%d %s" % (n, u) for u, n in keep.items()) if keep
+            else "no blocker stays home, everything leaves"), path=path)
+    entry.update(fields)
+    _patch(did, path=path, **fields)
+    return True, None
+
+
+def _send(wrapper, clock, entry, settings, path):
     """Take the village's troops out as support to one of our own villages.
     Returns True when the dodge is out (and its cancel planned)."""
     did = entry["id"]
     vid = str(entry["village_id"])
+    if time.time() * 1000 - int(entry.get("tags_checked_at") or 0) \
+            > TAG_RECHECK_TTL_MS:
+        go, reason = _check_tags(wrapper, entry, settings, path)
+        if not go:
+            # Your own rename did this, so the row says it and Telegram does
+            # not. The attacks stay uncovered: rename one back and the next
+            # poll plans a new dodge for it.
+            _finish(did, "untagged", reason, path=path, notify=False)
+            return False
     managed = _managed()
     if vid not in managed:
         _finish(did, "failed", "the village is not in the bot's cache yet - "
@@ -724,7 +847,7 @@ class Runner:
                 if self.clock.offset_ms is None:
                     self.clock.sync(self.wrapper, "game.php?village=%s&screen=overview"
                                     % e["village_id"])
-                sent = _send(self.wrapper, self.clock, e, path)
+                sent = _send(self.wrapper, self.clock, e, settings, path)
             except Exception as exc:
                 logger.exception("dodge %s send crashed", e.get("id"))
                 _event(e["id"], "send crashed: %s" % exc, path=path)
