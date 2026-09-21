@@ -606,10 +606,10 @@
 							   fixed number: the whole point is that you choose what counts
 							   as close enough. #}
 							{% set cap = s.max_delta_ms or 100 %}
-							{# wrong_side: close to the aim but on the far side of the hit,
+							{# flagged: a coin flip on the hit ms, or close to the aim but on the far side of the hit,
 							   kept only because no tolerance was set. Never green - the
 							   millisecond delta flatters a snipe that defended nothing. #}
-							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('warning' if (s.wrong_side or s.delta_ms|abs > cap) else 'success') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('warning' if (s.flagged or s.delta_ms|abs > cap) else 'success') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
 							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
 						{% endif %}
 					</td>
@@ -2058,7 +2058,9 @@ function snipeRowRecalc(row) {
    that is still launchable when the full stack's moment has already gone.
 
    So each village contributes one option per distinct speed among the units it
-   holds, each option carrying everything at least that fast. What you read off
+   holds, each option carrying everything at least that fast - plus, where
+   there is a paladin, one more carrying the whole village at paladin speed,
+   because anything riding with a paladin moves at its pace. What you read off
    the row is the whole decision: what to send, and how long until you have to
    send it.
 */
@@ -2076,37 +2078,51 @@ function snipeOptionsFor(v, target) {
 	if (!usable.length || !target || !target.coords || !v.coords) return [];
 	const dist = Math.hypot(v.coords[0] - target.coords[0], v.coords[1] - target.coords[1]);
 	const deadline = Date.now() + SN_LEAD_MS;
-	const paces = [...new Set(usable.map(u => SNIPE.speeds[u]))].sort((a, b) => a - b);
 	const out = [], seen = {};
-	paces.forEach(function(pace) {
+	// Everything at least as fast as `pace`, at the amounts the village holds.
+	// A null pace takes the lot, however slow.
+	function stack(list, pace) {
 		const units = {};
-		usable.forEach(function(u) {
-			if (SNIPE.speeds[u] > pace) return;
+		list.forEach(function(u) {
+			if (pace !== null && SNIPE.speeds[u] > pace) return;
 			const n = cap > 0 ? Math.min(cap, home[u]) : home[u];
 			if (n > 0) units[u] = n;
 		});
+		return units;
+	}
+	function offer(units, pace, paceUnit) {
 		// Two tiers can describe the same stack when nothing sits between them.
 		const key = Object.keys(units).sort().map(u => u + ':' + units[u]).join(',');
-		if (!key || seen[key]) return;
+		if (!key || seen[key] || !units[paceUnit]) return;
 		seen[key] = 1;
-		// The paladin overrides the tier's pace: a command carrying one walks
-		// at paladin speed however slow the rest of it is (measured twice on
-		// nl116, exact to the second). Mirrors the same rule server-side in
-		// webmanager/utils.py - if the two disagree the row shows one send
-		// moment and the engine claims for another.
-		const ridden = units.knight && SNIPE.speeds.knight
-			? SNIPE.speeds.knight : pace;
-		const travel = snipeTravelMs(v, target, ridden);
+		const travel = snipeTravelMs(v, target, pace);
 		const send = snipeLandMs() - travel;
 		if (send < deadline) return;              // cannot be launched in time
-		const paceUnit = ridden !== pace
-			? 'knight' : usable.filter(u => SNIPE.speeds[u] === pace)[0];
-		out.push({village: v, units: units, pace: ridden, paceUnit: paceUnit,
+		out.push({village: v, units: units, pace: pace, paceUnit: paceUnit,
 			travel: travel, send: send, dist: dist,
 			// What the village actually holds, so an edit cannot ask for more
 			// troops than exist.
 			max: Object.assign({}, units)});
+	}
+	// The paladin is the exception to "a command walks at its slowest unit's
+	// pace": everything riding with one moves at paladin speed, catapults
+	// included. So it cannot just join the speed tiers - dropping it into each
+	// of them would drag them all to 10 min/field and collapse every option
+	// onto a single send moment, losing the slow ones entirely.
+	//
+	// It gets its own option instead: the tiers are built paladin-free and keep
+	// their real paces, and the paladin adds one more carrying EVERYTHING the
+	// village holds. Being the fast option it is also the last one launchable,
+	// which is the point - it is still there once the slow tiers have expired.
+	const walkers = usable.filter(u => u !== 'knight');
+	const paces = [...new Set(walkers.map(u => SNIPE.speeds[u]))].sort((a, b) => a - b);
+	paces.forEach(function(pace) {
+		offer(stack(walkers, pace), pace,
+			walkers.filter(u => SNIPE.speeds[u] === pace)[0]);
 	});
+	if (usable.indexOf('knight') >= 0 && SNIPE.speeds.knight) {
+		offer(stack(usable, null), SNIPE.speeds.knight, 'knight');
+	}
 	return out;
 }
 

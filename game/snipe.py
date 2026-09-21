@@ -45,11 +45,13 @@ DEFAULT_MIN_PCT = 80
 DEFAULT_OFFSET_MS = -100
 
 # A claim is made against the dashboard's *estimated* send moment, and that
-# estimate is only as good as the unit speeds it knows about. A paladin
-# carrying a speed weapon paces its whole command faster than any table says:
-# on 2026-09-21 a spear+archer+paladin support came back from the rally point
-# at 10 min/field instead of spear's 18, putting the real send 55 minutes past
-# the estimate. Waiting that out inside execute() is wrong twice over - the
+# estimate is only as good as the unit speeds it knows about. A paladin paces
+# its whole command at paladin speed however slow the rest of it is: on
+# 2026-09-21 a spear+archer+paladin support came back from the rally point at
+# 10 min/field instead of spear's 18, putting the real send 55 minutes past the
+# estimate. The estimator knows that rule now, but this stays as the backstop
+# for whatever it does not know yet. Waiting a gap out inside execute() is
+# wrong twice over - the
 # runner is serial, so the snipe holds the thread and every send moment inside
 # the gap is lost (8 of 65 that day), and the confirm token being held goes
 # stale long before the launch uses it. Past this much slack the snipe goes
@@ -66,26 +68,39 @@ def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
     """Why a landing ended up on the wrong side of the hit, or None. Pure.
 
     The hit is a wall: the support has to land on the same side of it as the
-    aim did. Aimed before the hit, a landing at or after it defended nothing
+    aim did. Aimed before the hit, a landing strictly after it defended nothing
     however close it looks - support that arrives 2ms after the nuke is just a
     stack standing in a smoking village. Aimed after the hit on purpose (a
-    positive offset, e.g. behind a clearing nuke), a landing at or before it is
-    the miss. hit_ms None (a snipe armed before the hit was recorded, whose
-    incoming is no longer cached) means the question cannot be answered, which
-    is not the same as passing."""
+    positive offset, e.g. behind a clearing nuke), a landing strictly before it
+    is the miss.
+
+    Landing on the hit's own millisecond is NOT counted here - see
+    coin_flip_on_hit. hit_ms None (a snipe armed before the hit was recorded,
+    whose incoming is no longer cached) means the question cannot be answered,
+    which is not the same as passing."""
     if hit_ms is None:
         return None
     delta = arrival_ms - land_ms
     after = arrival_ms - hit_ms
     if land_ms <= hit_ms:
-        if after >= 0:
-            return ("landed %+dms vs the aim - %s the hit it was meant "
-                    "to beat" % (delta, "ON" if after == 0
-                                 else "%dms AFTER" % after))
-    elif after <= 0:
+        if after > 0:
+            return ("landed %+dms vs the aim - %dms AFTER the hit it was "
+                    "meant to beat" % (delta, after))
+    elif after < 0:
         return ("landed %+dms vs the aim - %dms BEFORE the hit it was "
                 "meant to follow" % (delta, -after))
     return None
+
+
+def coin_flip_on_hit(arrival_ms, hit_ms):
+    """Whether the support landed on the attack's own millisecond. Pure.
+
+    Which of two commands sharing a millisecond resolves first is not ours to
+    know, so this is a 50/50 on whether the support defended anything. It is
+    never recalled: half a chance of holding the village beats certainly
+    walking the troops home. It is still worth saying out loud, because a
+    landing like this reads as a +1ms bullseye against the aim."""
+    return hit_ms is not None and arrival_ms == hit_ms
 
 
 def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
@@ -103,12 +118,19 @@ def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
     landing now comes back kept-but-not-a-hit, for the caller to report
     honestly.
 
+    A landing on the attack's own millisecond is always kept, whatever the
+    limit says, because it is a coin flip rather than a miss - but it comes
+    back with a reason so it is not filed as the +1ms bullseye it resembles.
+
     Returns (keep, reason). reason is set whenever something is wrong with the
     landing, including when it is kept anyway."""
+    delta = arrival_ms - land_ms
+    if coin_flip_on_hit(arrival_ms, hit_ms):
+        return True, ("landed %+dms vs the aim, ON the attack's own "
+                      "millisecond - a coin flip which resolves first" % delta)
     side = wrong_side_of_hit(arrival_ms, land_ms, hit_ms)
     if not limit_ms or limit_ms <= 0:
         return True, side
-    delta = arrival_ms - land_ms
     if abs(delta) > limit_ms:
         return False, "landed %+dms, outside the %dms limit" % (delta, limit_ms)
     if side:
@@ -330,7 +352,8 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
             limit = int(limit) if limit not in (None, "") else 0
         except (TypeError, ValueError):
             limit = 0
-        keep, why = keep_verdict(arrival_ms, land_ms, _hit_of(snipe), limit)
+        hit_ms = _hit_of(snipe)
+        keep, why = keep_verdict(arrival_ms, land_ms, hit_ms, limit)
         if not keep:
             recalled = False
             if cancel_url:
@@ -347,12 +370,15 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                            arrival_actual_ms=int(arrival_ms),
                            delta_ms=int(delta))
         if why:
-            # Kept only because no tolerance was set, so nothing was recalled -
-            # but it is not a hit and must not be filed as one.
-            _finish(sid, "done", "%s - kept (no tolerance set, so it was not "
-                    "recalled)" % why, path=path, outgoing_id=command_id,
-                    arrival_actual_ms=int(arrival_ms), delta_ms=int(delta),
-                    wrong_side=True)
+            # Kept, but not a clean hit: either it shares the attack's
+            # millisecond (a coin flip, always kept) or no tolerance was set so
+            # nothing was ever going to be recalled. Either way it must not be
+            # filed as the bullseye its delta makes it look like.
+            note = ("" if coin_flip_on_hit(arrival_ms, hit_ms)
+                    else " - kept (no tolerance set, so it was not recalled)")
+            _finish(sid, "done", "%s%s" % (why, note), path=path,
+                    outgoing_id=command_id, arrival_actual_ms=int(arrival_ms),
+                    delta_ms=int(delta), flagged=True)
         else:
             _finish(sid, "done", "support lands at .%03d, %+dms vs target"
                     % (arrival_ms % 1000, delta), path=path,
