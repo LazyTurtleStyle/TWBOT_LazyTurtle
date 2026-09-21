@@ -88,9 +88,11 @@
 			{% endif %}
 			{% if c.other %}
 			<div class="stat"><div class="v">{{ c.other|comma }}</div>
-				<div class="k">Not from cheering</div>
-				<div class="sub">daily race payouts{% if c.per_day %}, about {{ c.per_day|comma }} a day{% endif %}
-					— plus anything you clicked by hand{% if c.spent %};
+				<div class="k">Not from {{ 'throwing' if c.board else 'cheering' }}</div>
+				<div class="sub">{% if c.board %}arrived between the bot's throws — daily rewards,
+					or throws you made yourself{% else %}daily race payouts{% if c.per_day %},
+					about {{ c.per_day|comma }} a day{% endif %}
+					— plus anything you clicked by hand{% endif %}{% if c.spent %};
 					{{ c.spent|comma }} spent in the shop{% endif %}</div></div>
 			{% endif %}
 			{% if c.forecast %}
@@ -262,7 +264,9 @@
 				<td><span class="ev-caret">&#9656;</span> {{ h.name }}</td>
 				<td class="faint">{{ h.first_seen|ts }}{% if h.finished_at %} &rarr; {{ h.finished_at|ts }}{% endif %}</td>
 				<td class="text-right mono">{{ h.totals.actions }}</td>
-				<td class="text-right mono">{{ h.totals.jackpots }}</td>
+				<td class="text-right mono">{% if h.board %}{{ h.totals.dragons }}
+					<span class="faint" style="font-size:11px">dragons</span>{%
+					else %}{{ h.totals.jackpots }}{% endif %}</td>
 				<td class="text-right mono">{{ h.totals.reward|comma }}</td>
 				<td class="text-right mono">{{ (h.luck * 100)|round(0)|int ~ '%' if h.luck else '—' }}</td>
 			</tr>
@@ -271,11 +275,15 @@
 					<div class="d-flex flex-wrap" style="gap:1.6rem">
 						<div><span class="eyebrow">Earned</span>
 							<div class="mono gold">{{ h.totals.reward|comma }}</div>
-							<div class="faint" style="font-size:11px">against {{ h.totals.expected|comma }} the choices were worth</div></div>
+							<div class="faint" style="font-size:11px">{% if h.board %}over
+								{{ h.totals.pips|comma }} spaces moved{% else %}against
+								{{ h.totals.expected|comma }} the choices were worth{% endif %}</div></div>
 						{% if h.other %}
-						<div><span class="eyebrow">Payouts &amp; hand-played</span>
+						<div><span class="eyebrow">{% if h.board %}Between the throws{% else %}Payouts &amp; hand-played{% endif %}</span>
 							<div class="mono">+{{ h.other|comma }}</div>
-							<div class="faint" style="font-size:11px">daily race rewards, plus any cheers you made yourself</div></div>
+							<div class="faint" style="font-size:11px">{% if h.board %}daily rewards, or
+								throws you made yourself{% else %}daily race rewards, plus any cheers you
+								made yourself{% endif %}</div></div>
 						{% endif %}
 						{% if h.spent %}
 						<div><span class="eyebrow">Spent in the shop</span>
@@ -284,7 +292,11 @@
 						{% endif %}
 						<div><span class="eyebrow">Actions</span>
 							<div class="mono">{{ h.totals.actions }}</div>
-							<div class="faint" style="font-size:11px">{{ h.totals.jackpots }} jackpot{{ '' if h.totals.jackpots == 1 else 's' }}</div></div>
+							<div class="faint" style="font-size:11px">{% if h.board %}{#
+								.items on a dict is the built-in method, which is always
+								truthy - subscript, do not attribute #}{{ h.totals['items'] }}
+								item{{ '' if h.totals['items'] == 1 else 's' }} won{% else %}{{
+								h.totals.jackpots }} jackpot{{ '' if h.totals.jackpots == 1 else 's' }}{% endif %}</div></div>
 						{% if h.ends_ts %}
 						<div><span class="eyebrow">Ended</span>
 							<div class="mono">{{ h.ends_ts|ts }}</div></div>
@@ -310,6 +322,22 @@
 						{% endfor %}
 						</tbody>
 					</table>
+					{% endif %}
+
+					{% if h.by_square or h.items_won %}
+					<div class="mt-3"><span class="eyebrow">What the board handed over</span></div>
+					<div class="mb-1">
+						{% for name, n in h.by_square|dictsort(by='value', reverse=true) %}
+						<span class="badge">{{ name }} <strong>{{ n }}</strong></span>
+						{% endfor %}
+					</div>
+					{% if h.items_won %}
+					<div class="small"><span class="faint">Items won:</span>
+						{% for name, n in h.items_won|dictsort(by='value', reverse=true) %}
+						<span class="badge">{{ name }}{% if n > 1 %} &times;{{ n }}{% endif %}</span>
+						{% endfor %}
+					</div>
+					{% endif %}
 					{% endif %}
 
 					{% if h.ranks_best or h.ranks_unluckiest %}
@@ -342,9 +370,21 @@
 						<table class="table table-sm mb-0 ev-log">
 							<tbody>
 							{% for a in h.log %}
-							<tr><td class="faint">{{ a.ts|ts }}</td><td>option {{ a.option }}</td>
+							<tr><td class="faint">{{ a.ts|ts }}</td>
+								{% if h.board %}
+								<td class="mono">{{ a.rolls|join(' + ') if a.rolls else '?' }}
+									<span class="faint">= {{ a.moved }}</span></td>
+								<td class="text-right mono">{{ a.scales|comma if a.scales else '—' }}</td>
+								<td>
+									{%- if a.killed %}<span class="badge gold">dragon killed</span> {% endif %}
+									{%- for item in a['items'] or [] %}<span class="badge">{{ item }}</span> {% endfor %}
+									{%- for sq in a.squares or [] %}<span class="faint" style="font-size:11px">{{ sq }}</span> {% endfor %}</td>
+								{% else %}
+								<td>option {{ a.option }}</td>
 								<td class="text-right mono">{{ a.reward|comma }}</td>
-								<td>{% if a.jackpot %}<span class="badge gold">jackpot</span>{% endif %}</td></tr>
+								<td>{% if a.jackpot %}<span class="badge gold">jackpot</span>{% endif %}</td>
+								{% endif %}
+							</tr>
 							{% endfor %}
 							</tbody>
 						</table>
