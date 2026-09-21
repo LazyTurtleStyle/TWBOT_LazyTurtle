@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, "../")
 
 from flask import Flask, jsonify, request, render_template, redirect, Response
+from jinja2 import UndefinedError
 
 try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
@@ -114,9 +115,16 @@ def format_timestamp_ms(value):
 
 @app.template_filter('comma')
 def format_comma(value):
-    """Thousands-separated integer, or the original value if not numeric."""
+    """Thousands-separated integer, or the original value if not numeric.
+
+    A number a page asks for but the file never wrote arrives here as Jinja's
+    Undefined, and int() on that raises past the template - taking the whole
+    page down over one missing cell. A number that is not there reads as a
+    dash, the same as everywhere else."""
     try:
         return "{:,}".format(int(value))
+    except UndefinedError:
+        return "-"
     except (ValueError, TypeError):
         return value
 
@@ -126,6 +134,8 @@ def format_kshort(value):
     """Abbreviate big numbers: 1447 -> 1.4k, 35115 -> 35.1k, 1.2M -> 1.2m."""
     try:
         n = int(value)
+    except UndefinedError:
+        return "-"
     except (ValueError, TypeError):
         return value
     if abs(n) < 1000:
@@ -142,7 +152,7 @@ def format_duration(value):
     """Render a number of seconds as H:MM:SS (or M:SS), '-' if missing."""
     try:
         seconds = int(value)
-    except (ValueError, TypeError):
+    except (UndefinedError, ValueError, TypeError):
         return "-"
     sign = "-" if seconds < 0 else ""
     seconds = abs(seconds)
