@@ -606,7 +606,10 @@
 							   fixed number: the whole point is that you choose what counts
 							   as close enough. #}
 							{% set cap = s.max_delta_ms or 100 %}
-							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('success' if s.delta_ms|abs <= cap else 'warning') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{# wrong_side: close to the aim but on the far side of the hit,
+							   kept only because no tolerance was set. Never green - the
+							   millisecond delta flatters a snipe that defended nothing. #}
+							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('warning' if (s.wrong_side or s.delta_ms|abs > cap) else 'success') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
 							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
 						{% endif %}
 					</td>
@@ -2086,11 +2089,19 @@ function snipeOptionsFor(v, target) {
 		const key = Object.keys(units).sort().map(u => u + ':' + units[u]).join(',');
 		if (!key || seen[key]) return;
 		seen[key] = 1;
-		const travel = snipeTravelMs(v, target, pace);
+		// The paladin overrides the tier's pace: a command carrying one walks
+		// at paladin speed however slow the rest of it is (measured twice on
+		// nl116, exact to the second). Mirrors the same rule server-side in
+		// webmanager/utils.py - if the two disagree the row shows one send
+		// moment and the engine claims for another.
+		const ridden = units.knight && SNIPE.speeds.knight
+			? SNIPE.speeds.knight : pace;
+		const travel = snipeTravelMs(v, target, ridden);
 		const send = snipeLandMs() - travel;
 		if (send < deadline) return;              // cannot be launched in time
-		const paceUnit = usable.filter(u => SNIPE.speeds[u] === pace)[0];
-		out.push({village: v, units: units, pace: pace, paceUnit: paceUnit,
+		const paceUnit = ridden !== pace
+			? 'knight' : usable.filter(u => SNIPE.speeds[u] === pace)[0];
+		out.push({village: v, units: units, pace: ridden, paceUnit: paceUnit,
 			travel: travel, send: send, dist: dist,
 			// What the village actually holds, so an edit cannot ask for more
 			// troops than exist.

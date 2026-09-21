@@ -62,36 +62,57 @@ REQUEUE_AFTER_SECONDS = 300
 MAX_REQUEUES = 2
 
 
-def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
-    """Whether a fired snipe is kept, and if not, why. Pure.
+def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
+    """Why a landing ended up on the wrong side of the hit, or None. Pure.
 
-    The limit is measured from the aim (land_ms), but the hit is a wall: the
-    support has to land on the same side of it as the aim. Aimed before the
-    hit, a landing at or after it is a miss however close - support that
-    arrives 2ms after the nuke defended nothing, and the old two-sided
-    "within N ms of the aim" kept exactly that as a hit. Aimed after the hit
-    on purpose (a positive offset, e.g. behind a clearing nuke), a landing at
-    or before it is the miss. limit_ms 0 keeps everything, as it always has.
-    hit_ms None (a snipe armed before the hit was recorded, whose incoming is
-    no longer cached) falls back to the aim-only check.
-
-    Returns (keep, reason)."""
-    if not limit_ms or limit_ms <= 0:
-        return True, None
-    delta = arrival_ms - land_ms
-    if abs(delta) > limit_ms:
-        return False, "landed %+dms, outside the %dms limit" % (delta, limit_ms)
+    The hit is a wall: the support has to land on the same side of it as the
+    aim did. Aimed before the hit, a landing at or after it defended nothing
+    however close it looks - support that arrives 2ms after the nuke is just a
+    stack standing in a smoking village. Aimed after the hit on purpose (a
+    positive offset, e.g. behind a clearing nuke), a landing at or before it is
+    the miss. hit_ms None (a snipe armed before the hit was recorded, whose
+    incoming is no longer cached) means the question cannot be answered, which
+    is not the same as passing."""
     if hit_ms is None:
-        return True, None
+        return None
+    delta = arrival_ms - land_ms
     after = arrival_ms - hit_ms
     if land_ms <= hit_ms:
         if after >= 0:
-            return False, ("landed %+dms vs the aim - %s the hit it was meant "
-                           "to beat" % (delta, "ON" if after == 0
-                                        else "%dms AFTER" % after))
+            return ("landed %+dms vs the aim - %s the hit it was meant "
+                    "to beat" % (delta, "ON" if after == 0
+                                 else "%dms AFTER" % after))
     elif after <= 0:
-        return False, ("landed %+dms vs the aim - %dms BEFORE the hit it was "
-                       "meant to follow" % (delta, -after))
+        return ("landed %+dms vs the aim - %dms BEFORE the hit it was "
+                "meant to follow" % (delta, -after))
+    return None
+
+
+def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
+    """Whether a fired snipe is kept, and if not, why. Pure.
+
+    The limit is measured from the aim (land_ms); the side of the hit is
+    checked separately, see wrong_side_of_hit.
+
+    limit_ms 0 still means nothing is ever recalled - that is what it has
+    always meant and troops walking home unasked would be a nasty surprise -
+    but it no longer means nothing is *checked*. It used to return before the
+    hit-side test ran, so on 2026-09-21 three snipes armed without a tolerance
+    landed on or after the nuke and were all reported "done ... +107ms vs
+    target", which reads like a success. With no limit set a wrong-side
+    landing now comes back kept-but-not-a-hit, for the caller to report
+    honestly.
+
+    Returns (keep, reason). reason is set whenever something is wrong with the
+    landing, including when it is kept anyway."""
+    side = wrong_side_of_hit(arrival_ms, land_ms, hit_ms)
+    if not limit_ms or limit_ms <= 0:
+        return True, side
+    delta = arrival_ms - land_ms
+    if abs(delta) > limit_ms:
+        return False, "landed %+dms, outside the %dms limit" % (delta, limit_ms)
+    if side:
+        return False, side
     return True, None
 
 
@@ -325,10 +346,18 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                            outgoing_id=command_id,
                            arrival_actual_ms=int(arrival_ms),
                            delta_ms=int(delta))
-        _finish(sid, "done", "support lands at .%03d, %+dms vs target"
-                % (arrival_ms % 1000, delta), path=path,
-                outgoing_id=command_id, arrival_actual_ms=int(arrival_ms),
-                delta_ms=int(delta))
+        if why:
+            # Kept only because no tolerance was set, so nothing was recalled -
+            # but it is not a hit and must not be filed as one.
+            _finish(sid, "done", "%s - kept (no tolerance set, so it was not "
+                    "recalled)" % why, path=path, outgoing_id=command_id,
+                    arrival_actual_ms=int(arrival_ms), delta_ms=int(delta),
+                    wrong_side=True)
+        else:
+            _finish(sid, "done", "support lands at .%03d, %+dms vs target"
+                    % (arrival_ms % 1000, delta), path=path,
+                    outgoing_id=command_id, arrival_actual_ms=int(arrival_ms),
+                    delta_ms=int(delta))
     else:
         _finish(sid, "done", "support sent (server travel %ds); could not "
                 "read the ms arrival back" % duration, path=path,

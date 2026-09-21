@@ -1638,10 +1638,25 @@ class DataReader:
             if not travels:
                 errors.append("%s: no travel speed for the selected units" % oname)
                 continue
-            # The command walks at its slowest unit's pace; boost only speeds
-            # the *estimate* used for scheduling - the server's own duration
-            # (which includes any boost) decides the actual send moment.
-            travel = max(travels) / boost
+            # The command walks at its slowest unit's pace - EXCEPT that the
+            # paladin overrides it. Measured on nl116 2026-09-21, twice, exact
+            # to the second: spear+archer+paladin over 6.708 fields came back
+            # at 4025s and marcher+heavy+paladin over 8.062 fields at 4837s,
+            # both precisely 600.0 s/field, which is the paladin's own speed
+            # and not the slowest unit's. The control case (marcher+paladin,
+            # already at paladin pace) estimated exact. Getting this wrong is
+            # not a cosmetic error: send_est drives the claim, and a long
+            # estimate parks the serial runner and takes the rest of the queue
+            # down with it. boost only speeds the *estimate* used for
+            # scheduling - the server's own duration (which includes any
+            # boost) decides the actual send moment.
+            pace_override = ("knight" if selected.get("knight")
+                             and speeds.get("knight") else None)
+            if pace_override:
+                travel = unit_travel_seconds(field_distance(oloc, tloc),
+                                             speeds["knight"], ws, us) / boost
+            else:
+                travel = max(travels) / boost
             send_est = land_ms / 1000.0 - travel
             if send_est - now < 30:
                 errors.append("%s: the send moment is under 30s away" % oname)
@@ -1657,7 +1672,9 @@ class DataReader:
                 "target_name": target_name,
                 "target_x": int(tloc[0]), "target_y": int(tloc[1]),
                 "units": selected,
-                "pace_unit": str(opt.get("pace_unit") or ""),
+                # Record what actually set the pace, not what the tier was
+                # named after, so the dashboard row explains the send moment.
+                "pace_unit": pace_override or str(opt.get("pace_unit") or ""),
                 "land_ms": land_ms,
                 "boost": boost,
                 "shortfall": shortfall,
