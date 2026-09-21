@@ -44,6 +44,23 @@ PRESTAGE_SECONDS = 90
 DEFAULT_MIN_PCT = 80
 DEFAULT_OFFSET_MS = -100
 
+# A claim is made against the dashboard's *estimated* send moment, and that
+# estimate is only as good as the unit speeds it knows about. A paladin
+# carrying a speed weapon paces its whole command faster than any table says:
+# on 2026-09-21 a spear+archer+paladin support came back from the rally point
+# at 10 min/field instead of spear's 18, putting the real send 55 minutes past
+# the estimate. Waiting that out inside execute() is wrong twice over - the
+# runner is serial, so the snipe holds the thread and every send moment inside
+# the gap is lost (8 of 65 that day), and the confirm token being held goes
+# stale long before the launch uses it. Past this much slack the snipe goes
+# back in the queue carrying the server's own send moment, to be re-claimed
+# with a fresh token at the proper time. The cost is one extra rally-point
+# prepare; the alternative is losing the rest of the queue.
+REQUEUE_AFTER_SECONDS = 300
+# An estimate that never settles would otherwise re-open the rally point on
+# every pass, so a snipe only gets so many corrections.
+MAX_REQUEUES = 2
+
 
 def keep_verdict(arrival_ms, land_ms, hit_ms, limit_ms):
     """Whether a fired snipe is kept, and if not, why. Pure.
@@ -225,6 +242,31 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         return _finish(sid, "failed", "too late: server travel is %ds so the "
                        "send moment already passed (%.1fs ago)"
                        % (duration, (now - send_at) / 1000.0), path=path)
+
+    # Far enough out that holding the runner (and the token) costs more than
+    # coming back for it - see REQUEUE_AFTER_SECONDS.
+    requeues = int(snipe.get("requeues") or 0)
+    if send_at - now > REQUEUE_AFTER_SECONDS * 1000 and requeues < MAX_REQUEUES:
+        current = csnipe._get(sid, qpath)
+        # A disarm that landed while the rally point was being prepared would
+        # be thrown away by flipping the status back to armed, so it wins.
+        if current is None or current.get("disarm_requested"):
+            return _finish(sid, "disarmed", "cancelled before the send - the "
+                           "troops stayed home", path=path, notify=False)
+        # start_ts/send_est_ts are local epoch seconds (claim_due compares them
+        # against time.time()), while send_at is on the server clock.
+        send_local = (send_at - clock.offset_ms) / 1000.0
+        csnipe._patch(sid, path=qpath, status="armed", send_ms=int(send_at),
+                      travel_seconds=int(duration),
+                      send_est_ts=int(send_local),
+                      start_ts=int(send_local - PRESTAGE_SECONDS),
+                      requeues=requeues + 1)
+        _event(sid, "server travel is %ds, %.1f min past the estimate - "
+                    "requeued for %s rather than holding the runner"
+               % (duration, (send_at - now) / 60000.0,
+                  time.strftime("%H:%M:%S", time.localtime(send_local))),
+               path=path)
+        return None
 
     csnipe._patch(sid, path=qpath, send_ms=int(send_at),
                   travel_seconds=int(duration), units_sent=to_send)
