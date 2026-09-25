@@ -209,8 +209,8 @@ def carry_for_runtime(seconds, loot_factor, consts):
     This is the game's duration formula turned around:
         seconds = ((carry^2 * 100 * loot_factor^2) ^ exponent + initial) * factor
     with exponent / initial / factor read from the mass screen rather than
-    assumed, so a world with different constants needs no code change. (On
-    nl116 factor is 0.80011, which is the world speed 1.5 raised to -0.55 -
+    assumed, so a world with different constants needs no code change. (On a
+    speed-1.5 world factor is 0.80011, which is 1.5 raised to -0.55 -
     the same number game/troopmanager.py derives by hand.)
     """
     if not loot_factor or not seconds or seconds <= 0:

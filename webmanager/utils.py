@@ -1651,7 +1651,7 @@ class DataReader:
                 errors.append("%s: no travel speed for the selected units" % oname)
                 continue
             # The command walks at its slowest unit's pace - EXCEPT that the
-            # paladin overrides it. Measured on nl116 2026-09-21, twice, exact
+            # paladin overrides it. Measured live 2026-09-21, twice, exact
             # to the second: spear+archer+paladin over 6.708 fields came back
             # at 4025s and marcher+heavy+paladin over 8.062 fields at 4837s,
             # both precisely 600.0 s/field, which is the paladin's own speed
