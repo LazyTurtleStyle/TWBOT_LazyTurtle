@@ -1452,8 +1452,12 @@ QUICK_TOGGLES = {
     # listed first of the three because it decides WHICH path sends, while the
     # two below only tune the per-village one.
     "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
-    "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
-    "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
+    # "per village" in the label on purpose: these two broadcast a per-village
+    # flag and only the per-village path reads them. Mass scavenging sits in the
+    # same nested group but has its own attacked/night settings, so without the
+    # scope spelled out the nesting reads as if all three applied to all of it.
+    "scavenge_attacked": ("Scavenge when attacked (per village)", "village_template.gather_when_attacked"),
+    "scavenge_night": ("Night consolidate (per village)", "village_template.gather_night_consolidate"),
     # The in-game (premium) Account Manager. Each job is its own switch because
     # it is enabled per feature in game, and the master switch is separate so
     # the three can be set up before handing the work over.

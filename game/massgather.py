@@ -25,8 +25,9 @@ at the same four option slots is how you get one of them quietly doing nothing.
 
 What it still honours, because these are safety rules rather than preferences:
 - villages with an incoming attack are skipped, subject to the same
-  farms.gather_group_policies ladder the per-village path uses
-  (never / pause_attacked / always) and the gather_when_attacked override
+  farms.gather_group_policies ladder the per-village path uses (only "always"
+  lets a village keep scavenging through an incoming). The per-village
+  gather_when_attacked flag is NOT read - it belongs to the other path
 - troops an armed noble job has reserved for an escort stay home
 - night consolidation: inside the window, one long run on the highest option,
   timed to be back by gather_night_end
