@@ -157,6 +157,35 @@
     "report_max_age_hours": 24,
     "max_kind_refusals": 3,
     "gather_group_policies": {},
+    "mass_scavenge": {
+      "enabled": false,
+      "group": "",
+      "units": [
+        "spear",
+        "sword",
+        "axe",
+        "archer",
+        "marcher",
+        "heavy"
+      ],
+      "keep_home": {},
+      "options": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "runtime_off_hours": 2,
+      "runtime_def_hours": 2,
+      "prioritise_high_option": true,
+      "interval_minutes": 120,
+      "jitter_minutes": 20,
+      "skip_under_attack": true,
+      "night_consolidate": true,
+      "night_start": 23,
+      "night_end": 7,
+      "night_min_hours": 5
+    },
     "noble_barb": true,
     "noble_escort_reserve": true,
     "noble_focus_fire": true,

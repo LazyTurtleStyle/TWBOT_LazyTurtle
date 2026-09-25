@@ -1465,6 +1465,9 @@ QUICK_TOGGLES = {
     "event": ("Play the event", "events.auto_play"),
     "mint": ("Feed the coin village", "minting.enabled"),
     "dodge": ("Dodge tagged attacks", "defence.dodge"),
+    # Scavenges a whole village group in one pass on its own clock, instead of
+    # each village scavenging when its turn comes round in the main loop.
+    "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global
@@ -1485,8 +1488,14 @@ def quick_settings_state():
         # Most switches are off until turned on; one that gates behaviour which
         # already existed has to default on, or upgrading would silently stop it.
         default = spec[2] if len(spec) > 2 else False
-        section, param = path.split('.')
-        on = bool(config.get(section, {}).get(param, default))
+        # Dotted path of any depth, matching DataReader.config_set: a toggle can
+        # point into a nested block (farms.mass_scavenge.enabled), and reading it
+        # back has to walk the same way the write does or the panel renders the
+        # default instead of the saved value.
+        node = config
+        for step in path.split('.')[:-1]:
+            node = node.get(step) or {}
+        on = bool(node.get(path.split('.')[-1], default))
         state.append({"key": key, "label": label, "on": on})
     return state
 
@@ -1648,7 +1657,36 @@ def farm_settings_state():
         key=lambda g: str(g.get("name", "")).lower())
 
     return {"farms": farms, "scavenge": scavenge, "villages": per_village,
-            "shaper": shaper}
+            "shaper": shaper, "mass": mass_scavenge_state(config)}
+
+
+def mass_scavenge_state(config):
+    """Mass-scavenging settings plus what the last pass actually did.
+
+    The settings are read through the module's own settings() so the page shows
+    the values the bot will use, defaults included, rather than a second copy of
+    the defaults that can drift away from it.
+    """
+    from game import massgather
+    conf = massgather.settings(config)
+    groups = DataReader.groups_grab()
+    members = massgather.group_villages(conf["group"], groups=groups)
+    state = DataReader.mass_gather_grab()
+    last = int(state.get("last_run") or 0)
+    return {
+        "settings": conf,
+        "groups": groups,
+        # None means the configured group does not exist (renamed, deleted);
+        # that is a different problem from an empty group and reads differently.
+        "group_found": members is not None,
+        "group_size": len(members) if members else 0,
+        "unit_options": [(u, u.capitalize()) for u in massgather.UNIT_CARRY],
+        "last_run": last,
+        "last_sent": state.get("last_sent"),
+        "last_villages": state.get("last_villages"),
+        "last_skipped": state.get("last_skipped"),
+        "next_run": (last + int(state.get("next_gap") or 0)) if last else 0,
+    }
 
 
 @app.route('/farms', methods=['GET'])

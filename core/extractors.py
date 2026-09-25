@@ -67,6 +67,11 @@ _RE_OPTION_VALUE = re.compile(r'<option value="(\d+)"')
 _RE_FARM_ICON = re.compile(
     r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>')
 _RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
+# The mass-scavenge screen inlines its state as bare JSON objects in a script
+# tag. Matched without DOTALL on purpose: the game emits one object per line and
+# the pattern is greedy, so letting it cross lines would swallow the whole tag.
+_RE_SCRIPT_BLOCK = re.compile(r'(?s)<script[^>]*>(.*?)</script>')
+_RE_INLINE_OBJECT = re.compile(r'\{.*:\{.*:.*\}\}')
 # Units a rally-point command can carry, in the game's own order. Kept here (not
 # imported from game.attack_scheduler) so the extractors stay free of game
 # imports - this module is the bottom of the stack.
@@ -643,3 +648,52 @@ class Extractor:
             return data
         except ValueError:
             return None
+
+    @staticmethod
+    def scavenge_mass_screen(res):
+        """The ScavengeMassScreen payload from screen=place&mode=scavenge_mass.
+
+        That page carries, in one request, everything a scavenge decision needs
+        for up to 50 villages: troops at home, which options are unlocked, which
+        already have a squad out, and the world's own duration constants. It is
+        what makes an account-wide scavenge pass affordable - the per-village
+        path costs two requests per village to learn the same things.
+
+        Returns {"options": {1..4: {...}}, "villages": [{...}]} or None when the
+        page could not be read (session redirect, world without the screen).
+        Callers must treat None as "do not send": an empty village list would
+        read as "nothing to scavenge with" and quietly skip the whole account.
+
+        The page inlines several JSON blobs in one script tag. They are matched
+        per line (the game emits one per line) and told apart by their shape
+        rather than their position, because the surrounding blobs differ between
+        worlds and a positional index silently picks up the wrong object.
+        """
+        if type(res) != str:
+            res = getattr(res, "text", "") or ""
+        block = None
+        for script in _RE_SCRIPT_BLOCK.findall(res):
+            if "ScavengeMassScreen" in script:
+                block = script
+                break
+        if block is None:
+            return None
+        options, villages = None, None
+        for blob in _RE_INLINE_OBJECT.findall(block):
+            try:
+                parsed = json.loads("[" + blob + "]")
+            except ValueError:
+                continue
+            if not parsed or not isinstance(parsed[0], dict):
+                continue
+            first = parsed[0]
+            # The options blob is a single dict keyed "1".."4"; the village blob
+            # is a comma-separated run of village objects (hence the brackets).
+            if options is None and "loot_factor" in (first.get("1") or {}):
+                options = {int(k): v for k, v in first.items()}
+            elif villages is None and "village_id" in first:
+                villages = [v for v in parsed if isinstance(v, dict)
+                            and "village_id" in v]
+        if options is None or villages is None:
+            return None
+        return {"options": options, "villages": villages}

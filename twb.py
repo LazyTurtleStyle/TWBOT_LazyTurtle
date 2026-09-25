@@ -53,6 +53,7 @@ from game import minter
 from game import reportanalysis
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
+from game.massgather import MassGatherManager, settings as mass_settings
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
@@ -1005,6 +1006,44 @@ class TWB:
         finally:
             self._noble_lock.release()
 
+    def mass_gather_runner(self, config):
+        """Background loop: scavenge a whole village group on its own clock.
+
+        This cannot ride the main cycle. A cycle over 60 villages takes hours,
+        so hanging a two-hourly scavenge pass off it would give it a two-hourly
+        setting and a five-hourly period - and the whole point of the mass
+        screen is that the pass is cheap enough to run punctually (two page
+        reads and a send for the entire account).
+
+        Cheap while idle in the same way the noble runner is: disabled means no
+        requests at all, and the interval is checked against a timestamp on disk
+        rather than kept in memory, so a restart does not reset the clock and
+        fire a pass the moment the bot comes back up.
+        """
+        logger = logging.getLogger("MassGather")
+        poller = self._make_poller_wrapper(config)
+        while self.should_run:
+            # Short tick, long interval: the pass itself decides whether it is
+            # due, so the tick only has to be fine enough not to drift the
+            # jitter into something visibly periodic.
+            time.sleep(60)
+            if not self.should_run:
+                break
+            try:
+                live = FileManager.load_json_file("config.json") or config
+                if not mass_settings(live)["enabled"]:
+                    continue
+                if not self.is_active_hours(config=live):
+                    # A player who is asleep does not launch 60 scavenge runs.
+                    continue
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    poller.web.cookies.update(session["cookies"])
+                MassGatherManager(wrapper=poller, config=live,
+                                  reserved=self.troop_reserve).run()
+            except Exception as exc:
+                logger.warning("Mass scavenge pass failed: %s", exc)
+
     def noble_runner(self, config):
         """Background loop: give armed noble jobs a real clock.
 
@@ -1222,6 +1261,13 @@ class TWB:
         )
         noble_thread.start()
         print("Noble-barb runner started")
+        # Scavenging for a whole group at once, on a clock of its own rather
+        # than whenever each village's turn comes round in the main loop.
+        mass_thread = threading.Thread(
+            target=self.mass_gather_runner, args=(config,), daemon=True
+        )
+        mass_thread.start()
+        print("Mass scavenging runner started")
         while self.should_run:
             # Heartbeat: proof the main loop is still turning, independent of the
             # incoming-attack poller and scheduler threads, which run on their own

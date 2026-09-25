@@ -16,6 +16,7 @@ from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.incomings import load_groups
 from game.map import Map, MapCache
+from game import massgather
 from game.reports import ReportManager
 from game.resources import ResourceManager
 from game.snobber import SnobManager
@@ -960,6 +961,22 @@ class Village:
                 return policy
         return None
 
+    def _mass_scavenged(self):
+        """Whether game/massgather.py has taken this village over.
+
+        Mass scavenging is configured per group, not per village, so this is
+        the one place the two paths have to agree on who is sending. A group
+        that cannot be resolved means the mass module will not send either, so
+        the village keeps scavenging for itself rather than both of them
+        standing down.
+        """
+        conf = (self.get_config(section="farms", parameter="mass_scavenge",
+                                default={}) or {})
+        if not conf.get("enabled"):
+            return False
+        members = massgather.group_villages(conf.get("group"))
+        return bool(members) and str(self.village_id) in members
+
     def do_gather(self):
         """
         Runs gathering if unlocked and active. A group policy (see
@@ -969,6 +986,14 @@ class Village:
         lone scout run). Flip it back off when a real attack is inbound.
         """
         self.units.can_gather = self.scavenging_enabled()
+        if self._mass_scavenged():
+            # Mass scavenging owns this village's four option slots. Running the
+            # per-village pass as well would cost two requests to rediscover
+            # that they are busy, and on the pass where they are not it would
+            # send a squad sized by rules the group settings deliberately
+            # replaced.
+            self.logger.debug("Scavenging handled by the mass pass")
+            return
         policy = self._gather_group_policy()
         if policy == "never":
             self.logger.debug("Scavenging blocked by group policy 'never'")
