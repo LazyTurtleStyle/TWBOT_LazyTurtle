@@ -355,13 +355,12 @@
                'Leave troops home in any village with an incoming attack. A group with the "even when attacked" scavenging policy above keeps going regardless.') }}
         {{ row('Night consolidate',
                toggle('mass', 'night_consolidate', ms.night_consolidate),
-               'During the window below, send one long run on the best available option instead of splitting, timed to be back by morning.') }}
-        {{ row('Night window (hours)',
-               'From <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="mass" data-param="night_start" value="'
-               ~ ms.night_start ~ '"> to <input type="number" min="0" max="23" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="mass" data-param="night_end" value="'
-               ~ ms.night_end ~ '"> min hours left <input type="number" min="0" max="12" class="form-control form-control-sm d-inline-block" style="width:4.5rem" data-scope="mass" data-param="night_min_hours" value="'
-               ~ ms.night_min_hours ~ '">',
-               'Wraps past midnight. No consolidation run is started when fewer than the minimum hours are left, so the troops are not sent out for a pointless short trip just before morning.') }}
+               'The last pass before the bot stops for the night sends one long run on the best available option instead of splitting, so the troops are out while nobody is watching. Shares the Night consolidate quick-toggle with per-village scavenging.') }}
+        {{ row('Overnight run length (hours)',
+               '<input type="number" min="1" max="24" step="0.5" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="night_hours" value="'
+               ~ ms.night_hours ~ '"> sent in the last <input type="number" min="15" max="240" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="night_lead_minutes" value="'
+               ~ ms.night_lead_minutes ~ '"> min before the bot sleeps',
+               'Set the length to about how long you are away &mdash; 6 hours for a normal night. It is tied to the bot\'s active hours (bot.active_hours, currently ' ~ (data.config.bot.active_hours if data.config else '?') ~ ') rather than a clock window of its own, because the pass cannot run once the bot has gone quiet.') }}
         <hr>
         <div class="fs-help text-muted">
           {% if farms.mass.last_run %}

@@ -29,8 +29,8 @@ What it still honours, because these are safety rules rather than preferences:
   lets a village keep scavenging through an incoming). The per-village
   gather_when_attacked flag is NOT read - it belongs to the other path
 - troops an armed noble job has reserved for an escort stay home
-- night consolidation: inside the window, one long run on the highest option,
-  timed to be back by gather_night_end
+- night consolidation: the last pass before the bot's bedtime sends one long
+  run on the best available option, sized to cover the night
 
 Settings live in config.json under farms.mass_scavenge. It ships disabled and
 has to be armed by hand, and the account-wide farms.scavenge switch stops it
@@ -106,9 +106,12 @@ def settings(config):
         "jitter_minutes": int(raw.get("jitter_minutes", 20) or 20),
         "skip_under_attack": bool(raw.get("skip_under_attack", True)),
         "night_consolidate": bool(raw.get("night_consolidate", True)),
-        "night_start": int(raw.get("night_start", 23)),
-        "night_end": int(raw.get("night_end", 7)),
-        "night_min_hours": int(raw.get("night_min_hours", 5)),
+        # How long the overnight run should last. A duration, not a window:
+        # the run has to cover the hours nobody is watching, and that is a
+        # length of sleep rather than a pair of clock times.
+        "night_hours": float(raw.get("night_hours", 6) or 6),
+        # How close to the bot's bedtime a pass counts as the night pass.
+        "night_lead_minutes": int(raw.get("night_lead_minutes", 90)),
     }
 
 
@@ -221,30 +224,31 @@ def carry_for_runtime(seconds, loot_factor, consts):
     return int(math.sqrt(inner ** (1.0 / exponent) / 100.0) / loot_factor)
 
 
-def night_seconds_left(conf, now=None):
-    """Seconds until the night window closes, or 0 when outside it.
+def night_run_seconds(conf, awake_until=None, now=None):
+    """How long the overnight run should last, or 0 when this is not it.
 
-    Same window and same 'don't start a short run near morning' rule as the
-    per-village path (game/village.py:_gather_night_consolidate), so turning a
-    village over to mass scavenging does not change what its nights look like.
+    Hung off the bot's own bedtime rather than a clock window of its own. The
+    mass runner does not run outside active hours at all, so a window like
+    23:00-07:00 was only reachable in whatever slice of it fell before the bot
+    went quiet - on a 5-23:30 account that was 31 minutes a day, against a pass
+    every two hours. The run that has to cover the night is simply the last one
+    before bedtime, so that is what triggers it.
+
+    awake_until is the end of active hours in minutes past midnight (see
+    twb.active_hours_bounds). Without it there is no bedtime to aim at and the
+    normal short runs keep going.
     """
-    if not conf["night_consolidate"]:
+    if not conf["night_consolidate"] or awake_until is None:
         return 0
-    start, end = conf["night_start"], conf["night_end"]
-    if start == end:
+    if conf["night_hours"] <= 0:
         return 0
     now = now or datetime.datetime.now()
-    hour = now.hour
-    in_window = (start <= hour < end) if start < end else (hour >= start or hour < end)
-    if not in_window:
+    now_m = now.hour * 60 + now.minute
+    # Minutes until the bot goes quiet, wrapping past midnight.
+    until_bed = (awake_until - now_m) % (24 * 60)
+    if until_bed > max(1, conf["night_lead_minutes"]):
         return 0
-    end_time = now.replace(hour=end, minute=0, second=0, microsecond=0)
-    if end_time <= now:
-        end_time += datetime.timedelta(days=1)
-    left = int((end_time - now).total_seconds())
-    if conf["night_min_hours"] > 0 and left < conf["night_min_hours"] * 3600:
-        return 0
-    return left
+    return int(conf["night_hours"] * 3600)
 
 
 def plan_village(village, conf, options, reserved=None, night=0):
@@ -369,12 +373,17 @@ def _distribute(available, carry_of, budget, total_loot, total_budget, conf):
 class MassGatherManager:
     """One mass scavenging pass."""
 
-    def __init__(self, wrapper=None, config=None, reserved=None):
+    def __init__(self, wrapper=None, config=None, reserved=None,
+                 awake_from=None, awake_until=None):
         self.wrapper = wrapper
         self.config = config or {}
         self.conf = settings(self.config)
         # {village_id: {unit: count}} an armed noble job wants left at home.
         self.reserved = reserved or {}
+        # Active-hours bounds in minutes past midnight, from the caller, so the
+        # overnight run can be timed to end when the bot wakes up again.
+        self.awake_from = awake_from
+        self.awake_until = awake_until
 
     def _read_pages(self, village_id, group_id):
         """Every village on the mass screen, page by page.
@@ -538,7 +547,7 @@ class MassGatherManager:
             skip = {vid for vid in skip
                     if not self._attack_override_allows(vid, policies)}
 
-        night = night_seconds_left(conf)
+        night = night_run_seconds(conf, awake_until=self.awake_until)
         planned = []
         for village in villages:
             vid = str(village["village_id"])

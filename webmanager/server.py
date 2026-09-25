@@ -1452,12 +1452,14 @@ QUICK_TOGGLES = {
     # listed first of the three because it decides WHICH path sends, while the
     # two below only tune the per-village one.
     "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
-    # "per village" in the label on purpose: these two broadcast a per-village
-    # flag and only the per-village path reads them. Mass scavenging sits in the
-    # same nested group but has its own attacked/night settings, so without the
-    # scope spelled out the nesting reads as if all three applied to all of it.
+    # "per village" on this one because only the per-village path reads it;
+    # mass scavenging decides for itself whether an incoming stops a village.
     "scavenge_attacked": ("Scavenge when attacked (per village)", "village_template.gather_when_attacked"),
-    "scavenge_night": ("Night consolidate (per village)", "village_template.gather_night_consolidate"),
+    # Night consolidation is the same intention on both paths - cover the hours
+    # nobody is watching with one long run - so one switch sets both (see
+    # ALSO_SET). They differ only in how the run is sized, which is a detail of
+    # each path rather than a decision worth two toggles.
+    "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
     # The in-game (premium) Account Manager. Each job is its own switch because
     # it is enabled per feature in game, and the master switch is separate so
     # the three can be set up before handing the work over.
@@ -1483,6 +1485,12 @@ QUICK_TOGGLES = {
 # used to be, and turning it off overwrote every per-village choice with 'off'.
 PER_VILLAGE_TOGGLES = {"scavenge_attacked": "gather_when_attacked",
                        "scavenge_night": "gather_night_consolidate"}
+
+# Extra config paths a quick toggle sets alongside its own. Night consolidation
+# exists on both scavenging paths and a user flipping one switch means both:
+# having it cover only the villages the mass pass no longer touches is the kind
+# of half-applied setting you only notice by finding troops at home all night.
+ALSO_SET = {"scavenge_night": "farms.mass_scavenge.night_consolidate"}
 
 
 def quick_settings_state():
@@ -1517,6 +1525,8 @@ def quick_set():
         DataReader.broadcast_village_set(PER_VILLAGE_TOGGLES[key], value)
     else:
         DataReader.config_set(parameter=QUICK_TOGGLES[key][1], value=value)
+    if key in ALSO_SET:
+        DataReader.config_set(parameter=ALSO_SET[key], value=value)
     return jsonify({"ok": True})
 
 

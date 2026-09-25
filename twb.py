@@ -653,11 +653,13 @@ class TWB:
         return changed, config
 
     @staticmethod
-    def is_active_hours(config):
-        """
-        Checks if the bot is within active hours
-        Allows the bot to run more productive during an active session and ensure stealth at night
-        Bounds may be whole hours ("6-23") or HH:MM ("5-23:30").
+    def active_hours_bounds(config):
+        """The active window as (start, end) minutes past midnight.
+
+        Split out because more than "are we awake right now" needs it: mass
+        scavenging times its overnight run to end when the bot wakes up, and
+        deriving that from a second copy of this parser is how the two drift
+        apart. Bounds may be whole hours ("6-23") or HH:MM ("5-23:30").
         """
 
         def to_minutes(bound, is_end):
@@ -669,8 +671,17 @@ class TWB:
             return int(bound) * 60 + (59 if is_end else 0)
 
         raw_start, raw_end = config["bot"]["active_hours"].split("-")
-        start = to_minutes(raw_start.strip(), is_end=False)
-        end = to_minutes(raw_end.strip(), is_end=True)
+        return (to_minutes(raw_start.strip(), is_end=False),
+                to_minutes(raw_end.strip(), is_end=True))
+
+    @staticmethod
+    def is_active_hours(config):
+        """
+        Checks if the bot is within active hours
+        Allows the bot to run more productive during an active session and ensure stealth at night
+        Bounds may be whole hours ("6-23") or HH:MM ("5-23:30").
+        """
+        start, end = TWB.active_hours_bounds(config)
         now = time.localtime()
         now_m = now.tm_hour * 60 + now.tm_min
         if start <= end:
@@ -1039,8 +1050,11 @@ class TWB:
                 session = FileManager.load_json_file("cache/session.json")
                 if session and session.get("cookies"):
                     poller.web.cookies.update(session["cookies"])
+                awake_from, awake_until = self.active_hours_bounds(live)
                 MassGatherManager(wrapper=poller, config=live,
-                                  reserved=self.troop_reserve).run()
+                                  reserved=self.troop_reserve,
+                                  awake_from=awake_from,
+                                  awake_until=awake_until).run()
             except Exception as exc:
                 logger.warning("Mass scavenge pass failed: %s", exc)
 

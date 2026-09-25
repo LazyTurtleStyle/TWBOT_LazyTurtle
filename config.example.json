@@ -182,9 +182,8 @@
       "jitter_minutes": 20,
       "skip_under_attack": true,
       "night_consolidate": true,
-      "night_start": 23,
-      "night_end": 7,
-      "night_min_hours": 5
+      "night_hours": 6,
+      "night_lead_minutes": 90
     },
     "noble_barb": true,
     "noble_escort_reserve": true,
