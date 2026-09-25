@@ -38,6 +38,7 @@ along with everything else that scavenges.
 """
 
 import datetime
+import itertools
 import logging
 import math
 import random
@@ -411,36 +412,84 @@ class MassGatherManager:
             time.sleep(random.uniform(0.8, 2.5))
         return options, villages
 
+    def _batches(self, requests_):
+        """Split the squads into POSTs, without cutting a village in half.
+
+        Chunking on a flat index alone would put some of a village's options in
+        one POST and the rest in the next, so a rejected batch would leave that
+        village half-scavenging - much harder to read in the log than a whole
+        village missing."""
+        batches, current = [], []
+        for village_id, squads in itertools.groupby(
+                requests_, key=lambda r: r["village_id"]):
+            squads = list(squads)
+            if current and len(current) + len(squads) > MAX_SQUADS_PER_POST:
+                batches.append(current)
+                current = []
+            current.extend(squads)
+        if current:
+            batches.append(current)
+        return batches
+
+    def _post_batch(self, batch):
+        """One send_squads POST. True when the server took it."""
+        payload = {}
+        for i, squad in enumerate(batch):
+            prefix = "squad_requests[%d]" % i
+            payload["%s[village_id]" % prefix] = str(squad["village_id"])
+            payload["%s[option_id]" % prefix] = str(squad["option_id"])
+            payload["%s[use_premium]" % prefix] = "false"
+            payload["%s[candidate_squad][carry_max]" % prefix] = str(squad["carry_max"])
+            for unit in UNIT_CARRY:
+                payload["%s[candidate_squad][unit_counts][%s]" % (prefix, unit)] = \
+                    str(squad["units"].get(unit, 0))
+        payload["h"] = self.wrapper.last_h
+        return self.wrapper.get_api_action(
+            action="send_squads",
+            params={"screen": "scavenge_api"},
+            data=payload,
+            village_id=batch[0]["village_id"],
+        ) is not None
+
+    def _refresh_token(self, village_id):
+        """Re-read a page so wrapper.last_h is current again.
+
+        The game rotates the CSRF token on an accepted action, so every POST
+        after the first in a pass carries a token the server has already spent
+        and is refused. That is why the first live pass landed 200 of 207
+        squads: one full POST, then a tail batch the account never saw. A page
+        read costs one request and hands back a fresh token.
+        """
+        self.wrapper.get_url(
+            "game.php?village=%s&screen=place&mode=scavenge_mass" % village_id)
+
     def _send(self, requests_):
         """POST the squads, in batches the server will accept."""
         sent = 0
-        batches = [requests_[i:i + MAX_SQUADS_PER_POST]
-                   for i in range(0, len(requests_), MAX_SQUADS_PER_POST)]
+        batches = self._batches(requests_)
         for index, batch in enumerate(batches):
-            payload = {}
-            for i, squad in enumerate(batch):
-                prefix = "squad_requests[%d]" % i
-                payload["%s[village_id]" % prefix] = str(squad["village_id"])
-                payload["%s[option_id]" % prefix] = str(squad["option_id"])
-                payload["%s[use_premium]" % prefix] = "false"
-                payload["%s[candidate_squad][carry_max]" % prefix] = str(squad["carry_max"])
-                for unit in UNIT_CARRY:
-                    payload["%s[candidate_squad][unit_counts][%s]" % (prefix, unit)] = \
-                        str(squad["units"].get(unit, 0))
-            payload["h"] = self.wrapper.last_h
-            result = self.wrapper.get_api_action(
-                action="send_squads",
-                params={"screen": "scavenge_api"},
-                data=payload,
-                village_id=batch[0]["village_id"],
-            )
-            if result is None:
-                logger.warning("Mass scavenge send %d/%d was rejected",
-                               index + 1, len(batches))
-                continue
-            sent += len(batch)
-            if index + 1 < len(batches):
+            if index:
+                # Fresh token for every POST after the first, and a pause so a
+                # group this size does not arrive as one burst.
                 time.sleep(random.uniform(2, 6))
+                self._refresh_token(batch[0]["village_id"])
+            if self._post_batch(batch):
+                sent += len(batch)
+                continue
+            # One retry on a fresh token: a rejection here is almost always a
+            # spent token, and the alternative is silently dropping the tail.
+            logger.info("Mass scavenge send %d/%d refused, retrying with a "
+                        "fresh token", index + 1, len(batches))
+            time.sleep(random.uniform(2, 5))
+            self._refresh_token(batch[0]["village_id"])
+            if self._post_batch(batch):
+                sent += len(batch)
+            else:
+                logger.warning(
+                    "Mass scavenge send %d/%d was rejected twice - %d squad(s) "
+                    "over %d village(s) not sent this pass", index + 1,
+                    len(batches), len(batch),
+                    len({r["village_id"] for r in batch}))
         return sent
 
     def run(self, force=False):
