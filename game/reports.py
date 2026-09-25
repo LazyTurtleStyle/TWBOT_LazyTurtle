@@ -20,6 +20,19 @@ class ReportManager:
     game_state = None
     logger = None
     last_reports = {}
+    # Which cycle the folders were last read in, and when. The folders are
+    # account-wide, so one read serves every village; reading them again per
+    # village cost ~4 requests each, about a third of a village's whole run.
+    # None (no cycle ever announced) keeps the old read-every-time behaviour
+    # for callers that do not run the main loop.
+    cycle = None
+    read_in_cycle = None
+    read_at = 0
+    # But a cycle can take over an hour, and farming decides per farm from
+    # these reports whether it is still safe - so a read older than this is
+    # done again, or a farm that killed one village's troops would keep being
+    # hit by its neighbours until the next cycle.
+    MAX_AGE = 20 * 60
 
     def __init__(self, wrapper=None, village_id=None):
         """
@@ -126,6 +139,12 @@ class ReportManager:
                     return 0  # Disengage if anything was lost!
         return -1
 
+    @classmethod
+    def new_cycle(cls):
+        """Called by the main loop before its village loop: the next read()
+        goes to the game again, the ones after it in the same cycle do not."""
+        cls.cycle = (cls.cycle or 0) + 1
+
     def read(self, page=0, full_run=False):
         """
         Read reports from every report folder. In-game report filters can file
@@ -148,9 +167,20 @@ class ReportManager:
             ReportManager.last_reports = ReportCache.cache_grab()
             self.logger.info("Got %d reports from cache", len(ReportManager.last_reports))
 
+        if not full_run and ReportManager.cycle is not None \
+                and ReportManager.read_in_cycle == ReportManager.cycle \
+                and time.time() - ReportManager.read_at < ReportManager.MAX_AGE:
+            return
+
         # The main folder's page carries the group selector, from which the
         # other folders are discovered.
         groups = self.read_group("0", page=page, full_run=full_run)
+        if groups is None:
+            # The main folder could not be fetched: leave the cycle unmarked
+            # so the next village tries again.
+            return
+        ReportManager.read_in_cycle = ReportManager.cycle
+        ReportManager.read_at = time.time()
         for group_id in groups:
             self.read_group(group_id, page=page, full_run=full_run)
         if groups:
@@ -174,7 +204,8 @@ class ReportManager:
     def read_group(self, group_id, page=0, full_run=False):
         """
         Read one report folder, recursing through its pages. Returns the other
-        folder ids found in the page's group selector.
+        folder ids found in the page's group selector, or None when a page
+        could not be fetched.
         """
         offset = page * 12
         url = f"game.php?village={self.village_id}&screen=report&mode=all&group_id={group_id}"
@@ -189,7 +220,7 @@ class ReportManager:
             self.logger.warning(
                 "Could not fetch report group %s page %d, skipping", group_id, page
             )
-            return []
+            return None
         self.game_state = Extractor.game_state(result)
         groups = [g for g in Extractor.report_groups(result) if g != group_id]
         new = 0

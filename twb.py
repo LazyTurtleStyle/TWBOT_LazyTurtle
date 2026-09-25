@@ -1435,6 +1435,9 @@ class TWB:
                     self.run_player_farms(config)
 
 
+                # Reports are read by the first village of the cycle and reused
+                # by the rest, re-read only once that read is 20 minutes old.
+                ReportManager.new_cycle()
                 village_number = int(
                     config["bot"].get("village_name_number_start", 1) or 1)
                 for village in self.villages:
