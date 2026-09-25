@@ -1447,7 +1447,18 @@ QUICK_TOGGLES = {
     # shape as Farming and Building. Defaults on, so a config written before the
     # key existed keeps behaving as it did - the per-village flags still decide.
     "scavenge": ("Scavenging", "farms.scavenge", True),
-    "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
+    # Sits under Scavenging because the master switch stops it too: "turn
+    # scavenging off" has to mean all of it, however the runs are sent. It is
+    # listed first of the three because it decides WHICH path sends, while the
+    # two below only tune the per-village one.
+    "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
+    # "per village" on this one because only the per-village path reads it;
+    # mass scavenging decides for itself whether an incoming stops a village.
+    "scavenge_attacked": ("Scavenge when attacked (per village)", "village_template.gather_when_attacked"),
+    # Night consolidation is the same intention on both paths - cover the hours
+    # nobody is watching with one long run - so one switch sets both (see
+    # ALSO_SET). They differ only in how the run is sized, which is a detail of
+    # each path rather than a decision worth two toggles.
     "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
     # The in-game (premium) Account Manager. Each job is its own switch because
     # it is enabled per feature in game, and the master switch is separate so
@@ -1475,6 +1486,12 @@ QUICK_TOGGLES = {
 PER_VILLAGE_TOGGLES = {"scavenge_attacked": "gather_when_attacked",
                        "scavenge_night": "gather_night_consolidate"}
 
+# Extra config paths a quick toggle sets alongside its own. Night consolidation
+# exists on both scavenging paths and a user flipping one switch means both:
+# having it cover only the villages the mass pass no longer touches is the kind
+# of half-applied setting you only notice by finding troops at home all night.
+ALSO_SET = {"scavenge_night": "farms.mass_scavenge.night_consolidate"}
+
 
 def quick_settings_state():
     """Current on/off value for each quick toggle, for rendering the side panel."""
@@ -1485,8 +1502,14 @@ def quick_settings_state():
         # Most switches are off until turned on; one that gates behaviour which
         # already existed has to default on, or upgrading would silently stop it.
         default = spec[2] if len(spec) > 2 else False
-        section, param = path.split('.')
-        on = bool(config.get(section, {}).get(param, default))
+        # Dotted path of any depth, matching DataReader.config_set: a toggle can
+        # point into a nested block (farms.mass_scavenge.enabled), and reading it
+        # back has to walk the same way the write does or the panel renders the
+        # default instead of the saved value.
+        node = config
+        for step in path.split('.')[:-1]:
+            node = node.get(step) or {}
+        on = bool(node.get(path.split('.')[-1], default))
         state.append({"key": key, "label": label, "on": on})
     return state
 
@@ -1502,6 +1525,8 @@ def quick_set():
         DataReader.broadcast_village_set(PER_VILLAGE_TOGGLES[key], value)
     else:
         DataReader.config_set(parameter=QUICK_TOGGLES[key][1], value=value)
+    if key in ALSO_SET:
+        DataReader.config_set(parameter=ALSO_SET[key], value=value)
     return jsonify({"ok": True})
 
 
@@ -1648,7 +1673,36 @@ def farm_settings_state():
         key=lambda g: str(g.get("name", "")).lower())
 
     return {"farms": farms, "scavenge": scavenge, "villages": per_village,
-            "shaper": shaper}
+            "shaper": shaper, "mass": mass_scavenge_state(config)}
+
+
+def mass_scavenge_state(config):
+    """Mass-scavenging settings plus what the last pass actually did.
+
+    The settings are read through the module's own settings() so the page shows
+    the values the bot will use, defaults included, rather than a second copy of
+    the defaults that can drift away from it.
+    """
+    from game import massgather
+    conf = massgather.settings(config)
+    groups = DataReader.groups_grab()
+    members = massgather.group_villages(conf["group"], groups=groups)
+    state = DataReader.mass_gather_grab()
+    last = int(state.get("last_run") or 0)
+    return {
+        "settings": conf,
+        "groups": groups,
+        # None means the configured group does not exist (renamed, deleted);
+        # that is a different problem from an empty group and reads differently.
+        "group_found": members is not None,
+        "group_size": len(members) if members else 0,
+        "unit_options": [(u, u.capitalize()) for u in massgather.UNIT_CARRY],
+        "last_run": last,
+        "last_sent": state.get("last_sent"),
+        "last_villages": state.get("last_villages"),
+        "last_skipped": state.get("last_skipped"),
+        "next_run": (last + int(state.get("next_gap") or 0)) if last else 0,
+    }
 
 
 @app.route('/farms', methods=['GET'])

@@ -1311,6 +1311,18 @@ class DataReader:
         return snipe_engine.load_snipes(path=DataReader.snipe_path())
 
     @staticmethod
+    def mass_gather_grab():
+        """What the last mass-scavenging pass did, or {} before the first one."""
+        path = DataReader.data_path("cache", "mass_gather.json")
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, 'r') as handle:
+                return json.load(handle) or {}
+        except (ValueError, OSError):
+            return {}
+
+    @staticmethod
     def groups_grab():
         """Cached in-game village groups: [{id, name, type, villages}]."""
         data = (DataReader.cache_grab("world") or {}).get("groups") or {}
@@ -1639,7 +1651,7 @@ class DataReader:
                 errors.append("%s: no travel speed for the selected units" % oname)
                 continue
             # The command walks at its slowest unit's pace - EXCEPT that the
-            # paladin overrides it. Measured on nl116 2026-09-21, twice, exact
+            # paladin overrides it. Measured live 2026-09-21, twice, exact
             # to the second: spear+archer+paladin over 6.708 fields came back
             # at 4025s and marcher+heavy+paladin over 8.062 fields at 4837s,
             # both precisely 600.0 s/field, which is the paladin's own speed
@@ -2023,13 +2035,19 @@ class DataReader:
         with open(config_file_path, 'r') as config_file:
             template = json.load(config_file, object_pairs_hook=collections.OrderedDict)
             if "." in parameter:
-                section, param = parameter.split('.')
-                # A section added to the bot after this world's config.json was
-                # written (e.g. balancer) has no key yet; create it on first save
-                # rather than 500-ing on a KeyError.
-                if section not in template:
-                    template[section] = collections.OrderedDict()
-                template[section][param] = value
+                # Dotted path of any depth, so a setting that lives in a nested
+                # block (farms.mass_scavenge.enabled) can be saved the same way
+                # a top-level one is. Missing levels are created: a section
+                # added to the bot after this world's config.json was written
+                # (e.g. balancer) has no key yet, and 500-ing on a KeyError the
+                # first time it is saved is not a useful way to find that out.
+                path = parameter.split('.')
+                node = template
+                for step in path[:-1]:
+                    if not isinstance(node.get(step), dict):
+                        node[step] = collections.OrderedDict()
+                    node = node[step]
+                node[path[-1]] = value
             else:
                 template[parameter] = value
             with open(config_file_path, 'w') as newcf:

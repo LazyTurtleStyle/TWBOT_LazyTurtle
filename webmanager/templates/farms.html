@@ -268,6 +268,112 @@
   </div>
 
   <div class="col-lg-7">
+    {% set ms = farms.mass.settings %}
+    <div class="card config-card">
+      <div class="card-header">Mass scavenging <span class="badge badge-warning">alpha</span></div>
+      <div class="card-body">
+        <div class="fs-help text-muted mb-2">
+          Scavenges a whole in-game group in one pass, on its own clock, using the game's own mass-scavenge
+          screen: two page reads and one send for sixty villages. Villages in the group stop scavenging in
+          their own run &mdash; the settings here replace their per-village ones completely. Everything else
+          (night consolidation, stopping for incomings, noble escort reservations) still applies.
+        </div>
+        {{ row('Mass scavenging enabled',
+               toggle('mass', 'enabled', ms.enabled),
+               'Off by default. Arm it once the group and units below are set the way you want them.') }}
+        <div class="fs-setting">
+          <div class="config-row">
+            <div class="config-row-label"><span class="config-row-name">Village group</span></div>
+            <div class="config-row-control">
+              <select class="form-control form-control-sm" data-scope="mass" data-param="group">
+                <option value=""{% if not ms.group %} selected{% endif %}>&mdash; pick a group &mdash;</option>
+                {% for g in farms.mass.groups %}
+                <option value="{{ g.name }}"{% if ms.group|lower == g.name|lower or ms.group == g.id %} selected{% endif %}>{{ g.name }} ({{ g.type }}, {{ g.villages|length }})</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="fs-help text-muted">
+            {% if ms.group and not farms.mass.group_found %}
+            <span class="badge badge-danger">not found</span> No in-game group called &ldquo;{{ ms.group }}&rdquo; is cached, so nothing is sent. Renamed or deleted?
+            {% elif ms.group %}
+            {{ farms.mass.group_size }} village{{ 's' if farms.mass.group_size != 1 else '' }} in this group. Dynamic groups refresh hourly via the incoming tracker.
+            {% else %}
+            Only villages in this group are mass-scavenged; the rest keep scavenging in their own run.
+            {% endif %}
+          </div>
+        </div>
+        <div class="fs-setting">
+          <div class="config-row">
+            <div class="config-row-label"><span class="config-row-name">Scavenge with these units</span></div>
+            <div class="config-row-control">
+              {% for u, lbl in farms.mass.unit_options %}
+              <label class="mass-unit-lbl mr-3 mb-1" style="font-weight:normal"><input type="checkbox" class="mass-unit-cb" value="{{ u }}"{% if u in ms.units %} checked{% endif %}> {{ lbl }}</label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="fs-help text-muted">Checked units are sent. They are also handed to the options in the order shown, so the leftmost unit fills the most valuable option first.</div>
+        </div>
+        <div class="fs-setting">
+          <div class="config-row">
+            <div class="config-row-label"><span class="config-row-name">Keep at home (per village)</span></div>
+            <div class="config-row-control">
+              {% for u, lbl in farms.mass.unit_options %}
+              <span class="d-inline-block mr-2 mb-1" style="width:7.5rem">{{ lbl }}
+                <input type="number" min="0" class="form-control form-control-sm d-inline-block mass-keep" style="width:4.5rem" data-unit="{{ u }}" value="{{ ms.keep_home.get(u, 0) }}"></span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="fs-help text-muted">Held back in <em>every</em> village in the group before the squads are built, on top of anything an armed noble job has reserved.</div>
+        </div>
+        {{ row('Return after (hours)',
+               'Off villages <input type="number" min="0.5" max="24" step="0.5" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="runtime_off_hours" value="'
+               ~ ms.runtime_off_hours ~ '"> def villages <input type="number" min="0.5" max="24" step="0.5" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="runtime_def_hours" value="'
+               ~ ms.runtime_def_hours ~ '">',
+               'Roughly when the runs should be back. Every option is sized to finish at about the same time. A village counts as off when most of the troops it is sending are axes, light cavalry or mounted archers.') }}
+        <div class="fs-setting">
+          <div class="config-row">
+            <div class="config-row-label"><span class="config-row-name">Use these options</span></div>
+            <div class="config-row-control">
+              {% for o in [1, 2, 3, 4] %}
+              <label class="mr-3 mb-1" style="font-weight:normal"><input type="checkbox" class="mass-opt-cb" value="{{ o }}"{% if o in ms.options %} checked{% endif %}> {{ o }}</label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="fs-help text-muted">Locked options and ones that already have a squad out are skipped automatically; this is for leaving an option free on purpose.</div>
+        </div>
+        {{ row('Fill the best option first',
+               toggle('mass', 'prioritise_high_option', ms.prioritise_high_option),
+               'On: troops go to option 4 first and the lower ones get the remainder, which is worth more per trip. Off: with plenty of troops they are spread evenly so every option comes home together.') }}
+        {{ row('Run every (minutes)',
+               'Every <input type="number" min="15" class="form-control form-control-sm d-inline-block" style="width:5.5rem" data-scope="mass" data-param="interval_minutes" value="'
+               ~ ms.interval_minutes ~ '"> &plusmn; <input type="number" min="0" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="jitter_minutes" value="'
+               ~ ms.jitter_minutes ~ '">',
+               'How often a pass runs, with a random spread so the sends do not land on a grid. Passes never run outside the bot active hours.') }}
+        {{ row('Skip villages under attack',
+               toggle('mass', 'skip_under_attack', ms.skip_under_attack),
+               'Leave troops home in any village with an incoming attack. A group with the "even when attacked" scavenging policy above keeps going regardless.') }}
+        {{ row('Night consolidate',
+               toggle('mass', 'night_consolidate', ms.night_consolidate),
+               'The last pass before the bot stops for the night sends one long run on the best available option instead of splitting, so the troops are out while nobody is watching. Shares the Night consolidate quick-toggle with per-village scavenging.') }}
+        {{ row('Overnight run length (hours)',
+               '<input type="number" min="1" max="24" step="0.5" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="night_hours" value="'
+               ~ ms.night_hours ~ '"> sent in the last <input type="number" min="15" max="240" class="form-control form-control-sm d-inline-block" style="width:5rem" data-scope="mass" data-param="night_lead_minutes" value="'
+               ~ ms.night_lead_minutes ~ '"> min before the bot sleeps',
+               'Set the length to about how long you are away &mdash; 6 hours for a normal night. It is tied to the bot\'s active hours (bot.active_hours, currently ' ~ (data.config.bot.active_hours if data.config else '?') ~ ') rather than a clock window of its own, because the pass cannot run once the bot has gone quiet.') }}
+        <hr>
+        <div class="fs-help text-muted">
+          {% if farms.mass.last_run %}
+          Last pass sent <strong>{{ farms.mass.last_sent }}</strong> squad{{ 's' if farms.mass.last_sent != 1 else '' }}
+          over {{ farms.mass.last_villages }} village{{ 's' if farms.mass.last_villages != 1 else '' }}{% if farms.mass.last_skipped %},
+          {{ farms.mass.last_skipped }} skipped for incoming{% endif %}.
+          {% else %}
+          No pass has run yet.
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
     <div class="card config-card">
       <div class="card-header">Per-village scavenging</div>
       <div class="card-body p-0">
@@ -577,9 +683,17 @@
     el.stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
   }
   function persist(scope, param, value) {
-    var url = scope === 'farm'
-      ? '/app/config/set?parameter=farms.' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value)
-      : '/app/scavenge/set?parameter=' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
+    var url;
+    if (scope === 'farm') {
+      url = '/app/config/set?parameter=farms.' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
+    } else if (scope === 'mass') {
+      // Mass scavenging is one nested block, not a per-village broadcast: it is
+      // configured for a group as a whole, so it must not be written into every
+      // village the way the scavenge scope is.
+      url = '/app/config/set?parameter=farms.mass_scavenge.' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
+    } else {
+      url = '/app/scavenge/set?parameter=' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
+    }
     return $.getJSON(url, function () { flashSaved(); });
   }
 
@@ -595,6 +709,33 @@
     $('input[data-param], select[data-param]').change(function () {
       var t = $(this);
       persist(t.attr('data-scope'), t.attr('data-param'), t.val());
+    });
+
+    // Mass scavenging pickers. Units and options are stored as lists (not as
+    // an exclude list like the per-village picker above): the mass settings
+    // stand on their own rather than trimming a village's own choice, and the
+    // unit list doubles as the order they are handed to the options.
+    $('.mass-unit-cb').change(function () {
+      var units = [];
+      $('.mass-unit-cb').each(function () {
+        if ($(this).is(':checked')) units.push($(this).val());
+      });
+      persist('mass', 'units', JSON.stringify(units));
+    });
+    $('.mass-opt-cb').change(function () {
+      var options = [];
+      $('.mass-opt-cb').each(function () {
+        if ($(this).is(':checked')) options.push(parseInt($(this).val(), 10));
+      });
+      persist('mass', 'options', JSON.stringify(options));
+    });
+    $('.mass-keep').change(function () {
+      var keep = {};
+      $('.mass-keep').each(function () {
+        var n = parseInt($(this).val(), 10);
+        if (n > 0) keep[$(this).attr('data-unit')] = n;
+      });
+      persist('mass', 'keep_home', JSON.stringify(keep));
     });
 
     // Scavenge unit picker: store the UNCHECKED units as the exclude list.
