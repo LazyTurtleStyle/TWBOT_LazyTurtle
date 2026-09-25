@@ -1447,6 +1447,11 @@ QUICK_TOGGLES = {
     # shape as Farming and Building. Defaults on, so a config written before the
     # key existed keeps behaving as it did - the per-village flags still decide.
     "scavenge": ("Scavenging", "farms.scavenge", True),
+    # Sits under Scavenging because the master switch stops it too: "turn
+    # scavenging off" has to mean all of it, however the runs are sent. It is
+    # listed first of the three because it decides WHICH path sends, while the
+    # two below only tune the per-village one.
+    "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
     "scavenge_attacked": ("Scavenge when attacked", "village_template.gather_when_attacked"),
     "scavenge_night": ("Night consolidate", "village_template.gather_night_consolidate"),
     # The in-game (premium) Account Manager. Each job is its own switch because
@@ -1465,9 +1470,6 @@ QUICK_TOGGLES = {
     "event": ("Play the event", "events.auto_play"),
     "mint": ("Feed the coin village", "minting.enabled"),
     "dodge": ("Dodge tagged attacks", "defence.dodge"),
-    # Scavenges a whole village group in one pass on its own clock, instead of
-    # each village scavenging when its turn comes round in the main loop.
-    "mass_scavenge": ("Mass scavenging", "farms.mass_scavenge.enabled"),
 }
 
 # Per-village quick toggles are broadcast to every village (not a global

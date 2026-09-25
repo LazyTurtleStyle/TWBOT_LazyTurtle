@@ -355,7 +355,11 @@
 	.world-row.active { background: linear-gradient(90deg, rgba(224,123,44,.14), transparent 70%); }
 
 	/* ---------- Quick-controls dock (right edge) ---------- */
-	.quick-dock { position: fixed; top: 0; right: 0; height: 100vh; width: 300px;
+	/* dvh, not vh: on a phone 100vh is the viewport with the browser chrome
+	   retracted, so a panel sized in vh hangs below the visible area and its
+	   last rows cannot be reached. vh first as the fallback for browsers
+	   without dvh. Width follows the screen on a narrow phone. */
+	.quick-dock { position: fixed; top: 0; right: 0; height: 100vh; height: 100dvh; width: min(300px, 90vw);
 		transform: translateX(100%); transition: transform .26s cubic-bezier(.4,0,.2,1); z-index: 55; }
 	.quick-dock.open { transform: translateX(0); }
 	.quick-tab { position: absolute; left: -38px; top: 96px; width: 38px; border: 0; cursor: pointer;
@@ -364,8 +368,22 @@
 		text-transform: uppercase; box-shadow: -8px 0 20px -10px rgba(0,0,0,.6); }
 	.quick-tab:hover { background: #f0934a; }
 	.quick-panel { height: 100%; background: linear-gradient(180deg, #1a1712, #131009); border-left: 1px solid var(--line);
-		box-shadow: -24px 0 50px -24px rgba(0,0,0,.8); padding: 22px 20px; display: flex; flex-direction: column; }
-	.quick-panel .qp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+		box-shadow: -24px 0 50px -24px rgba(0,0,0,.8); padding: 22px 20px; display: flex; flex-direction: column;
+		/* The toggle list outgrew the screen: nothing here declared an overflow,
+		   so on a short viewport the rows past the fold were simply clipped and
+		   there was no way to reach them. Scrolls the list the same way the
+		   sidebar nav does, with the header and the bot button pinned so Close
+		   and Stop are never the things scrolled away. */
+		overflow-y: auto; overscroll-behavior: contain;
+		scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+	.quick-panel::-webkit-scrollbar { width: 8px; }
+	.quick-panel::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+	/* Pinned to the scrollport top, not to the content: the negative margin
+	   pulls the header over the panel's own top padding so that when it sticks
+	   at 0 the rows scroll under it instead of appearing in the gap above. */
+	.quick-panel .qp-head { display: flex; align-items: center; justify-content: space-between;
+		position: sticky; top: 0; z-index: 2; background: #1a1712;
+		margin: -22px 0 8px; padding: 22px 0 8px; }
 	.quick-panel .qp-head h3 { font-size: 18px; }
 	.qc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 2px;
 		border-bottom: 1px solid var(--line-soft); cursor: pointer; }
@@ -384,7 +402,9 @@
 	.qc-row.qc-child .toggle.on .track::after { left: 17px; }
 	.qc-caption { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px 12px;
 		border: 1px dashed var(--line); border-radius: var(--radius); color: var(--ink-dim); font-size: 12px; }
-	.quick-panel .qp-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 16px; }
+	.quick-panel .qp-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px;
+		position: sticky; bottom: 0; z-index: 2; background: #131009;
+		margin-bottom: -22px; padding: 16px 0 22px; }
 	.quick-panel .qp-foot .btn { width: 100%; }
 
 	/* ---------- Dirty-state save bar ---------- */
@@ -613,9 +633,9 @@
 	<div class="quick-panel">
 		<div class="qp-head"><h3>Quick controls</h3><button class="btn btn-sm" onclick="toggleQuick()">Close</button></div>
 		{% for t in quick_toggles %}
-		<div class="qc-row{% if t.key in ('scavenge_night', 'scavenge_attacked', 'am_build', 'am_recruit', 'am_research', 'am_setup') %} qc-child{% elif t.key in ('scavenge', 'am') %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
+		<div class="qc-row{% if t.key in ('mass_scavenge', 'scavenge_night', 'scavenge_attacked', 'am_build', 'am_recruit', 'am_research', 'am_setup') %} qc-child{% elif t.key in ('scavenge', 'am') %} qc-parent{% endif %}" onclick="quickFlip(this)" data-key="{{ t.key }}" data-on="{{ '1' if t.on else '0' }}">
 			<div><div class="qc-name">{{ t.label }}</div>
-				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run','am':'the in-game manager does these jobs, so the bot skips them','am_build':'the manager runs the build queue','am_recruit':'the manager fills barracks and stable','am_research':'the manager runs the smith','am_setup':'re-apply your group templates every morning','event':'spend the event energy so the bar never sits full','mint':'send resources to the coin village'}.get(t.key, '') }}</div></div>
+				<div class="qc-sub">{{ {'farm':'send farm runs','recruit':'queue troops','build':'construction queue','trade':'market balancing','scavenge':'idle troops','mass_scavenge':'whole group in one pass, on its own clock','scavenge_attacked':'keep going during harmless incomings','scavenge_night':'one long overnight run','am':'the in-game manager does these jobs, so the bot skips them','am_build':'the manager runs the build queue','am_recruit':'the manager fills barracks and stable','am_research':'the manager runs the smith','am_setup':'re-apply your group templates every morning','event':'spend the event energy so the bar never sits full','mint':'send resources to the coin village'}.get(t.key, '') }}</div></div>
 			<span class="toggle {{ 'on' if t.on else '' }}"><span class="track"></span></span>
 		</div>
 		{% endfor %}

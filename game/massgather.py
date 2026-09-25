@@ -32,7 +32,8 @@ What it still honours, because these are safety rules rather than preferences:
   timed to be back by gather_night_end
 
 Settings live in config.json under farms.mass_scavenge. It ships disabled and
-has to be armed by hand.
+has to be armed by hand, and the account-wide farms.scavenge switch stops it
+along with everything else that scavenges.
 """
 
 import datetime
@@ -445,6 +446,12 @@ class MassGatherManager:
         """One pass. Returns the number of squads sent."""
         conf = self.conf
         if not conf["enabled"]:
+            return 0
+        # The account-wide Scavenging switch stops this too. It is the panic
+        # switch - "stop scavenging" has to mean all of it, or turning it off
+        # would leave sixty villages still sending runs from a module the user
+        # was not looking at.
+        if not (self.config.get("farms") or {}).get("scavenge", True):
             return 0
         state = load_state()
         now = time.time()
