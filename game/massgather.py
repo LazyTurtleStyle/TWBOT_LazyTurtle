@@ -29,8 +29,8 @@ What it still honours, because these are safety rules rather than preferences:
   lets a village keep scavenging through an incoming). The per-village
   gather_when_attacked flag is NOT read - it belongs to the other path
 - troops an armed noble job has reserved for an escort stay home
-- night consolidation: the last pass before the bot's bedtime sends one long
-  run on the best available option, sized to cover the night
+- night consolidation: the last pass before the bot's bedtime sends long runs
+  sized to cover the night, filling the options from the best one down
 
 Settings live in config.json under farms.mass_scavenge. It ships disabled and
 has to be armed by hand, and the account-wide farms.scavenge switch stops it
@@ -293,10 +293,12 @@ def plan_village(village, conf, options, reserved=None, night=0):
         return []
 
     if night:
-        # One long run on the best option available, sized to be home by
-        # morning. The rest of the troops stay put rather than going out on a
-        # short run that would land in the middle of the night.
-        usable = [max(usable)]
+        # Long runs on every option, filled from the best down. Loot for a run
+        # of a given length is the same whatever the option - carry scales
+        # inversely with the loot factor - so using one option and sending the
+        # leftover troops nowhere threw away most of the night. In practice a
+        # village fills option 4, usually 3, sometimes 2, and option 1 goes
+        # empty; an option with nothing left for it simply gets no squad.
         seconds = night
     else:
         seconds = hours * 3600
@@ -309,7 +311,8 @@ def plan_village(village, conf, options, reserved=None, night=0):
     if total_budget <= 0:
         return []
 
-    squads = _distribute(available, carry_of, budget, total_loot, total_budget, conf)
+    squads = _distribute(available, carry_of, budget, total_loot, total_budget,
+                         conf, best_first=bool(night))
 
     requests = []
     for option in sorted(squads, reverse=True):
@@ -328,7 +331,8 @@ def plan_village(village, conf, options, reserved=None, night=0):
     return requests
 
 
-def _distribute(available, carry_of, budget, total_loot, total_budget, conf):
+def _distribute(available, carry_of, budget, total_loot, total_budget, conf,
+                best_first=False):
     """Hand the troops out over the options.
 
     Two cases, as in the script. With more troops than the runtime can use, the
@@ -342,7 +346,12 @@ def _distribute(available, carry_of, budget, total_loot, total_budget, conf):
     remaining = dict(available)
     squads = {option: {} for option in budget}
 
-    spread = (total_loot <= total_budget
+    # best_first (the overnight pass) always fills the most valuable option
+    # first, whatever the account's normal preference: with a night's worth of
+    # runtime the budgets are large enough that spreading evenly would leave the
+    # best option short while option 1 got troops it cannot use well.
+    spread = (not best_first
+              and total_loot <= total_budget
               and not conf["prioritise_high_option"]
               and sum(available.values()) > 130)
     if spread:
