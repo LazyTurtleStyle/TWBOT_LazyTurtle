@@ -861,7 +861,8 @@ def report_analysis_run():
     (view, owner) and the thresholds and words it is showing it with."""
     body = request.get_json(silent=True) or {}
     keep = ("view", "owner", "min_units", "min_loss_pct", "alive_max_loss_pct",
-            "rebuild_days", "prefix", "prefix_alive", "rebuild_word")
+            "rebuild_days", "prefix", "prefix_alive", "rebuild_word",
+            "min_off_pct")
     job = {k: body.get(k) for k in keep if body.get(k) is not None}
     return jsonify({"ok": DataReader.report_analysis_request(job)})
 

@@ -57,6 +57,14 @@ DEFAULT_MIN_LOSS_PCT = 90
 # a wrong word on the map. There was exactly one such report in the account
 # this was built against.
 DEFAULT_ALIVE_MAX_LOSS_PCT = 50
+# How much of a stack has to be axe/light/mounted-archer before its death says
+# anything about a nuke. Without this, lowering min_units far enough to catch
+# half nukes also catches scout waves: two runs of ~2900 spies that lost
+# everything sit in this account's reports, and both would have been written up
+# as a dead nuke. The split is not close - across 301 incoming stacks over 2000
+# units the signature share is either 0% or at least 75.6% - so this sits in the
+# empty middle rather than on top of either pile.
+DEFAULT_MIN_OFF_PCT = 25
 DEFAULT_NOTE_PREFIX = "clear dood"
 DEFAULT_NOTE_PREFIX_ALIVE = "clear leeft"
 # A dead nuke does not stay dead. Nobody on this account has come back from one
@@ -223,7 +231,8 @@ def find_clear_states(reports, managed, village_db, world,
                      min_units=DEFAULT_MIN_UNITS,
                      min_loss_pct=DEFAULT_MIN_LOSS_PCT,
                      alive_max_loss_pct=DEFAULT_ALIVE_MAX_LOSS_PCT,
-                     rebuild_days=DEFAULT_REBUILD_DAYS, now=None):
+                     rebuild_days=DEFAULT_REBUILD_DAYS, now=None,
+                     min_off_pct=DEFAULT_MIN_OFF_PCT):
     """Every enemy village that has thrown a real stack at us, and what became
     of it, newest event first.
 
@@ -274,6 +283,17 @@ def find_clear_states(reports, managed, village_db, world,
         sent = sum(_int(n) for n in (extra.get("units_sent") or {}).values())
         lost = sum(_int(n) for n in (extra.get("units_losses") or {}).values())
         if not sent or sent < min_units:
+            continue
+        # What died has to have been a nuke. Size alone does not say so: a
+        # scout wave is thousands of units and loses all of them, and calling
+        # that a dead nuke puts a wrong word on the map about a village whose
+        # nuke never left home. Axes, light and mounted archers are built in
+        # offensive villages and nowhere else, so their share is the test -
+        # rams and catapults deliberately do not count, because a ram fake from
+        # a defensive village is exactly how a real nuke stays hidden.
+        signature = sum(_int((extra.get("units_sent") or {}).get(u))
+                        for u in OFFENSIVE_SIGNATURE)
+        if min_off_pct and 100.0 * signature / sent < min_off_pct:
             continue
         pct = round(100.0 * lost / sent)
         if pct >= min_loss_pct:
@@ -534,7 +554,8 @@ def run(wrapper, home_village, config):
         _int(pick("min_loss_pct", DEFAULT_MIN_LOSS_PCT)) or DEFAULT_MIN_LOSS_PCT,
         _int(pick("alive_max_loss_pct", DEFAULT_ALIVE_MAX_LOSS_PCT))
         or DEFAULT_ALIVE_MAX_LOSS_PCT,
-        _int(pick("rebuild_days", DEFAULT_REBUILD_DAYS)))
+        _int(pick("rebuild_days", DEFAULT_REBUILD_DAYS)),
+        min_off_pct=_int(pick("min_off_pct", DEFAULT_MIN_OFF_PCT)))
     view = job.get("view") if job.get("view") in VIEWS else ""
     owner = str(job.get("owner") or "")
     rows = [r for r in rows if in_view(r, view)
