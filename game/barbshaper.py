@@ -1,5 +1,5 @@
 """
-Barb shaper (alpha)
+Barb shaper
 Knocks down the walls of nearby barbarian villages with axe+ram attacks so the
 normal farm loop can farm them without bleeding light cavalry on the wall.
 

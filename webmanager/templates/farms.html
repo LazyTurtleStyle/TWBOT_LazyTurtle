@@ -60,8 +60,7 @@
   <li class="nav-item"><a class="nav-link" href="#scavenge" data-pane="scavenge">Scavenging</a></li>
   <li class="nav-item"><a class="nav-link" href="#players" data-pane="players">Player farms
     {% if playerfarms.farms %}<span class="badge badge-dark">{{ playerfarms.farms|length }}</span>{% endif %}</a></li>
-  <li class="nav-item"><a class="nav-link" href="#shaper" data-pane="shaper">Barb shaper
-    <span class="badge badge-warning">alpha</span></a></li>
+  <li class="nav-item"><a class="nav-link" href="#shaper" data-pane="shaper">Barb shaper</a></li>
 </ul>
 
 <div id="pane-barbs">
@@ -569,7 +568,7 @@
 {% set sh = farms.shaper %}
 <div id="pane-shaper" style="display:none">
 <div class="alert alert-warning fs-intro" role="alert">
-  <strong>Alpha, not yet fired at a live wall.</strong> Sends <strong>axe + ram</strong> attacks at the
+  Sends <strong>axe + ram</strong> attacks at the
   closest barbarian villages whose last scout report shows a wall above the level set below, so the
   farm loop stops bleeding light cavalry on them. It only engages targets a report has proven
   <em>empty</em>, sizes the ram count to raze the wall to 0 in one hit, and adds enough axes that even
