@@ -936,8 +936,26 @@ def snipe_arm():
         boost=body.get("boost"),
         max_delta_ms=body.get("max_delta_ms"),
         hit_ms=body.get("hit_ms"),
+        tribe_target_id=body.get("tribe_target_id"),
     )
     return jsonify({"ok": bool(armed), "armed": len(armed), "errors": errors})
+
+
+@app.route('/app/tribesnipe/add', methods=['POST'])
+def tribesnipe_add():
+    """Store a tribemate's village as snipe target, one entry per attack.
+    Expects JSON: x, y, arrivals [epoch ms the attack lands], label."""
+    body = request.get_json(silent=True) or {}
+    added, errors = DataReader.tribe_target_add(
+        body.get("x"), body.get("y"), body.get("arrivals") or [],
+        label=body.get("label") or "")
+    return jsonify({"ok": bool(added), "added": added, "errors": errors})
+
+
+@app.route('/app/tribesnipe/remove', methods=['GET', 'POST'])
+def tribesnipe_remove():
+    tid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")
+    return jsonify({"ok": DataReader.tribe_target_remove(tid)})
 
 
 @app.route('/app/snipe/cancel', methods=['GET', 'POST'])

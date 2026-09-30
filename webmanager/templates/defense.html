@@ -64,6 +64,57 @@
 	.cs-kind { font-size: .72rem; padding: 0 .25rem; height: auto; }
 </style>
 
+{% macro snipe_rows(snipes, empty_text) %}
+				{% for s in snipes %}
+				<tr>
+					<td>
+						{% set badge = {'armed': 'warning', 'running': 'info', 'done': 'success',
+										'failed': 'danger', 'disarmed': 'secondary'} %}
+						<span class="badge badge-{{ badge.get(s.status, 'dark') }}">{{ s.status }}</span>
+						{% if s.events %}
+						<details class="mt-1"><summary class="small text-muted">log</summary>
+							<div class="snipe-log text-muted">{{ s.events|join('\n') }}</div>
+						</details>
+						{% endif %}
+					</td>
+					<td><strong>{{ s.village_name }}</strong>
+						<small class="text-muted d-block">
+							{% for u, n in (s.units_sent or s.units).items() %}{{ u }} {{ n }} {% endfor %}
+							· {{ s.pace_unit }} pace · {{ s.distance }} fields</small></td>
+					<td><strong>{{ s.target_name }}</strong>
+						{% if s.tribe_target_id %}<span class="badge badge-info">tribe</span>{% endif %}
+						<small class="text-muted d-block coord">{{ s.target_x }}|{{ s.target_y }}</small></td>
+					<td class="ms" data-ms="{{ s.land_ms }}">…</td>
+					<td class="small text-muted">
+						{% if s.send_ms %}<span class="ms" data-ms="{{ s.send_ms }}">…</span>
+						{% else %}est. <span class="ms" data-ms="{{ (s.send_est_ts or 0) * 1000 }}">…</span>{% endif %}
+					</td>
+					<td class="small">
+						{% if s.status == 'missed' %}<span class="badge badge-secondary">recalled</span> {% endif %}
+						{{ s.result or '—' }}
+						{% if s.delta_ms is defined and s.delta_ms is not none %}
+							{# Judged against the limit that was set for this snipe, not a
+							   fixed number: the whole point is that you choose what counts
+							   as close enough. #}
+							{% set cap = s.max_delta_ms or 100 %}
+							{# flagged: a coin flip on the hit ms, or close to the aim but on the far side of the hit,
+							   kept only because no tolerance was set. Never green - the
+							   millisecond delta flatters a snipe that defended nothing. #}
+							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('warning' if (s.flagged or s.delta_ms|abs > cap) else 'success') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
+							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
+						{% endif %}
+					</td>
+					<td class="text-right">
+						{% if s.status in ('armed', 'running') %}
+						<button class="btn btn-sm btn-outline-danger" onclick="snipeCancel('{{ s.id }}')">cancel</button>
+						{% endif %}
+					</td>
+				</tr>
+				{% else %}
+				<tr><td colspan="7" class="text-muted">{{ empty_text }}</td></tr>
+				{% endfor %}
+{% endmacro %}
+
 {% macro csnipe_rows(snipes, empty_text) %}
 	{% for s in snipes %}
 	<tr>
@@ -125,6 +176,9 @@
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
+	<li class="nav-item"><a class="nav-link" href="#tribesnipe" data-pane="tribesnipe">Tribe snipe
+		<span class="badge badge-warning">alpha</span>
+		{% if snipe.tribe_targets %}<span class="badge badge-info">{{ snipe.tribe_targets|length }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#dodge" data-pane="dodge">Dodge
 		<span class="badge badge-warning">alpha</span>
 		{% if dodge.active_count %}<span class="badge badge-{{ 'danger' if dodge.out_count else 'info' }}">{{ dodge.active_count }}</span>{% endif %}</a></li>
@@ -575,53 +629,7 @@
 				<th>Send</th><th>Result</th><th></th>
 			</tr></thead>
 			<tbody>
-				{% for s in snipe.snipes %}
-				<tr>
-					<td>
-						{% set badge = {'armed': 'warning', 'running': 'info', 'done': 'success',
-										'failed': 'danger', 'disarmed': 'secondary'} %}
-						<span class="badge badge-{{ badge.get(s.status, 'dark') }}">{{ s.status }}</span>
-						{% if s.events %}
-						<details class="mt-1"><summary class="small text-muted">log</summary>
-							<div class="snipe-log text-muted">{{ s.events|join('\n') }}</div>
-						</details>
-						{% endif %}
-					</td>
-					<td><strong>{{ s.village_name }}</strong>
-						<small class="text-muted d-block">
-							{% for u, n in (s.units_sent or s.units).items() %}{{ u }} {{ n }} {% endfor %}
-							· {{ s.pace_unit }} pace · {{ s.distance }} fields</small></td>
-					<td><strong>{{ s.target_name }}</strong>
-						<small class="text-muted d-block coord">{{ s.target_x }}|{{ s.target_y }}</small></td>
-					<td class="ms" data-ms="{{ s.land_ms }}">…</td>
-					<td class="small text-muted">
-						{% if s.send_ms %}<span class="ms" data-ms="{{ s.send_ms }}">…</span>
-						{% else %}est. <span class="ms" data-ms="{{ (s.send_est_ts or 0) * 1000 }}">…</span>{% endif %}
-					</td>
-					<td class="small">
-						{% if s.status == 'missed' %}<span class="badge badge-secondary">recalled</span> {% endif %}
-						{{ s.result or '—' }}
-						{% if s.delta_ms is defined and s.delta_ms is not none %}
-							{# Judged against the limit that was set for this snipe, not a
-							   fixed number: the whole point is that you choose what counts
-							   as close enough. #}
-							{% set cap = s.max_delta_ms or 100 %}
-							{# flagged: a coin flip on the hit ms, or close to the aim but on the far side of the hit,
-							   kept only because no tolerance was set. Never green - the
-							   millisecond delta flatters a snipe that defended nothing. #}
-							<span class="badge badge-{{ 'secondary' if s.status == 'missed' else ('warning' if (s.flagged or s.delta_ms|abs > cap) else 'success') }}">{{ '%+d'|format(s.delta_ms) }}ms</span>
-							{% if s.max_delta_ms %}<small class="text-muted">limit {{ s.max_delta_ms }}ms</small>{% endif %}
-						{% endif %}
-					</td>
-					<td class="text-right">
-						{% if s.status in ('armed', 'running') %}
-						<button class="btn btn-sm btn-outline-danger" onclick="snipeCancel('{{ s.id }}')">cancel</button>
-						{% endif %}
-					</td>
-				</tr>
-				{% else %}
-				<tr><td colspan="7" class="text-muted">No snipes armed yet. Pick an incoming attack below.</td></tr>
-				{% endfor %}
+				{{ snipe_rows(snipe.snipes, 'No snipes armed yet. Pick an incoming attack below.') }}
 			</tbody>
 		</table>
 	</div>
@@ -771,6 +779,97 @@
 	</div>
 </div>
 </div><!-- /pane-snipe -->
+
+<div id="pane-tribesnipe" style="display:none">
+<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Support snipe for a
+	tribemate. The bot cannot see attacks on someone else's village, so type in where and when: the
+	village's coordinates and the arrival of each attack, to the millisecond, as your tribemate reads it off
+	their incoming. Every attack becomes a row below with the same snipe options as the Snipe tab - one per
+	village and pace - and it fires with the same engine, as support into their village.</p>
+
+<div class="card mb-3 border-info">
+	<div class="card-header py-2"><strong>Add a target</strong></div>
+	<div class="card-body py-2">
+		<div class="form-row">
+			<div class="form-group col-6 col-md-2">
+				<label>Coordinates</label>
+				<input type="text" class="form-control form-control-sm" id="ts-coords" placeholder="512|487"
+					oninput="tribeParsePreview()">
+			</div>
+			<div class="form-group col-6 col-md-3">
+				<label>Label <small class="text-muted">(whose village, optional)</small></label>
+				<input type="text" class="form-control form-control-sm" id="ts-label" maxlength="80"
+					placeholder="e.g. Jan - main">
+			</div>
+			<div class="form-group col-12 col-md-7">
+				<label>Arrival times <small class="text-muted">(one attack per line)</small></label>
+				<textarea class="form-control form-control-sm" id="ts-arrivals" rows="3"
+					placeholder="21:34:12:345&#10;morgen om 03:12:44:120&#10;01.10. 07:00:00:512"
+					oninput="tribeParsePreview()"></textarea>
+				<small class="text-muted">Anything with a time on it works: <code>21:34:12:345</code>,
+					<code>vandaag om …</code> / <code>morgen om …</code>, <code>01.10.</code> or
+					<code>01.10.26</code> in front, pasted lines from the game included. No date means today, or
+					tomorrow if that time has already passed. Read in this browser's time zone.</small>
+			</div>
+		</div>
+		<div class="small mb-2" id="ts-preview"></div>
+		<div class="text-danger small mb-2" id="ts-error"></div>
+		<button class="btn btn-sm btn-info" onclick="tribeAdd()">Add</button>
+	</div>
+</div>
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Tribe targets,</strong>
+		<small class="text-muted">soonest hit first · dropped an hour after the hit</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Village</th><th>Attack lands</th><th>Lands in</th><th>Armed</th><th></th>
+			</tr></thead>
+			<tbody>
+				{% for t in snipe.tribe_targets %}
+				{% set armed = snipe.snipes|selectattr('tribe_target_id', 'equalto', t.id)|list %}
+				<tr>
+					<td><strong>{{ t.label or t.village_name or 'village' }}</strong>
+						<small class="text-muted coord">{{ t.x }}|{{ t.y }}</small>
+						<small class="text-muted d-block">
+							{% if t.village_id %}{% if t.label and t.village_name %}{{ t.village_name }} · {% endif %}{{ t.points or '?' }} points
+							{% else %}<span class="text-warning">not in the map cache - check the coordinates</span>{% endif %}</small></td>
+					<td class="ms" data-ms="{{ t.arrival_ms }}">…</td>
+					<td><span class="def-eta text-danger" data-arrival="{{ (t.arrival_ms // 1000) }}">…</span></td>
+					<td>{% if armed %}<span class="badge badge-success">{{ armed|length }}</span>{% else %}—{% endif %}</td>
+					<td class="text-right text-nowrap">
+						<button class="btn btn-sm btn-outline-warning" onclick='tribeOpenOptions({{ t.id|tojson }})'>snipe options</button>
+						<button class="btn btn-sm btn-outline-secondary" onclick='tribeRemove({{ t.id|tojson }})' title="forget this target; snipes already armed stay armed">remove</button>
+					</td>
+				</tr>
+				{% else %}
+				<tr><td colspan="5" class="text-muted">No targets yet. Add your tribemate's village above.</td></tr>
+				{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+
+<!-- The Snipe tab's options panel is moved in here while a tribe target is open. -->
+<div id="ts-options-slot"></div>
+
+<div class="card mt-3">
+	<div class="card-header py-2"><strong>Tribe snipes,</strong>
+		<small class="text-muted">active first · cancel them here or on the Snipe tab</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm def-table mb-0">
+			<thead><tr>
+				<th>Status</th><th>From</th><th>Target</th><th>Lands at</th>
+				<th>Send</th><th>Result</th><th></th>
+			</tr></thead>
+			<tbody>
+				{{ snipe_rows(snipe.snipes|selectattr('tribe_target_id')|list, 'No tribe snipes armed yet.') }}
+			</tbody>
+		</table>
+	</div>
+</div>
+</div><!-- /pane-tribesnipe -->
 
 <div id="pane-dodge" style="display:none">
 {% set ds = dodge.settings %}
@@ -928,7 +1027,7 @@
 const CSNIPE = {{ csnipe|tojson }};
 
 // --- tabs (hash-addressable so a reload stays on the same pane) ---
-const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe', 'dodge'];
+const PANES = ['overview', 'village', 'csnipe', 'csnipetest', 'snipe', 'tribesnipe', 'dodge'];
 function showPane(name) {
 	document.querySelectorAll('#def-tabs .nav-link').forEach(function(a) {
 		a.classList.toggle('active', a.getAttribute('data-pane') === name);
@@ -1865,7 +1964,22 @@ function cstArm() {
 
 // --- support-snipe tab ---
 const SNIPE = {{ snipe|tojson }};
-let snForm = { incoming_id: null, target_id: null, arrival: null };
+let snForm = { incoming_id: null, target_id: null, arrival: null, tribe: null };
+/* What the support lands in: one of our own villages for an incoming, or the
+   tribemate's village typed in on the Tribe snipe tab - both carry the
+   coordinates the options are worked out from. */
+function snipeTarget() {
+	return snForm.tribe || SNIPE.villages[snForm.target_id];
+}
+/* The options panel is one element shared by the Snipe and Tribe snipe tabs;
+   it is moved to whichever of them opened it. */
+function snipeMovePanel(slotId) {
+	const panel = document.getElementById('snipe-options');
+	const slot = slotId ? document.getElementById(slotId) : null;
+	if (slot) slot.appendChild(panel);
+	else document.getElementById('pane-snipe').appendChild(panel);
+	return panel;
+}
 function esc(s) {
 	const d = document.createElement('div');
 	d.textContent = String(s == null ? '' : s);
@@ -1906,18 +2020,22 @@ function snipeOpenOptions(villageId, commandId, arrival, arrivalMs) {
 	// last one, and the record of what was already armed against it, do not
 	// carry over.
 	if (snForm.incoming_id !== commandId) { SN_EDITS = {}; SN_ARMED = {}; }
-	snForm = { incoming_id: commandId, target_id: String(villageId), arrival: arrival };
+	snForm = { incoming_id: commandId, target_id: String(villageId), arrival: arrival, tribe: null };
 	const d = new Date(arrival * 1000);
 	document.getElementById('sn-context').textContent =
 		'· support ' + v.name + ', hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 	document.getElementById('sn-hit-ms').value = arrivalMs ? (arrivalMs % 1000) : 0;
+	snipeShowPanel(null);
+}
+
+function snipeShowPanel(slotId) {
 	document.getElementById('sn-error').textContent = '';
 	const res = document.getElementById('sn-launch-result');
 	if (res) res.innerHTML = '';
 	const armRes = document.getElementById('sn-arm-result');
 	if (armRes) armRes.innerHTML = '';
 	snipeBuildRows();
-	const panel = document.getElementById('snipe-options');
+	const panel = snipeMovePanel(slotId);
 	panel.style.display = '';
 	panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -2007,7 +2125,7 @@ function snipeUpdateHidden() {
 }
 
 function snipeRowRecalc(row) {
-	const target = SNIPE.villages[snForm.target_id];
+	const target = snipeTarget();
 	const v = SNIPE.villages[row.getAttribute('data-village-id')];
 	const infoEl = row.querySelector('.sn-row-info');
 	snipeMarkReach(row, v, target);
@@ -2172,7 +2290,7 @@ function snipeReadAmounts(i) {
 }
 
 function snipeBuildLaunchList() {
-	const target = SNIPE.villages[snForm.target_id];
+	const target = snipeTarget();
 	const body = document.querySelector('#sn-launch-table tbody');
 	if (!body) return;
 	let all = [];
@@ -2320,8 +2438,9 @@ function snipePostArm(options, noteEl, onArmed, skipped) {
 	return fetch('/app/snipe/arm', {
 		method: 'POST', headers: {'Content-Type': 'application/json'},
 		body: JSON.stringify({
-			incoming_id: snForm.incoming_id,
-			target_village_id: snForm.target_id,
+			incoming_id: snForm.tribe ? null : snForm.incoming_id,
+			target_village_id: snForm.tribe ? null : snForm.target_id,
+			tribe_target_id: snForm.tribe ? snForm.tribe.id : null,
 			land_ms: snipeLandMs(),
 			hit_ms: snipeHitMs(),
 			options: options,
@@ -2337,7 +2456,8 @@ function snipePostArm(options, noteEl, onArmed, skipped) {
 		if (noteEl) {
 			noteEl.innerHTML = res.armed
 				? '<span class="text-success">' + res.armed + ' armed</span> \u00b7 ' +
-				  '<a href="#snipe" onclick="location.reload();return false">refresh the list above</a>'
+				  '<a href="#" onclick="location.reload();return false">refresh the list' +
+				  (snForm.tribe ? ' below' : ' above') + '</a>'
 				: '<span class="text-danger">nothing armed</span>';
 		}
 	}).catch(function(e) {
@@ -2402,7 +2522,7 @@ function snipeRecalcAll() {
 
 function snipeBuildRows() {
 	const body = document.getElementById('sn-options-body');
-	const target = SNIPE.villages[snForm.target_id];
+	const target = snipeTarget();
 	if (!target || !target.coords) {
 		body.innerHTML = '<p class="text-muted small">target coordinates unknown</p>';
 		return;
@@ -2415,7 +2535,8 @@ function snipeBuildRows() {
 		((g && g.villages) || []).forEach(function(id) { allowed[String(id)] = 1; });
 	}
 	const rows = Object.values(SNIPE.villages).filter(function(v) {
-		return v.id !== snForm.target_id && v.coords && (!allowed || allowed[v.id]);
+		return v.id !== snForm.target_id && v.coords && (!allowed || allowed[v.id])
+			&& !(v.coords[0] === target.coords[0] && v.coords[1] === target.coords[1]);
 	});
 	if (!rows.length) {
 		body.innerHTML = '<p class="text-muted small">no eligible villages' + (allowed ? ' in this group' : '') + '</p>';
@@ -2553,9 +2674,132 @@ function snipeArm() {
 	});
 }
 
+// --- tribe snipe tab: the Snipe options, for a village typed in by hand ---
+const TRIBE_TARGETS = {};
+(SNIPE.tribe_targets || []).forEach(function(t) { TRIBE_TARGETS[t.id] = t; });
+
+function tribeOpenOptions(id) {
+	const t = TRIBE_TARGETS[id];
+	if (!t) return;
+	const key = 'tribe:' + id;
+	if (snForm.incoming_id !== key) { SN_EDITS = {}; SN_ARMED = {}; }
+	const name = t.label || t.village_name || (t.x + '|' + t.y);
+	snForm = { incoming_id: key, target_id: null, arrival: Math.floor(t.arrival_ms / 1000),
+		tribe: { id: t.id, name: name, coords: [t.x, t.y] } };
+	const d = new Date(t.arrival_ms);
+	document.getElementById('sn-context').textContent = '· support ' + name + ' (' + t.x + '|' + t.y +
+		'), hit at ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+	document.getElementById('sn-hit-ms').value = t.arrival_ms % 1000;
+	snipeShowPanel('ts-options-slot');
+}
+
+function tribeRemove(id) {
+	fetch('/app/tribesnipe/remove?id=' + encodeURIComponent(id))
+		.then(r => r.json()).then(function() { location.hash = '#tribesnipe'; location.reload(); });
+}
+
+/* "512|487", "(512|487) K45", "512 487" - the first two numbers of up to three
+   digits each. */
+function tribeParseCoords(text) {
+	const m = String(text || '').match(/(\d{1,3})\s*[|\/,\s]\s*(\d{1,3})/);
+	return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : null;
+}
+
+const TS_MONTHS = {jan: 0, feb: 1, mrt: 2, mar: 2, maa: 2, apr: 3, mei: 4, may: 4, jun: 5, jul: 6,
+	aug: 7, sep: 8, okt: 9, oct: 9, nov: 10, dec: 11};
+
+/* One line in, one landing moment out: {ms, assumed, noMs} or {error}.
+
+   The time is the only part that has to be there - HH:MM:SS with the
+   millisecond as :mmm or .mmm the way the game writes it. A missing
+   millisecond is allowed but called out, since a snipe aimed at .000 is a
+   guess. The date is whatever the line says (vandaag/morgen, 01.10., 01.10.26,
+   2026-10-01, okt 01, 2026), or today - tomorrow when today's has passed, the
+   one case where it is guessed, so the preview says so. */
+function tribeParseArrival(line, nowMs) {
+	const text = String(line || '').trim().toLowerCase();
+	if (!text) return null;
+	const times = [...text.matchAll(/(\d{1,2}):(\d{2}):(\d{2})(?:[:.,](\d{1,3}))?/g)];
+	if (!times.length) return { error: 'no time (HH:MM:SS:mmm) in "' + line.trim() + '"' };
+	const t = times.find(m => m[4] !== undefined) || times[0];
+	const hh = +t[1], mi = +t[2], ss = +t[3];
+	const ms = t[4] !== undefined ? parseInt((t[4] + '00').slice(0, 3), 10) : 0;
+	if (hh > 23 || mi > 59 || ss > 59) return { error: 'not a clock time: ' + t[0] };
+	const rest = text.replace(t[0], ' ');
+	const now = new Date(nowMs);
+	let y = now.getFullYear(), mo = now.getMonth(), da = now.getDate(), dated = false, m;
+	if (/\b(morgen|tomorrow)\b/.test(rest)) {
+		const d = new Date(y, mo, da + 1); y = d.getFullYear(); mo = d.getMonth(); da = d.getDate();
+		dated = true;
+	} else if (/\b(vandaag|today)\b/.test(rest)) {
+		dated = true;
+	} else if ((m = rest.match(/(\d{4})-(\d{1,2})-(\d{1,2})/))) {
+		y = +m[1]; mo = +m[2] - 1; da = +m[3]; dated = true;
+	} else if ((m = rest.match(/(\d{1,2})[.\/-](\d{1,2})(?:[.\/-](\d{2,4}))?/))) {
+		da = +m[1]; mo = +m[2] - 1; dated = true;
+		if (m[3]) y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+	} else if ((m = rest.match(/\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/))
+			&& TS_MONTHS[m[1]] !== undefined) {
+		mo = TS_MONTHS[m[1]]; da = +m[2]; dated = true;
+		if (m[3]) y = +m[3];
+	}
+	let at = new Date(y, mo, da, hh, mi, ss, ms).getTime();
+	let assumed = false;
+	if (!dated && at < nowMs) { at = new Date(y, mo, da + 1, hh, mi, ss, ms).getTime(); assumed = true; }
+	return { ms: at, assumed: assumed, noMs: t[4] === undefined };
+}
+
+function tribeParseAll() {
+	const now = Date.now();
+	return document.getElementById('ts-arrivals').value.split(/\n/)
+		.map(l => tribeParseArrival(l, now)).filter(Boolean);
+}
+
+function tribeParsePreview() {
+	const out = document.getElementById('ts-preview');
+	const coords = tribeParseCoords(document.getElementById('ts-coords').value);
+	const parsed = tribeParseAll();
+	const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+	const lines = parsed.map(function(p) {
+		if (p.error) return '<span class="text-danger">' + esc(p.error) + '</span>';
+		const d = new Date(p.ms);
+		const left = (p.ms - Date.now()) / 1000;
+		return days[d.getDay()] + ' ' + pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + ' ' + fmtMs(p.ms) +
+			' <span class="text-muted">· in ' + (left > 0 ? fmtDur(left) : '<span class="text-danger">already past</span>') +
+			'</span>' +
+			(p.assumed ? ' <span class="badge badge-warning">tomorrow - today’s has passed</span>' : '') +
+			(p.noMs ? ' <span class="badge badge-warning">no ms - aimed at .000</span>' : '');
+	});
+	out.innerHTML = (coords ? '<div>target <span class="coord">' + coords[0] + '|' + coords[1] + '</span></div>' : '') +
+		lines.map(l => '<div>' + l + '</div>').join('');
+}
+
+function tribeAdd() {
+	const err = document.getElementById('ts-error');
+	err.textContent = '';
+	const coords = tribeParseCoords(document.getElementById('ts-coords').value);
+	if (!coords) { err.textContent = 'type the coordinates, like 512|487'; return; }
+	const parsed = tribeParseAll();
+	const bad = parsed.filter(p => p.error);
+	if (bad.length) { err.textContent = bad.map(p => p.error).join(' · '); return; }
+	if (!parsed.length) { err.textContent = 'type at least one arrival time'; return; }
+	fetch('/app/tribesnipe/add', {
+		method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify({ x: coords[0], y: coords[1], arrivals: parsed.map(p => p.ms),
+			label: document.getElementById('ts-label').value.trim() }),
+	}).then(r => r.json()).then(function(res) {
+		if (!res.ok) { err.textContent = (res.errors || []).join(' · ') || 'nothing added'; return; }
+		location.hash = '#tribesnipe';
+		location.reload();
+	}).catch(function(e) { err.textContent = String(e); });
+}
+
 function snipeCancel(id) {
 	fetch('/app/snipe/cancel?id=' + encodeURIComponent(id))
-		.then(r => r.json()).then(function() { location.hash = '#snipe'; location.reload(); });
+		.then(r => r.json()).then(function() {
+			if (PANES.indexOf(location.hash.slice(1)) <= 0) location.hash = '#snipe';
+			location.reload();
+		});
 }
 </script>
 {% endblock %}
