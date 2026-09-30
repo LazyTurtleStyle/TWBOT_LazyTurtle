@@ -169,18 +169,16 @@
 	<li class="nav-item"><a class="nav-link" href="#village" data-pane="village">Village
 		{% if defense.under_attack_count %}<span class="badge badge-danger">{{ defense.under_attack_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#csnipe" data-pane="csnipe">C-snipe
-		<span class="badge badge-warning">alpha</span>
 		{% if csnipe.active_count %}<span class="badge badge-danger">{{ csnipe.active_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#csnipetest" data-pane="csnipetest">C-snipe test
+		<span class="badge badge-warning">alpha</span>
 		{% if csnipe.test_active_count %}<span class="badge badge-info">{{ csnipe.test_active_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#snipe" data-pane="snipe">Snipe
-		<span class="badge badge-warning">alpha</span>
 		{% if snipe.active_count %}<span class="badge badge-danger">{{ snipe.active_count }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#tribesnipe" data-pane="tribesnipe">Tribe snipe
 		<span class="badge badge-warning">alpha</span>
 		{% if snipe.tribe_targets %}<span class="badge badge-info">{{ snipe.tribe_targets|length }}</span>{% endif %}</a></li>
 	<li class="nav-item"><a class="nav-link" href="#dodge" data-pane="dodge">Dodge
-		<span class="badge badge-warning">alpha</span>
 		{% if dodge.active_count %}<span class="badge badge-{{ 'danger' if dodge.out_count else 'info' }}">{{ dodge.active_count }}</span>{% endif %}</a></li>
 </ul>
 
@@ -374,9 +372,7 @@
 </div><!-- /pane-village -->
 
 <div id="pane-csnipe" style="display:none">
-<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
-	train. Watch the event log closely the first time you use it.
-	Cancel-snipe: the defense dodges out toward a far barb and, by cancelling
+<p class="text-muted small mt-1">Cancel-snipe: the defense dodges out toward a far barb and, by cancelling
 	that command at exactly the halfway moment, walks back in <em>milliseconds</em> after the first hit of a
 	noble train, home in the gap, in front of the nobles. The bot engages {{ csnipe.default_lead_min }} min
 	before the return moment (cancels are only allowed within {{ csnipe.cancel_seconds // 60 }} min of sending
@@ -526,7 +522,7 @@
 </div><!-- /pane-csnipe -->
 
 <div id="pane-csnipetest" style="display:none">
-<p class="text-muted small mt-1">Dry-run the cancel snipe with no incoming attack: pick a village, set the
+<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Dry-run the cancel snipe with no incoming attack: pick a village, set the
 	moment the troops must be back home, and the bot runs the <em>exact</em> same flow it would against a real
 	train, send toward a far barb, measure the send to the millisecond, cancel at the halfway moment. The
 	result row shows the achieved return and its ±ms against your target, so you can verify the timing on
@@ -610,9 +606,7 @@
 </div><!-- /pane-csnipetest -->
 
 <div id="pane-snipe" style="display:none">
-<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span> Untested against a live
-	train. Watch the result closely the first time you use it.
-	Support snipe: pick an incoming attack and land defensive support on the exact millisecond,
+<p class="text-muted small mt-1">Support snipe: pick an incoming attack and land defensive support on the exact millisecond,
 	{{ -snipe.default_offset_ms }}&nbsp;ms before the hit by default (a negative offset lands before, a positive
 	one after, e.g. in a train gap). Tick which villages send and type the exact troop counts yourself for
 	each (off units too, for a ram-pace or full-off snipe) - the send walks at the slowest unit you enter. The
@@ -873,8 +867,7 @@
 
 <div id="pane-dodge" style="display:none">
 {% set ds = dodge.settings %}
-<p class="text-muted small mt-1"><span class="badge badge-warning">alpha</span>
-	Keeps a village's troops alive through the attacks you mark. Rename an incoming attack so its
+<p class="text-muted small mt-1">Keeps a village's troops alive through the attacks you mark. Rename an incoming attack so its
 	name contains <code>{{ ds.trigger or '—' }}</code> (in game, or with the tag box on the Overview and
 	Village tabs) and the bot takes <strong>everything at home</strong> out {{ ds.leave_before_seconds }}s before
 	it lands, as support to the nearest village of yours that is far enough away, and cancels halfway
