@@ -84,7 +84,9 @@
   },
   "events": {
     "auto_play": false,
-    "option": "auto"
+    "option": "auto",
+    "craft_priority": "noble",
+    "craft_spare": true
   },
   "report_analysis": {
     "min_units": 5000,

@@ -14,6 +14,7 @@ import psutil
 
 from core.instance_lock import InstanceLock
 from game import attack_scheduler, attack_plan
+from game.events import ANVIL_PROFILES
 
 try:
     from game import csnipe
@@ -4660,7 +4661,12 @@ class EventOverview:
             "logs": snapshot.get("logs") or [],
             "by_square": state.get("by_square") or {},
             "items_won": state.get("items_won") or {},
+            # The anvil: stock, targets and the next craft. Empty elsewhere,
+            # which is what the page keys the anvil panels off.
+            "craft": snapshot.get("craft") or {},
+            "ranks_event": snapshot.get("ranks_event") or [],
             "totals": {"actions": int(totals.get("actions") or 0),
+                       "discovered": int(totals.get("discovered") or 0),
                        "jackpots": int(totals.get("jackpots") or 0),
                        "reward": earned,
                        "expected": int(expected),
@@ -4692,6 +4698,11 @@ class EventOverview:
         return {
             "auto_play": bool(settings.get("auto_play", False)),
             "option": str(settings.get("option", "auto")),
+            "craft_priority": str(settings.get("craft_priority") or "noble"),
+            "craft_spare": bool(settings.get("craft_spare", True)),
+            "craft_profiles": [(k, v["label"]) for k, v in ANVIL_PROFILES.items()]
+            + ([("custom", "Custom list")]
+               if settings.get("craft_priority") == "custom" else []),
             "current": current,
             "history": history,
             "ever": bool(states),

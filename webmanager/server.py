@@ -1064,6 +1064,25 @@ def event_refresh():
     return jsonify({"ok": DataReader.event_refresh(request.args.get("screen"))})
 
 
+# The anvil's two settings, set from the Events page itself: which items to
+# aim for, and whether metals no target needs are crafted anyway. Anything else
+# is refused, so this cannot become a way to write arbitrary config.
+EVENT_SETTINGS = {"craft_priority": ("noble", "defense", "building", "custom"),
+                  "craft_spare": ("true", "false")}
+
+
+@app.route('/app/event/set', methods=['GET', 'POST'])
+def event_set():
+    key = request.args.get("key")
+    value = request.args.get("value")
+    if value not in EVENT_SETTINGS.get(key, ()):
+        return jsonify({"ok": False, "error": "unknown setting"})
+    # config_set JSON-decodes the value, so "true" lands as a boolean and a
+    # profile name, which is not JSON, stays a string.
+    DataReader.config_set(parameter="events.%s" % key, value=value)
+    return jsonify({"ok": True})
+
+
 @app.route('/setup', methods=['GET'])
 def setup_page():
     return render_template('setup.html', data=sync(), sections=pre_process_config(),
