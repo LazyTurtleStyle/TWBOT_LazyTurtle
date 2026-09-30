@@ -60,6 +60,7 @@
 		</div>
 		{% endif %}
 		<div class="stats">
+			{% if c.energy_max %}
 			<div class="stat">
 				<div class="v" id="ev-energy">{{ c.energy|round(1) if c.energy is not none else '?' }}<span class="faint" style="font-size:16px">/{{ c.energy_max|int if c.energy_max else '?' }}</span></div>
 				<div class="k">Energy</div>
@@ -67,6 +68,17 @@
 					{% if c.energy_next %}next in {{ c.energy_next }}s{% else %}full — refill stopped{% endif %}</div>
 				<div class="ev-bar"><span id="ev-energy-bar" style="width:{{ ((c.energy or 0) / (c.energy_max or 1) * 100)|round(0) }}%"></span></div>
 			</div>
+			{% endif %}
+			{% if c.craft %}
+			<div class="stat"><div class="v">{{ c.totals.actions }}</div>
+				<div class="k">Crafted by the bot</div>
+				<div class="sub">{{ c.totals.discovered }} new recipe{{ '' if c.totals.discovered == 1 else 's' }} found</div></div>
+			<div class="stat"><div class="v gold">{{ c.craft.known }}<span class="faint" style="font-size:16px">/{{ c.craft.recipes }}</span></div>
+				<div class="k">Recipes known</div>
+				<div class="sub">{% if c.craft.trust == 'trusted' %}recipe order confirmed — the bot aims straight at a target
+					{% elif c.craft.trust == 'guess' %}recipe order not yet confirmed — search in the right block
+					{% else %}recipe order does not hold — searching blind{% endif %}</div></div>
+			{% else %}
 			<div class="stat"><div class="v gold">{{ c.currency|comma if c.currency is not none else '?' }}</div>
 				<div class="k">Currency</div><div class="sub">to spend in the event shop</div></div>
 			<div class="stat"><div class="v">{{ c.totals.reward|comma }}</div>
@@ -74,6 +86,7 @@
 				<div class="sub">{{ c.totals.actions }} action{{ '' if c.totals.actions == 1 else 's' }}{%
 					if c.board %}, {{ c.totals.pips|comma }} spaces moved{% else %},
 					{{ c.totals.jackpots }} jackpot{{ '' if c.totals.jackpots == 1 else 's' }}{% endif %}</div></div>
+			{% endif %}
 			{% if c.board %}
 			<div class="stat"><div class="v gold">{{ c.totals.dragons }}</div>
 				<div class="k">Dragons killed</div>
@@ -141,13 +154,22 @@
 			{% if c.log %}
 			<div class="table-responsive ev-scroll">
 				<table class="table table-sm table-striped mb-0 ev-log">
+					{% if c.craft %}
+					<thead><tr><th>When</th><th>Metals</th><th>Item</th><th></th></tr></thead>
+					{% else %}
 					<thead><tr><th>When</th><th>{{ 'Threw' if c.board else 'Option' }}</th>
 						<th class="text-right">Paid</th><th></th></tr></thead>
+					{% endif %}
 					<tbody>
 					{% for a in c.log %}
 					<tr>
 						<td class="faint">{{ a.ts|ago }}</td>
-						{% if c.board %}
+						{% if c.craft %}
+						<td>{{ (a.materials or [])|join(' + ') }}</td>
+						<td>{{ a.item }}</td>
+						<td>{% if a.new %}<span class="badge gold">new recipe</span> {% endif %}<span
+							class="faint" style="font-size:11px">{{ a.reason }}</span></td>
+						{% elif c.board %}
 						<td class="mono">{{ a.rolls|join(' + ') if a.rolls else '?' }}
 							<span class="faint">= {{ a.moved }}</span></td>
 						<td class="text-right mono">{{ a.scales|comma if a.scales else '—' }}</td>
@@ -174,6 +196,54 @@
 		</div>
 	</div>
 	<div class="col-lg-6">
+		{% if c.craft %}
+		<div class="card mb-3">
+			<div class="card-header py-2 d-flex align-items-center flex-wrap" style="gap:.5rem">
+				<strong>The anvil</strong>
+				<span class="ml-auto d-flex align-items-center" style="gap:.5rem">
+					<select class="form-control form-control-sm" id="ev-priority" style="width:auto">
+						{% for key, label in ev.craft_profiles %}
+						<option value="{{ key }}" {{ 'selected' if key == ev.craft_priority }}>{{ label }}</option>
+						{% endfor %}
+					</select>
+					<button class="btn btn-sm {{ 'btn-success' if ev.craft_spare else 'btn-danger' }}" id="ev-spare"
+						data-on="{{ '1' if ev.craft_spare else '0' }}"
+						title="Metals no target needs are crafted anyway: every craft moves the event pass and the daily ranking">
+						{{ 'Spare metals: craft' if ev.craft_spare else 'Spare metals: keep' }}</button>
+				</span>
+			</div>
+			<div class="card-body py-2">
+				<div class="mb-2">
+					{% for m in c.craft.stock %}
+					<span class="badge {{ 'gold' if m.rare }}">{{ m.name }} <strong>{{ m.amount }}</strong></span>
+					{% endfor %}
+				</div>
+				<div class="small mb-2"><span class="faint">Next craft:</span>
+					{% if c.craft.next.materials %}{{ c.craft.next.materials|join(' + ') }}
+					<span class="faint">({{ c.craft.next.reason }})</span>
+					{% else %}<span class="faint">{{ c.craft.next.reason }}</span>{% endif %}</div>
+				<div class="small text-muted">Targets best first. Rare metals (bronze, silver, gold) are held
+					back for the first target that needs them; a recipe is dealt per player, so an unknown one shows
+					the bot's guess.</div>
+			</div>
+			<div class="table-responsive ev-scroll">
+				<table class="table table-sm mb-0 ev-log">
+					<thead><tr><th>Item</th><th class="text-right">Rare</th><th>Recipe</th></tr></thead>
+					<tbody>
+					{% for t in c.craft.targets %}
+					<tr>
+						<td title="{{ t.text }}">{{ t.name }}<div class="faint" style="font-size:11px">{{ t.text|truncate(70) }}</div></td>
+						<td class="text-right mono">{{ t.rares if t.rares is not none else '?' }}</td>
+						<td>{% if t.known %}<span class="badge gold">{{ t.known|join(' + ') }}</span>
+							{% elif t.guess %}<span class="faint">{{ t.guess|join(' + ') }}?</span>
+							{% else %}<span class="faint">unknown</span>{% endif %}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
 		{% if c.board %}
 		<div class="card mb-3">
 			<div class="card-header py-2"><strong>The board</strong>
@@ -223,8 +293,10 @@
 			</div>
 		</div>
 		{% endif %}
-		{% for title, rows, metric in [('Most valuable player', c.ranks_best, 'distance'),
-		                               ('Unluckiest player', c.ranks_unluckiest, 'missed')] %}
+		{% set rank_tables = [('Today', c.ranks_best, 'crafts'), ('Whole event', c.ranks_event, 'crafts')]
+			if c.craft else [('Most valuable player', c.ranks_best, 'distance'),
+			                 ('Unluckiest player', c.ranks_unluckiest, 'missed')] %}
+		{% for title, rows, metric in rank_tables %}
 		{% if rows %}
 		<div class="card mb-3">
 			<div class="card-header py-2"><strong>{{ title }}</strong>
@@ -237,7 +309,7 @@
 					<tr class="{{ 'ev-you' if c.player_id and r.player_id|int == c.player_id }}">
 						<td class="mono">{{ r.rank }}</td><td>{{ r.player_name }}</td>
 						<td class="text-right mono">{{ r.score|comma }}</td>
-						<td class="text-right mono">{{ r.reward|comma }}</td>
+						<td class="text-right mono">{{ r.reward if c.craft else r.reward|comma }}</td>
 					</tr>
 					{% endfor %}
 					</tbody>
@@ -450,6 +522,28 @@ $(function () {
 				btn.textContent = 'Refresh queued';
 				evToast('The bot refreshes this on its next cycle');
 			}).catch(function () { btn.disabled = false; evToast('Could not ask the bot'); });
+	};
+
+	function evSet(key, value) {
+		return fetch('/app/event/set?key=' + key + '&value=' + encodeURIComponent(value))
+			.then(function (r) { return r.json(); })
+			.then(function (resp) { if (!resp || !resp.ok) throw 0; return resp; });
+	}
+	var priority = document.getElementById('ev-priority');
+	if (priority) priority.onchange = function () {
+		evSet('craft_priority', this.value)
+			.then(function () { evToast('Targets change from the next cycle'); })
+			.catch(function () { evToast('Could not change the targets'); });
+	};
+	var spare = document.getElementById('ev-spare');
+	if (spare) spare.onclick = function () {
+		var next = this.getAttribute('data-on') === '1' ? '0' : '1', btn = this;
+		evSet('craft_spare', next === '1' ? 'true' : 'false').then(function () {
+			btn.setAttribute('data-on', next);
+			btn.textContent = next === '1' ? 'Spare metals: craft' : 'Spare metals: keep';
+			btn.classList.toggle('btn-success', next === '1');
+			btn.classList.toggle('btn-danger', next !== '1');
+		}).catch(function () { evToast('Could not change the switch'); });
 	};
 
 	var auto = document.getElementById('ev-auto');
