@@ -26,6 +26,11 @@ except Exception:  # pragma: no cover - dashboard still works without snipe
     snipe_engine = None
 
 try:
+    from game import tribe_snipe
+except Exception:  # pragma: no cover - dashboard still works without it
+    tribe_snipe = None
+
+try:
     from game import playerfarm
 except Exception:  # pragma: no cover - dashboard still works without it
     playerfarm = None
@@ -1570,10 +1575,15 @@ class DataReader:
 
     @staticmethod
     def snipe_arm_batch(incoming_id, target_village_id, land_ms, options,
-                        shortfall, min_pct, boost, max_delta_ms=0, hit_ms=None):
+                        shortfall, min_pct, boost, max_delta_ms=0, hit_ms=None,
+                        tribe_target_id=None):
         """Arm one snipe per selected option: each sends `units` as support
         from its own village so they land at land_ms (epoch milliseconds) in
-        the target village. Returns (armed_entries, per_option_errors)."""
+        the target village. Returns (armed_entries, per_option_errors).
+
+        With tribe_target_id the target is a tribemate's village typed in on
+        the Tribe snipe tab: its coordinates come from that stored target
+        rather than from this account's own villages."""
         if snipe_engine is None:
             return [], ["snipe engine unavailable"]
         if not (field_distance and unit_travel_seconds):
@@ -1585,10 +1595,22 @@ class DataReader:
             DataReader.cache_grab("villages") or {},
             OverviewBuilder._build_incomings(
                 DataReader.cache_grab("villages") or {}))
-        target_village_id = str(target_village_id)
-        target = managed.get(target_village_id) or {}
-        tpub = target.get("public") or {}
-        tloc = tpub.get("location")
+        tribe = None
+        if tribe_target_id:
+            tribe = next((t for t in DataReader.tribe_targets_grab()
+                          if t.get("id") == str(tribe_target_id)), None)
+            if tribe is None:
+                return [], ["that tribe target is gone - add it again"]
+            tloc = [int(tribe["x"]), int(tribe["y"])]
+            target = {"name": tribe.get("label") or tribe.get("village_name")
+                      or "%d|%d" % tuple(tloc)}
+            target_village_id = str(tribe.get("village_id") or "")
+            tpub = {}
+        else:
+            target_village_id = str(target_village_id)
+            target = managed.get(target_village_id) or {}
+            tpub = target.get("public") or {}
+            tloc = tpub.get("location")
         if not tloc or len(tloc) != 2:
             return [], ["unknown target village"]
         try:
@@ -1630,7 +1652,7 @@ class DataReader:
             if not oloc or len(oloc) != 2:
                 errors.append("%s: unknown village" % oname)
                 continue
-            if vid == target_village_id:
+            if vid == target_village_id or list(oloc) == list(tloc):
                 errors.append("%s: a village cannot support itself" % oname)
                 continue
             selected = {}
@@ -1683,6 +1705,7 @@ class DataReader:
                 "target_village_id": target_village_id,
                 "target_name": target_name,
                 "target_x": int(tloc[0]), "target_y": int(tloc[1]),
+                "tribe_target_id": tribe.get("id") if tribe else None,
                 "units": selected,
                 # Record what actually set the pace, not what the tier was
                 # named after, so the dashboard row explains the send moment.
@@ -1709,6 +1732,71 @@ class DataReader:
         if snipe_engine is None:
             return None
         return snipe_engine.disarm(str(snipe_id), path=DataReader.snipe_path())
+
+    # -- tribe snipe: hand-typed targets for a tribemate's village ---------
+
+    @staticmethod
+    def tribe_targets_path():
+        return DataReader.data_path("cache", "tribe_targets.json")
+
+    @staticmethod
+    def tribe_targets_grab():
+        """The typed tribemate targets, soonest hit first, with whatever the
+        map cache knows about each village. Always returns a list."""
+        if tribe_snipe is None:
+            return []
+        path = DataReader.tribe_targets_path()
+        if not os.path.isfile(path):
+            return []
+        tribe_snipe.prune(path=path)
+        return tribe_snipe.load_targets(path=path)
+
+    @staticmethod
+    def map_village_at(x, y):
+        """The map cache's entry for the village at x|y, or None."""
+        for v in (DataReader.cache_grab("villages") or {}).values():
+            loc = v.get("location")
+            if loc and len(loc) == 2 and int(loc[0]) == x and int(loc[1]) == y:
+                return v
+        return None
+
+    @staticmethod
+    def tribe_target_add(x, y, arrivals, label=""):
+        """Store one target per arrival (epoch ms). Returns (added, errors)."""
+        if tribe_snipe is None:
+            return [], ["tribe snipe module unavailable"]
+        try:
+            x, y = int(x), int(y)
+        except (TypeError, ValueError):
+            return [], ["coordinates must be two numbers, like 512|487"]
+        if not (0 <= x <= 999 and 0 <= y <= 999):
+            return [], ["coordinates out of range"]
+        village = DataReader.map_village_at(x, y)
+        now_ms = time.time() * 1000
+        added, errors = [], []
+        for raw in arrivals or []:
+            try:
+                arrival_ms = int(float(raw))
+            except (TypeError, ValueError):
+                errors.append("%r is not a time" % (raw,))
+                continue
+            if arrival_ms - now_ms < 90 * 1000:
+                errors.append("%s is under 90s away or already past"
+                              % time.strftime("%H:%M:%S",
+                                              time.localtime(arrival_ms / 1000)))
+                continue
+            DataReader.ensure_data_dir("cache")
+            added.append(tribe_snipe.add_target(
+                x, y, arrival_ms, label=label, village=village,
+                path=DataReader.tribe_targets_path()))
+        return added, errors
+
+    @staticmethod
+    def tribe_target_remove(target_id):
+        if tribe_snipe is None:
+            return False
+        return tribe_snipe.remove_target(str(target_id),
+                                         path=DataReader.tribe_targets_path())
 
     PLAYERFARM_REL = ("cache", "player_farms.json")
 
@@ -4195,6 +4283,7 @@ class SnipeOverview:
             # once in-game ("1000 spear", a spear/sword mix) can be poured into
             # every village at once instead of typed per village.
             "templates": DataReader.troop_templates(),
+            "tribe_targets": DataReader.tribe_targets_grab(),
             "speeds": {u: speeds.get(u) for u in cls.SNIPE_UNITS
                        if speeds.get(u)},
             "world_speed": ws,
