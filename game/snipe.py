@@ -196,6 +196,22 @@ def _record_calibration(raw_ms, now):
                                       CALIBRATION_FILE)
 
 
+def _drop_idle_connections(wrapper):
+    """Make the clock sync open a fresh connection, like the launch will.
+
+    The launch fires ~90s after the sync, on a connection the server has long
+    closed, so it pays the reconnect. A sync that rode the previous snipe's
+    still-open connection measured ~70-115ms round trips against ~160-215ms
+    cold, and its sends landed +55..+81ms late (nl116, 2026-10-05, once
+    snipes were queued 25s apart)."""
+    web = getattr(wrapper, "web", None)
+    for adapter in list((getattr(web, "adapters", None) or {}).values()):
+        try:
+            adapter.close()
+        except Exception:
+            pass
+
+
 def _path(path=None):
     return path or FileManager.get_path(SNIPE_FILE)
 
@@ -285,6 +301,7 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     # The units page carries both the live troop counts and the game state for
     # the clock sync, so one request covers both.
     clock = csnipe._Clock()
+    _drop_idle_connections(wrapper)
     res = clock.sync(wrapper, "game.php?village=%s&screen=place&mode=units"
                               "&display=units" % village_id)
     if res is None or clock.offset_ms is None:
