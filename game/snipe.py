@@ -75,6 +75,16 @@ CALIBRATION_MAX_AGE = 3 * 3600
 # A reading this far off is a broken read-back, not latency.
 CALIBRATION_CAP_MS = 80
 
+# The clock offset behind every send came from ONE page load 90s earlier, and
+# on nl116 (2026-10-05, 15 snipes) those single readings wobbled -24..+20ms
+# while each ms of error moved the landing by ~1ms the other way (slope -0.95).
+# The local and game clocks do not really jump like that, so the offset is now
+# the best (shortest round trip) of a few quick samples, smoothed with the
+# median of the recent snipes' readings.
+OFFSET_EXTRA_SAMPLES = 3
+OFFSET_HISTORY = 7
+OFFSET_MAX_AGE = 30 * 60
+
 
 def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
     """Why a landing ended up on the wrong side of the hit, or None. Pure.
@@ -185,15 +195,60 @@ def calibration_lead_ms(samples, now, network_lead=0.0):
     return median - network_lead * 1000.0
 
 
-def _load_calibration():
+def _load_calibration(key="samples"):
     data = FileManager.load_json_file(CALIBRATION_FILE) or {}
-    return data.get("samples") or []
+    return data.get(key) or []
+
+
+def _append_calibration(key, entry):
+    data = FileManager.load_json_file(CALIBRATION_FILE) or {}
+    data[key] = (data.get(key) or [])[-49:] + [entry]
+    FileManager.save_json_file_atomic(data, CALIBRATION_FILE)
 
 
 def _record_calibration(raw_ms, now):
-    samples = _load_calibration() + [{"when": int(now), "raw_ms": int(raw_ms)}]
-    FileManager.save_json_file_atomic({"samples": samples[-50:]},
-                                      CALIBRATION_FILE)
+    _append_calibration("samples", {"when": int(now), "raw_ms": int(raw_ms)})
+
+
+def smoothed_offset_ms(readings, now):
+    """Median clock offset of the recent readings, or None. Pure."""
+    recent = sorted((r for r in readings or []
+                     if now - r.get("when", 0) <= OFFSET_MAX_AGE),
+                    key=lambda r: r["when"])[-OFFSET_HISTORY:]
+    if not recent:
+        return None
+    offsets = sorted(r["offset_ms"] for r in recent)
+    mid = len(offsets) // 2
+    return (offsets[mid] if len(offsets) % 2
+            else (offsets[mid - 1] + offsets[mid]) / 2.0)
+
+
+def _refine_clock(wrapper, clock, url):
+    """Re-estimate clock.offset_ms from a few more page loads plus the recent
+    snipes' readings. Returns (best_sample_offset, smoothed_offset)."""
+    samples = [(clock.offset_ms, clock.rtt)]
+    for _ in range(OFFSET_EXTRA_SAMPLES):
+        probe = csnipe._Clock()
+        t0 = time.time()
+        res = wrapper.get_url(url)
+        if probe.observe(res, t0, time.time()):
+            samples.append((probe.offset_ms, probe.rtt))
+    best = min(samples, key=lambda s: s[1])
+    now = time.time()
+    try:
+        _append_calibration("offsets", {"when": int(now),
+                                        "offset_ms": round(best[0], 1),
+                                        "rtt_ms": int(best[1] * 1000)})
+        readings = _load_calibration("offsets")
+    except Exception:
+        readings = [{"when": now, "offset_ms": best[0]}]
+    smoothed = smoothed_offset_ms(readings, now)
+    clock.offset_ms = best[0] if smoothed is None else smoothed
+    # The lead's rtt/2 stays on the typical round trip rather than the luckiest
+    # one, so the landing calibration keeps measuring the same thing.
+    rtts = sorted(s[1] for s in samples)
+    clock.rtt = rtts[len(rtts) // 2]
+    return best[0], clock.offset_ms
 
 
 def _path(path=None):
@@ -352,6 +407,14 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                path=path)
         return None
 
+    try:
+        best, smoothed = _refine_clock(
+            wrapper, clock, "game.php?village=%s&screen=place&mode=units"
+                            "&display=units" % village_id)
+        _event(sid, "clock refined (best sample %+dms, using %+dms, rtt %dms)"
+               % (best, smoothed, clock.rtt * 1000), path=path)
+    except Exception:  # the single reading is still there to fire on
+        logger.debug("could not refine the clock, using the single reading")
     csnipe._patch(sid, path=qpath, send_ms=int(send_at),
                   travel_seconds=int(duration), units_sent=to_send)
     _event(sid, "sending in %.1fs (server travel %ds, aimed at .%03d)"
