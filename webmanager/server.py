@@ -958,6 +958,15 @@ def tribesnipe_remove():
     return jsonify({"ok": DataReader.tribe_target_remove(tid)})
 
 
+@app.route('/app/snipe/wave', methods=['GET', 'POST'])
+def snipe_wave_route():
+    """GET: wave settings, last bot tick and the noble trains. POST: store
+    settings and/or switch the wave on/off (JSON body, any DEFAULTS key)."""
+    if request.method == 'POST':
+        return jsonify(DataReader.snipe_wave_save(request.get_json(silent=True) or {}))
+    return jsonify(DataReader.snipe_wave_overview())
+
+
 @app.route('/app/snipe/cancel', methods=['GET', 'POST'])
 def snipe_cancel():
     sid = request.args.get("id") or (request.get_json(silent=True) or {}).get("id")

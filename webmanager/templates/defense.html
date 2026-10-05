@@ -612,6 +612,80 @@
 	each (off units too, for a ram-pace or full-off snipe) - the send walks at the slowest unit you enter. The
 	bot fires each send so the server's own travel time lands it on target.</p>
 
+{% if snipe.wave %}{% set wv = snipe.wave %}{% set ws = wv.settings %}
+<!-- Wave mode: queue every option, stop once it holds -->
+<div class="card mb-3 {{ 'border-danger' if ws.enabled else '' }}" id="snipe-wave">
+	<div class="card-header py-2"><strong>Wave mode</strong> <span class="badge badge-warning">alpha</span>
+		<small class="text-muted">queue every village on every open noble, cancel the rest once one holds</small>
+		<span class="float-right">
+		{% if ws.enabled %}
+			<span class="badge badge-danger">on</span>
+			<button class="btn btn-sm btn-outline-secondary" onclick="snipeWaveSave(false)">Stop</button>
+		{% else %}
+			<button class="btn btn-sm btn-danger" onclick="snipeWaveSave(true)">Queue all options</button>
+		{% endif %}
+		</span></div>
+	<div class="card-body py-2">
+		<p class="text-muted small mb-2">Every 20s the bot plans each free village (spear+sword, spear only, +1 catapult
+			for a slower pace, heavy cavalry on its own) onto every open noble, aiming mid-gap before the noble and
+			keeping whatever lands inside the gap. A miss is recalled within seconds, so its troops can try again.
+			Once enough snipes hold, the remaining attempts are cancelled. It stops by itself when no noble is left
+			in the air.</p>
+		<div class="form-row" id="snipe-wave-form">
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Hits to keep per noble</label>
+				<input type="number" min="1" max="3" class="form-control form-control-sm" name="keep_hits" value="{{ ws.keep_hits }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Attempts per noble</label>
+				<input type="number" min="1" max="30" class="form-control form-control-sm" name="attempts_per_noble" value="{{ ws.attempts_per_noble }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Keep window up to &plusmn;ms</label>
+				<input type="number" min="1" max="200" class="form-control form-control-sm" name="max_keep_ms" value="{{ ws.max_keep_ms }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Skip gaps under &plusmn;ms</label>
+				<input type="number" min="0" max="50" class="form-control form-control-sm" name="min_keep_ms" value="{{ ws.min_keep_ms }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Snipe tag</label>
+				<input type="text" class="form-control form-control-sm" name="tag" value="{{ ws.tag }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0">Leave alone (tag)</label>
+				<input type="text" class="form-control form-control-sm" name="exclude_tag" value="{{ ws.exclude_tag }}"></div>
+		</div>
+		<div class="form-row">
+			{% for key, text in [('prefer_behind_first', 'Prefer the gap behind the first noble'),
+				('skip_nobled', 'Skip villages that are being nobled'),
+				('include_untagged', 'Untagged trains too (after tagged)'),
+				('use_heavy', 'Heavy cavalry'), ('use_catapult_pace', '+1 catapult pace'),
+				('use_spear_only', 'Spear only')] %}
+			<div class="form-check form-check-inline small">
+				<input class="form-check-input" type="checkbox" id="wave-{{ key }}" name="{{ key }}" {{ 'checked' if ws[key] }}>
+				<label class="form-check-label" for="wave-{{ key }}">{{ text }}</label></div>
+			{% endfor %}
+			<div class="form-group mb-0 ml-2 small">min heavy
+				<input type="number" min="1" class="form-control form-control-sm d-inline-block" style="width:5rem" name="heavy_min" value="{{ ws.heavy_min }}"></div>
+			<button class="btn btn-sm btn-outline-primary ml-2" onclick="snipeWaveSave(null)">Save settings</button>
+		</div>
+		<div class="small text-muted mt-2">
+		{% if wv.status.last_tick %}Last pass {{ ((wv.now - wv.status.last_tick) // 1) }}s ago:
+			{{ wv.status.armed }} wave snipe(s) armed, {{ wv.status.open_nobles }} of {{ wv.status.future_nobles }} noble(s) still open.
+			{% if wv.status.stopped %}Stopped: {{ wv.status.stopped }}.{% endif %}
+		{% else %}The bot has not run a wave pass yet.{% endif %}
+		</div>
+		{% if wv.trains %}
+		<div class="table-responsive mt-2">
+			<table class="table table-sm def-table mb-0">
+				<thead><tr><th>Village</th><th>First noble</th><th>Nobles (kept / armed)</th><th></th></tr></thead>
+				<tbody>
+				{% for t in wv.trains %}
+					<tr>
+						<td>{{ t.target }}{% if not t.tagged %} <small class="text-muted">(untagged)</small>{% endif %}</td>
+						<td>{{ t.first_time }}.{{ '%03d' % (t.first_ms % 1000) }}</td>
+						<td>{% for n in t.nobles %}<span class="badge {{ 'badge-success' if n.covered else 'badge-light' }}" title="kept {{ n.kept }}, armed {{ n.armed }}">.{{ '%03d' % (n.ms % 1000) }} {{ n.kept }}/{{ n.armed }}</span> {% endfor %}</td>
+						<td>{% if t.covered %}<span class="badge badge-success">covered</span>{% endif %}</td>
+					</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+		{% endif %}
+	</div>
+</div>
+{% endif %}
+
 <!-- Armed / past snipes -->
 <div class="card mb-3">
 	<div class="card-header py-2"><strong>Snipes,</strong>
@@ -2457,6 +2531,19 @@ function snipePostArm(options, noteEl, onArmed, skipped) {
 		err.textContent = String(e);
 		if (noteEl) noteEl.innerHTML = '';
 	});
+}
+
+/* Wave mode: store the settings and switch it on (true), off (false) or
+   leave the switch alone (null). */
+function snipeWaveSave(enabled) {
+	const body = {};
+	document.querySelectorAll('#snipe-wave input').forEach(function(el) {
+		body[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+	});
+	if (enabled !== null) body.enabled = enabled;
+	fetch('/app/snipe/wave', {method: 'POST', headers: {'Content-Type': 'application/json'},
+		body: JSON.stringify(body)})
+		.then(function() { location.hash = 'snipe'; location.reload(); });
 }
 
 /* One option, or every ticked one, in a single arming. */

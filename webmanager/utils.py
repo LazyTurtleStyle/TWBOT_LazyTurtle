@@ -27,6 +27,11 @@ except Exception:  # pragma: no cover - dashboard still works without snipe
     snipe_engine = None
 
 try:
+    from game import snipe_wave
+except Exception:  # pragma: no cover - dashboard still works without it
+    snipe_wave = None
+
+try:
     from game import tribe_snipe
 except Exception:  # pragma: no cover - dashboard still works without it
     tribe_snipe = None
@@ -1725,6 +1730,76 @@ class DataReader:
             snipe_engine.arm(entry, path=DataReader.snipe_path())
             armed.append(entry)
         return armed, errors
+
+    # -- snipe wave: queue every option, stop once it holds ----------------
+
+    @staticmethod
+    def snipe_wave_path():
+        return DataReader.data_path("cache", "snipe_wave.json")
+
+    @staticmethod
+    def snipe_wave_overview():
+        """Settings, the bot's last tick and every noble train with its state,
+        for the Snipe tab's wave panel. None when the module is missing."""
+        if snipe_wave is None:
+            return None
+        settings, status = snipe_wave.load_state(DataReader.snipe_wave_path())
+        incomings = []
+        inc_dir = DataReader.data_path("cache", "incomings")
+        if os.path.isdir(inc_dir):
+            for name in os.listdir(inc_dir):
+                if not name.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(inc_dir, name)) as f:
+                        c = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                if c.get("arrival_ms") and c.get("target_coords"):
+                    incomings.append(c)
+        snipes = DataReader.snipe_grab()
+        kept = snipe_wave.kept_hits(snipes)
+        armed = {}
+        for sn in snipes:
+            if sn.get("status") in ("armed", "running") and sn.get("hit_ms"):
+                armed[int(sn["hit_ms"])] = armed.get(int(sn["hit_ms"]), 0) + 1
+        names = {}
+        vdir = DataReader.data_path("cache", "villages")
+        now_ms = time.time() * 1000
+        tag = (settings.get("tag") or "").lower()
+        trains = []
+        for tid, groups in snipe_wave.trains(incomings).items():
+            done = snipe_wave.covered(groups, kept, settings)
+            for group in groups:
+                if group[-1]["arrival_ms"] < now_ms:
+                    continue
+                if tid not in names:
+                    try:
+                        with open(os.path.join(vdir, "%s.json" % tid)) as f:
+                            names[tid] = json.load(f).get("name") or tid
+                    except (OSError, ValueError):
+                        names[tid] = tid
+                labels = " ".join((n.get("game_label") or "").lower() for n in group)
+                nobles = [{"ms": n["arrival_ms"], "covered": n["arrival_ms"] in done,
+                           "kept": kept.get(n["arrival_ms"], 0),
+                           "armed": armed.get(n["arrival_ms"], 0)} for n in group]
+                trains.append({"target": names[tid], "first_ms": group[0]["arrival_ms"],
+                               "first_time": time.strftime(
+                                   "%H:%M:%S", time.localtime(group[0]["arrival_ms"] / 1000.0)),
+                               "tagged": bool(tag) and tag in labels,
+                               "covered": all(n["covered"] for n in nobles),
+                               "nobles": nobles})
+        trains.sort(key=lambda t: t["first_ms"])
+        return {"settings": settings, "status": status, "trains": trains,
+                "now": int(time.time())}
+
+    @staticmethod
+    def snipe_wave_save(settings):
+        """Store wave settings (and the on/off switch). Returns the overview."""
+        if snipe_wave is None:
+            return None
+        snipe_wave.save_settings(settings or {}, DataReader.snipe_wave_path())
+        return DataReader.snipe_wave_overview()
 
     @staticmethod
     def snipe_disarm(snipe_id):
@@ -4285,6 +4360,7 @@ class SnipeOverview:
             # every village at once instead of typed per village.
             "templates": DataReader.troop_templates(),
             "tribe_targets": DataReader.tribe_targets_grab(),
+            "wave": DataReader.snipe_wave_overview(),
             "speeds": {u: speeds.get(u) for u in cls.SNIPE_UNITS
                        if speeds.get(u)},
             "world_speed": ws,
