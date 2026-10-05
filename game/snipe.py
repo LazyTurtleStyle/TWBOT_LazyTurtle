@@ -63,6 +63,18 @@ REQUEUE_AFTER_SECONDS = 300
 # every pass, so a snipe only gets so many corrections.
 MAX_REQUEUES = 2
 
+# Where landings are remembered for the self-calibrating lead. Measured on
+# nl116 on 2026-10-05: with the fixed sched_lead_seconds the same send landed
+# -31ms at 13:12 and +28ms at 16:47, drifting with the evening server load, so
+# no fixed number held for more than an hour. Each read-back landing is stored
+# as the delta it would have had with no lead at all ("raw"), and the next send
+# fires early (or late) by the median of the most recent ones.
+CALIBRATION_FILE = "cache/snipe_calibration.json"
+CALIBRATION_SAMPLES = 5
+CALIBRATION_MAX_AGE = 3 * 3600
+# A reading this far off is a broken read-back, not latency.
+CALIBRATION_CAP_MS = 80
+
 
 def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
     """Why a landing ended up on the wrong side of the hit, or None. Pure.
@@ -154,6 +166,35 @@ logger = logging.getLogger("Snipe")
 
 
 # -- queue storage: the c-snipe helpers on our own file -----------------------
+
+def calibration_lead_ms(samples, now, network_lead=0.0):
+    """Extra lead in ms (positive fires earlier) on top of network_lead. Pure.
+
+    The total lead becomes the median raw delta of the recent landings, so a
+    run that has been landing +12ms late fires 12ms early. Returns 0 with no
+    recent readings, which leaves the configured lead alone."""
+    recent = [s for s in samples or []
+              if now - s.get("when", 0) <= CALIBRATION_MAX_AGE
+              and abs(s.get("raw_ms", 0)) <= CALIBRATION_CAP_MS]
+    recent = sorted(recent, key=lambda s: s["when"])[-CALIBRATION_SAMPLES:]
+    if not recent:
+        return 0.0
+    raws = sorted(s["raw_ms"] for s in recent)
+    mid = len(raws) // 2
+    median = raws[mid] if len(raws) % 2 else (raws[mid - 1] + raws[mid]) / 2.0
+    return median - network_lead * 1000.0
+
+
+def _load_calibration():
+    data = FileManager.load_json_file(CALIBRATION_FILE) or {}
+    return data.get("samples") or []
+
+
+def _record_calibration(raw_ms, now):
+    samples = _load_calibration() + [{"when": int(now), "raw_ms": int(raw_ms)}]
+    FileManager.save_json_file_atomic({"samples": samples[-50:]},
+                                      CALIBRATION_FILE)
+
 
 def _path(path=None):
     return path or FileManager.get_path(SNIPE_FILE)
@@ -322,7 +363,12 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         return _finish(sid, "disarmed", "cancelled before the send - the "
                        "troops stayed home", path=path, notify=False)
 
-    clock.sleep_until(send_at, network_lead)
+    correction = calibration_lead_ms(_load_calibration(), time.time(),
+                                     network_lead)
+    if correction:
+        _event(sid, "calibrated lead %+.0fms (median of recent landings)"
+               % (network_lead * 1000 + correction), path=path)
+    clock.sleep_until(send_at, network_lead + correction / 1000.0)
     ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
                                             expect="support")
     if not ok:
@@ -338,6 +384,11 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
         snipe.get("target_y"), land_ms)
     if arrival_ms is not None:
         delta = arrival_ms - land_ms
+        try:
+            _record_calibration(delta + network_lead * 1000 + correction,
+                                time.time())
+        except Exception:  # calibration must never cost the recall below
+            logger.debug("could not store the snipe calibration reading")
         # A snipe that misses the gap is not a smaller success, it is a stack
         # standing in a village it was never meant to garrison - and worse, it
         # reads as defence that is not where you think it is. With a tolerance
