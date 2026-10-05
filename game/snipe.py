@@ -385,6 +385,10 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     if correction:
         _event(sid, "calibrated lead %+.0fms (median of recent landings)"
                % (network_lead * 1000 + correction), path=path)
+    # Same reason as the sync: fire on a fresh connection, whatever the gap
+    # since the last request. A launch 25s after its sync rode the still-open
+    # connection and landed -81ms (nl116, 2026-10-05).
+    _drop_idle_connections(wrapper)
     clock.sleep_until(send_at, network_lead + correction / 1000.0)
     ok, msg = attack_scheduler.fire_command(wrapper, village_id, confirm_data,
                                             expect="support")
