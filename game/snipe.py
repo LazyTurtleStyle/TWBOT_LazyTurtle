@@ -70,7 +70,7 @@ MAX_REQUEUES = 2
 # as the delta it would have had with no lead at all ("raw"), and the next send
 # fires early (or late) by the median of the most recent ones.
 CALIBRATION_FILE = "cache/snipe_calibration.json"
-CALIBRATION_SAMPLES = 5
+CALIBRATION_SAMPLES = 15
 CALIBRATION_MAX_AGE = 3 * 3600
 # A reading this far off is a broken read-back, not latency.
 CALIBRATION_CAP_MS = 80
@@ -287,7 +287,7 @@ def _apply_shortfall(planned, available, policy, min_pct):
     return to_send, None
 
 
-def execute(wrapper, snipe, path=None, network_lead=0.0):
+def execute(wrapper, snipe, path=None, network_lead=0.0, presend_sync=False):
     """Run one claimed snipe: verify troops, prepare, fire at the exact ms.
 
     land_ms is the target *processing* moment of the arrival; the launch is
@@ -385,6 +385,16 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     if correction:
         _event(sid, "calibrated lead %+.0fms (median of recent landings)"
                % (network_lead * 1000 + correction), path=path)
+    # Optionally measure the clock again ~2s before the launch, on a fresh
+    # connection, instead of trusting the reading from ~90s ago.
+    if snipe.get("presend_sync", presend_sync):
+        _drop_idle_connections(wrapper)
+        before = clock.offset_ms
+        if clock.sync(wrapper, "game.php?village=%s&screen=place&mode=units"
+                               "&display=units" % village_id) is not None:
+            _event(sid, "re-synced before the launch (offset %+dms, was %+dms, "
+                   "rtt %dms)" % (clock.offset_ms, before, clock.rtt * 1000),
+                   path=path)
     # Same reason as the sync: fire on a fresh connection, whatever the gap
     # since the last request. A launch 25s after its sync rode the still-open
     # connection and landed -81ms (nl116, 2026-10-05).
@@ -462,13 +472,14 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                 outgoing_id=command_id)
 
 
-def run_due(wrapper, path=None, network_lead=0.0):
+def run_due(wrapper, path=None, network_lead=0.0, presend_sync=False):
     """Claim and execute every due snipe, soonest send first. Returns the count."""
     executed = 0
     for snipe in sorted(claim_due(path=path),
                         key=lambda s: float(s.get("send_est_ts", s.get("start_ts", 0)))):
         try:
-            execute(wrapper, snipe, path=path, network_lead=network_lead)
+            execute(wrapper, snipe, path=path, network_lead=network_lead,
+                    presend_sync=presend_sync)
         except Exception as exc:  # never let one bad snipe kill the thread
             logger.exception("snipe %s crashed", snipe.get("id"))
             _finish(snipe.get("id"), "failed", "exception: %s" % exc, path=path)

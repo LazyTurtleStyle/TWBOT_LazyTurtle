@@ -928,6 +928,9 @@ class TWB:
         sender.priority_mode = True
         network_lead = float(config["bot"].get(
             "sched_lead_seconds", attack_scheduler.NETWORK_LEAD))
+        # Re-measure the clock ~2s before each launch (also per snipe:
+        # "presend_sync" on the queue entry wins).
+        presend_sync = bool(config["bot"].get("snipe_presend_sync", False))
         last_prune = 0
         last_wave = 0
         village_ids = list((config.get("villages") or {}).keys())
@@ -956,7 +959,8 @@ class TWB:
                 session = FileManager.load_json_file("cache/session.json")
                 if session and session.get("cookies"):
                     sender.web.cookies.update(session["cookies"])
-                snipe.run_due(sender, network_lead=network_lead)
+                snipe.run_due(sender, network_lead=network_lead,
+                              presend_sync=presend_sync)
             except Exception as exc:
                 logger.warning("Snipe runner error: %s", exc)
                 time.sleep(2)
