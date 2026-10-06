@@ -77,10 +77,11 @@ CALIBRATION_MAX_AGE = 3 * 3600
 CALIBRATION_CAP_MS = 80
 
 # Name a kept snipe's own support command after how close it lands, e.g.
-# "581|430 [6ms]" = lands 6ms before the attack it was aimed at, so the
+# "581|430 [6 ms]" = lands 6ms before the attack it was aimed at, so the
 # rally point shows at a glance which supports are in place (the Toxic Donut
-# millisecond tagger did the same). Empty string turns it off.
-DEFAULT_RENAME_FORMAT = "{x}|{y} [{ms}ms]"
+# millisecond tagger did the same; its "Sort ms" button only reads "[N ms]"
+# with the space). Empty string turns it off.
+DEFAULT_RENAME_FORMAT = "{x}|{y} [{ms} ms]"
 
 
 def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
