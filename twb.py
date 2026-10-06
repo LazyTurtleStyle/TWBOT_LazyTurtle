@@ -43,6 +43,7 @@ from game.incomings import IncomingManager
 from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
+from game import snipe_wave
 from game import dodge
 from game import accountmanager
 from game import dailybonus
@@ -928,12 +929,22 @@ class TWB:
         network_lead = float(config["bot"].get(
             "sched_lead_seconds", attack_scheduler.NETWORK_LEAD))
         last_prune = 0
+        last_wave = 0
+        village_ids = list((config.get("villages") or {}).keys())
         while self.should_run:
             try:
                 now = time.time()
                 if now - last_prune > 3600:
                     snipe.prune()
                     last_prune = now
+                # Cache-only, so it never delays a send; armed entries are
+                # picked up by the claim below like any other snipe.
+                if now - last_wave >= snipe_wave.TICK_SECONDS:
+                    last_wave = now
+                    try:
+                        snipe_wave.tick(village_ids)
+                    except Exception as exc:
+                        logger.warning("Snipe wave error: %s", exc)
                 next_start = snipe.next_start_ts()
                 if next_start is None or next_start - now > 2:
                     time.sleep(2)
