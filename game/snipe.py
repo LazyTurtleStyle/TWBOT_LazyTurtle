@@ -286,12 +286,38 @@ def claim_due(path=None, now=None):
     return csnipe.claim_due(path=_path(path), now=now)
 
 
+def _village_label(village_id, name=None, coords=None):
+    """'007 | Name (587|431)' from what the snipe knows plus the village cache."""
+    data = FileManager.load_json_file("cache/villages/%s.json" % village_id) or {}
+    name = name or data.get("name") or str(village_id)
+    loc = coords or data.get("location")
+    if loc and len(loc) == 2:
+        return "%s (%s|%s)" % (name, loc[0], loc[1])
+    return name
+
+
+def route_text(entry):
+    """'from -> to' line for a snipe's notification, or '' when unknown."""
+    if not entry:
+        return ""
+    try:
+        origin = _village_label(entry.get("village_id"), entry.get("village_name"))
+        target = _village_label(entry.get("target_village_id"), entry.get("target_name"),
+                                [entry.get("target_x"), entry.get("target_y")]
+                                if entry.get("target_x") is not None else None)
+        return "%s -> %s" % (origin, target)
+    except Exception:  # a notification must never fail a snipe
+        return ""
+
+
 def _finish(snipe_id, status, result, path=None, notify=True, **fields):
     csnipe._patch(snipe_id, path=_path(path), status=status, result=result,
                   finished=int(time.time()), **fields)
     csnipe._event(snipe_id, "%s: %s" % (status, result), path=_path(path))
     if notify:
-        Notification.send("TWB snipe %s: %s" % (status, result), category="attack")
+        route = route_text(csnipe._get(snipe_id, _path(path)))
+        Notification.send("TWB snipe %s%s: %s" % (status, (" " + route) if route else "",
+                                                  result), category="attack")
 
 
 def _event(snipe_id, message, path=None):
