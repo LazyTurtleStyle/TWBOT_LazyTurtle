@@ -931,6 +931,9 @@ class TWB:
         # Re-measure the clock ~2s before each launch (also per snipe:
         # "presend_sync" on the queue entry wins).
         presend_sync = bool(config["bot"].get("snipe_presend_sync", False))
+        # Name kept supports "x|y [Nms]"; "" turns it off.
+        rename_format = config["bot"].get("snipe_rename_format",
+                                          snipe.DEFAULT_RENAME_FORMAT)
         last_prune = 0
         last_wave = 0
         village_ids = list((config.get("villages") or {}).keys())
@@ -960,7 +963,8 @@ class TWB:
                 if session and session.get("cookies"):
                     sender.web.cookies.update(session["cookies"])
                 snipe.run_due(sender, network_lead=network_lead,
-                              presend_sync=presend_sync)
+                              presend_sync=presend_sync,
+                              rename_format=rename_format)
             except Exception as exc:
                 logger.warning("Snipe runner error: %s", exc)
                 time.sleep(2)

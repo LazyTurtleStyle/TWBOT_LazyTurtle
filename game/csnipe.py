@@ -280,7 +280,21 @@ def _finish(snipe_id, status, result, path=None, notify=True, **fields):
            finished=int(time.time()), **fields)
     _event(snipe_id, "%s: %s" % (status, result), path=path)
     if notify:
-        Notification.send("TWB c-snipe %s: %s" % (status, result), category="attack")
+        route = ""
+        try:
+            entry = _get(snipe_id, path) or {}
+            data = FileManager.load_json_file(
+                "cache/villages/%s.json" % entry.get("village_id")) or {}
+            loc = data.get("location") or []
+            if entry:
+                route = " %s%s via %s|%s" % (
+                    data.get("name") or entry.get("village_id"),
+                    " (%s|%s)" % (loc[0], loc[1]) if len(loc) == 2 else "",
+                    entry.get("target_x"), entry.get("target_y"))
+        except Exception:  # a notification must never fail a snipe
+            route = ""
+        Notification.send("TWB c-snipe %s%s: %s" % (status, route, result),
+                          category="attack")
 
 
 # -- server clock ------------------------------------------------------------

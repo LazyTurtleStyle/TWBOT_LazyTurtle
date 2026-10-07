@@ -34,6 +34,7 @@ from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.notification import Notification
 from game import attack_scheduler, csnipe
+from game.incomings import load_label_endpoint, rename_command_ingame
 
 SNIPE_FILE = "cache/snipes.json"
 
@@ -74,6 +75,13 @@ CALIBRATION_SAMPLES = 15
 CALIBRATION_MAX_AGE = 3 * 3600
 # A reading this far off is a broken read-back, not latency.
 CALIBRATION_CAP_MS = 80
+
+# Name a kept snipe's own support command after how close it lands, e.g.
+# "581|430 [6 ms]" = lands 6ms before the attack it was aimed at, so the
+# rally point shows at a glance which supports are in place (the Toxic Donut
+# millisecond tagger did the same; its "Sort ms" button only reads "[N ms]"
+# with the space). Empty string turns it off.
+DEFAULT_RENAME_FORMAT = "{x}|{y} [{ms} ms]"
 
 
 def wrong_side_of_hit(arrival_ms, land_ms, hit_ms):
@@ -212,6 +220,40 @@ def _drop_idle_connections(wrapper):
             pass
 
 
+def kept_label(fmt, snipe, arrival_ms, hit_ms):
+    """The new name for a kept support command, or None. Pure."""
+    if not fmt or hit_ms is None or arrival_ms is None:
+        return None
+    try:
+        return fmt.format(x=int(snipe.get("target_x")), y=int(snipe.get("target_y")),
+                          ms=int(hit_ms) - int(arrival_ms))
+    except (KeyError, ValueError, TypeError, IndexError):
+        return None
+
+
+def _rename_kept(wrapper, sid, command_id, label, path=None):
+    """Rename our own outgoing support; never raises."""
+    cfg = dict(load_label_endpoint() or {})
+    if not cfg.get("screen") or not command_id or not label:
+        return
+    # The captured endpoint is the incoming-attack one; our own commands take
+    # the same request with the "own" action.
+    cfg["params"] = {"ajaxaction": "edit_own_comment", "id": "__ID__"}
+    web = getattr(wrapper, "web", None)
+    cookies = {c.name: c.value for c in web.cookies} if web is not None else {}
+    headers = getattr(wrapper, "headers", None) or {}
+    try:
+        res = rename_command_ingame(command_id, label, cookies,
+                                    getattr(wrapper, "endpoint", "") or "",
+                                    headers.get("User-Agent"), label_cfg=cfg)
+    except Exception as exc:  # a missing name is cosmetic, never fatal
+        res = {"ok": False, "error": str(exc)}
+    _event(sid, "renamed the support to %s" % label if res.get("ok")
+           else "could not rename the support (%s)" % (res.get("error")
+                                                       or res.get("reason")),
+           path=path)
+
+
 def _path(path=None):
     return path or FileManager.get_path(SNIPE_FILE)
 
@@ -244,12 +286,38 @@ def claim_due(path=None, now=None):
     return csnipe.claim_due(path=_path(path), now=now)
 
 
+def _village_label(village_id, name=None, coords=None):
+    """'007 | Name (587|431)' from what the snipe knows plus the village cache."""
+    data = FileManager.load_json_file("cache/villages/%s.json" % village_id) or {}
+    name = name or data.get("name") or str(village_id)
+    loc = coords or data.get("location")
+    if loc and len(loc) == 2:
+        return "%s (%s|%s)" % (name, loc[0], loc[1])
+    return name
+
+
+def route_text(entry):
+    """'from -> to' line for a snipe's notification, or '' when unknown."""
+    if not entry:
+        return ""
+    try:
+        origin = _village_label(entry.get("village_id"), entry.get("village_name"))
+        target = _village_label(entry.get("target_village_id"), entry.get("target_name"),
+                                [entry.get("target_x"), entry.get("target_y")]
+                                if entry.get("target_x") is not None else None)
+        return "%s -> %s" % (origin, target)
+    except Exception:  # a notification must never fail a snipe
+        return ""
+
+
 def _finish(snipe_id, status, result, path=None, notify=True, **fields):
     csnipe._patch(snipe_id, path=_path(path), status=status, result=result,
                   finished=int(time.time()), **fields)
     csnipe._event(snipe_id, "%s: %s" % (status, result), path=_path(path))
     if notify:
-        Notification.send("TWB snipe %s: %s" % (status, result), category="attack")
+        route = route_text(csnipe._get(snipe_id, _path(path)))
+        Notification.send("TWB snipe %s%s: %s" % (status, (" " + route) if route else "",
+                                                  result), category="attack")
 
 
 def _event(snipe_id, message, path=None):
@@ -287,7 +355,8 @@ def _apply_shortfall(planned, available, policy, min_pct):
     return to_send, None
 
 
-def execute(wrapper, snipe, path=None, network_lead=0.0, presend_sync=False):
+def execute(wrapper, snipe, path=None, network_lead=0.0, presend_sync=False,
+            rename_format=DEFAULT_RENAME_FORMAT):
     """Run one claimed snipe: verify troops, prepare, fire at the exact ms.
 
     land_ms is the target *processing* moment of the arrival; the launch is
@@ -451,6 +520,9 @@ def execute(wrapper, snipe, path=None, network_lead=0.0, presend_sync=False):
                            outgoing_id=command_id,
                            arrival_actual_ms=int(arrival_ms),
                            delta_ms=int(delta))
+        label = kept_label(rename_format, snipe, arrival_ms, hit_ms)
+        if label and command_id:
+            _rename_kept(wrapper, sid, command_id, label, path=path)
         if why:
             # Kept, but not a clean hit: either it shares the attack's
             # millisecond (a coin flip, always kept) or no tolerance was set so
@@ -472,14 +544,15 @@ def execute(wrapper, snipe, path=None, network_lead=0.0, presend_sync=False):
                 outgoing_id=command_id)
 
 
-def run_due(wrapper, path=None, network_lead=0.0, presend_sync=False):
+def run_due(wrapper, path=None, network_lead=0.0, presend_sync=False,
+            rename_format=DEFAULT_RENAME_FORMAT):
     """Claim and execute every due snipe, soonest send first. Returns the count."""
     executed = 0
     for snipe in sorted(claim_due(path=path),
                         key=lambda s: float(s.get("send_est_ts", s.get("start_ts", 0)))):
         try:
             execute(wrapper, snipe, path=path, network_lead=network_lead,
-                    presend_sync=presend_sync)
+                    presend_sync=presend_sync, rename_format=rename_format)
         except Exception as exc:  # never let one bad snipe kill the thread
             logger.exception("snipe %s crashed", snipe.get("id"))
             _finish(snipe.get("id"), "failed", "exception: %s" % exc, path=path)
