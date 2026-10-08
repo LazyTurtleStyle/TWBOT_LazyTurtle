@@ -72,41 +72,34 @@ Two depths of implementation, increasing complexity/risk:
    gate (attack waits / is delayed) or advisory only (stop new runs, accept
    the attack may launch a bit short)?
 
-## Verify balancer fill_mode=even against a live world
+## Watch the balancer's no-solo-top-up rule on a live world
 
-**Status:** shipped in `3cbbfb8` and on by default; correctness confirmed by
-fuzzing, but never yet observed on a running world.
+**Status:** `fill_mode = "even"` is verified. Over 2,930 live sends it left
+the receiver flatter 72% of the time and filled all three resources on 66%,
+the same share as the old code. The 24% that left the receiver *more* lopsided
+were not the water-line maths: they were senders with one resource to spare
+topping up what the receiver already held most of, which also used up its one
+delivery for the window.
 
-**What was changed:** `_plan_even()` in `game/balancer.py` replaces
-"fill the emptiest resource to the ceiling" with a water-line split, so one
-send levels wood/stone/iron together instead of letting one run away from the
-others. `balancer.fill_mode = "biggest_gap"` restores the old behaviour.
+**What was changed:** `_plan_even()` in `game/balancer.py` no longer pushes a
+resource up on its own - it rises no higher than the best of the other two can
+reach. Replayed against the logged sends the rule keeps 92% of the volume,
+drops 3% of sends outright and trims 16% by more than a fifth.
 
-**Why this needs a live check:** the fuzzing covers the arithmetic, not the
-setting it runs in. Three things it cannot speak to:
-- Senders do not coordinate. Levelling spreads one sender's merchants over
-  more resources per receiver, so each send serves a smaller slice of the
-  gap. Whether that interacts badly with `max_sends_per_receiver` and the
-  `may_serve()` starvation escape is an emergent question, not an arithmetic
-  one - a receiver could end up flatter but slower to fill.
-- Splitting three ways wastes up to three part-full merchants where a
-  single-resource send wastes one. Fuzzing put this at ~386 resources per
-  send on random data; the real cost depends on the merchant counts and
-  warehouse sizes actually in play.
-- On a live world the old code already filled all three resources on 66% of sends
-  (196-send baseline), because most receivers are small enough that the
-  budget covers every gap. The change only ever had room to affect the other
-  third, so the real-world win may be smaller than the fuzzing suggests.
+**What the replay cannot speak to:** whether the trimmed merchants end up
+somewhere better. A sender that passes on a receiver counts as having had its
+turn, so `may_serve()` lets the next-ranked sender in on the following pass -
+but a world where every sender is short of the same resource would leave that
+resource's gap open everywhere, with merchants idle.
 
-**How to check:** the baseline and the tooling are already set up outside the
-repo, see `/root/twb-balancer-tracker/README.md` - `track.py report` prints
-resources-per-send and spread-change split by old vs new code. Delete that
-directory once this item is closed.
+**How to check:** `/root/twb-balancer-tracker/README.md` - after a restart,
+`track.py report` should show the "more lopsided" share fall from 24% to about
+10% (what is left is two resources rising together while nobody can supply the
+third). Delete that directory once this item is closed.
 
-**Open question:** if levelling does prove slower to fill a village, the fix
-is probably to let a receiver be served more than once per window rather than
-to go back to `biggest_gap` - worth deciding deliberately rather than by
-flipping the setting back.
+**Open question:** if receivers do fill slower, the fix is probably to let one
+be served more than once per window rather than to drop the rule - worth
+deciding deliberately rather than by backing it out.
 
 ## Make the screen resets optional, if captchas prove request-driven
 
