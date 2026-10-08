@@ -4,6 +4,7 @@ File used for data extraction
 
 import json
 import re
+from html import unescape as _unescape
 
 
 # Precompiled regexes (patterns copied verbatim from the inline versions).
@@ -71,6 +72,15 @@ _RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
 # tag. Matched without DOTALL on purpose: the game emits one object per line and
 # the pattern is greedy, so letting it cross lines would swallow the whole tag.
 _RE_SCRIPT_BLOCK = re.compile(r'(?s)<script[^>]*>(.*?)</script>')
+# The production overview (overview_villages&mode=prod). Its cells are found by
+# what they hold rather than by their column: the header is translated per
+# world, and the leading notes column comes and goes.
+_RE_PRODUCTION_TABLE = re.compile(r'(?s)<table id="production_table".*?</table>')
+_RE_VILLAGE_LABEL = re.compile(r'class="quickedit-label" data-text="([^"]*)"')
+_RE_RESOURCE_SPAN = re.compile(
+    r'(?s)<span class="[^"]*\b(wood|stone|iron)\b[^"]*">(.*?)</span>\s*(?=<span class="[^"]*\b(?:wood|stone|iron)\b|</td>|$)')
+_RE_RATIO = re.compile(r'^(\d+)\s*/\s*(\d+)$')
+_RE_ATTACK_ICON = re.compile(r'command/attack[\w.]*\.(?:png|webp)')
 _RE_INLINE_OBJECT = re.compile(r'\{.*:\{.*:.*\}\}')
 # Units a rally-point command can carry, in the game's own order. Kept here (not
 # imported from game.attack_scheduler) so the extractors stay free of game
@@ -459,6 +469,62 @@ class Extractor:
                 for i, unit in enumerate(units)
             }
             position += 1
+        return out
+
+    @staticmethod
+    def production_overview(res):
+        """
+        Every village's stock, from overview_villages?mode=prod.
+
+        One request for the whole account, where reading the same numbers off
+        each village's own page is one request per village. Returns
+        {village_id: {"name", "location", "points", "resources", "storage_max",
+        "merchants_free", "merchants_total", "pop_used", "pop_max",
+        "under_attack"}}. "location" is None when the label carries no
+        coordinates (the player can hide them), and a village whose row cannot
+        be read whole is left out rather than returned half-filled: the caller
+        falls back to visiting it.
+        """
+        if type(res) != str:
+            res = getattr(res, "text", "") or ""
+        m = _RE_PRODUCTION_TABLE.search(res)
+        if not m:
+            return {}
+        out = {}
+        for row in _RE_TR.findall(m.group(0)):
+            village = _RE_VILLAGE_IDS.search(row)
+            if not village:
+                continue
+            cells = _RE_TD.findall(row)
+            stock_at = next((i for i, cell in enumerate(cells)
+                             if _RE_RESOURCE_SPAN.search(cell)), None)
+            # points | resources | storage | merchants | farm, in that order
+            if stock_at is None or stock_at < 1 or len(cells) < stock_at + 4:
+                continue
+            resources = {
+                kind: int(_RE_NONDIGIT.sub('', _RE_TAG.sub('', amount)) or 0)
+                for kind, amount in _RE_RESOURCE_SPAN.findall(cells[stock_at])
+            }
+            merchants = _RE_RATIO.match(_RE_TAG.sub('', cells[stock_at + 2]).strip())
+            farm = _RE_RATIO.match(_RE_TAG.sub('', cells[stock_at + 3]).strip())
+            storage = _RE_NONDIGIT.sub('', _RE_TAG.sub('', cells[stock_at + 1]))
+            if len(resources) != 3 or not merchants or not farm or not storage:
+                continue
+            label = _RE_VILLAGE_LABEL.search(row)
+            coords = _RE_COORD_PAIR.search(_RE_TAG.sub('', cells[stock_at - 2])
+                                           if stock_at >= 2 else '')
+            out[village.group(1)] = {
+                "name": _unescape(label.group(1)) if label else None,
+                "location": [int(coords.group(1)), int(coords.group(2))] if coords else None,
+                "points": int(_RE_NONDIGIT.sub('', _RE_TAG.sub('', cells[stock_at - 1])) or 0),
+                "resources": resources,
+                "storage_max": int(storage),
+                "merchants_free": int(merchants.group(1)),
+                "merchants_total": int(merchants.group(2)),
+                "pop_used": int(farm.group(1)),
+                "pop_max": int(farm.group(2)),
+                "under_attack": bool(_RE_ATTACK_ICON.search(row)),
+            }
         return out
 
     @staticmethod

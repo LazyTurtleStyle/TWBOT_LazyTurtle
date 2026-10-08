@@ -48,7 +48,11 @@
     "scheduled_attacks": true,
     "sched_prestage_seconds": 15,
     "sched_lead_seconds": 0.0,
-    "claim_daily_bonus": false
+    "claim_daily_bonus": false,
+    "light_villages": false,
+    "light_full_visit_hours": 24,
+    "light_full_visits_per_pass": 3,
+    "light_cycle_minutes": 60
   },
   "building": {
     "manage_buildings": true,
