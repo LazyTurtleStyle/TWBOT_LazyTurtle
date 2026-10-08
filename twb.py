@@ -37,6 +37,7 @@ from core.notification import Notification
 from core.updater import check_update
 from core.filemanager import FileManager
 from core.instance_lock import InstanceLock
+from core.output_cap import cap_redirected_output
 from core.request import WebWrapper
 from game.village import Village
 from game.incomings import IncomingManager
@@ -1320,6 +1321,12 @@ class TWB:
             # (e.g. waiting out a captcha in WebWrapper._await_captcha_clear).
             # OverviewBuilder uses staleness here as a generic "bot stalled" signal.
             self.heartbeat()
+            # Once a cycle is often enough: the console grows by megabytes a
+            # day, not a minute. Never worth stopping the bot over.
+            try:
+                cap_redirected_output()
+            except Exception as exc:
+                logging.getLogger("twb").debug("Could not cap the console output: %s", exc)
             # A sleeping player does nothing at all - see
             # sleep_through_inactive_hours. Checked before the network so a
             # bot that wakes into the dark goes straight back to sleep.
