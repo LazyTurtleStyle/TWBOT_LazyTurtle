@@ -415,7 +415,9 @@ class DataReader:
 
         Returns {"stalled": bool, "reason": "captcha"|"heartbeat"|None,
         "since": unix ts or None, "heartbeat_age": seconds or None,
-        "started": unix ts of the running process or None}.
+        "started": unix ts of the running process or None}. "poller_only" is
+        set when the captcha is one only the incoming poller has met - the
+        main loop is asleep, not stuck, but attacks are going unseen.
         A captcha_block.json marker (written by WebWrapper._await_captcha_clear
         while it polls for the solve) is the precise signal, and is removed the
         moment the captcha clears; heartbeat staleness is a generic fallback for
@@ -430,6 +432,22 @@ class DataReader:
                 since = None
             return {"stalled": True, "reason": "captcha", "since": since,
                     "heartbeat_age": None, "started": None}
+
+        # The incoming poller's own record (game/incomings.py, _note_captcha).
+        # It is refreshed on every refused poll and removed on the first good
+        # one, so anything older than a few polls is a leftover, not a captcha.
+        blind = DataReader.data_path("cache", "world", "incoming_captcha.json")
+        if os.path.exists(blind):
+            try:
+                with open(blind) as f:
+                    seen = json.load(f) or {}
+                if time.time() - int(seen.get("seen_at") or 0) < 1800:
+                    return {"stalled": True, "reason": "captcha",
+                            "since": int(seen.get("since") or 0) or None,
+                            "heartbeat_age": None, "started": None,
+                            "poller_only": True}
+            except Exception:
+                pass
 
         heartbeat = DataReader.data_path("cache", "heartbeat.json")
         blank = {"stalled": False, "reason": None, "since": None,

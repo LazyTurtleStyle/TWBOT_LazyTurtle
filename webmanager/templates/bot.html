@@ -20,11 +20,16 @@
 {% if overview.summary.watchdog.stalled %}
 <div class="situation critical">
 	<div>
+		{% if overview.summary.watchdog.poller_only %}
+		<div class="sit-state">&#9888; Captcha standing</div>
+		<div class="sit-sub">A captcha has been blocking the incoming-attack check{% if overview.summary.watchdog.since %} since {{ overview.summary.watchdog.since|ago }}{% endif %}. <strong>Incoming attacks are not being detected</strong> until you solve it in a browser on the same session.</div>
+		{% else %}
 		<div class="sit-state">&#9888; Bot stalled</div>
 		{% if overview.summary.watchdog.reason == 'captcha' %}
-		<div class="sit-sub">Blocked on a captcha prompt{% if overview.summary.watchdog.since %} since {{ overview.summary.watchdog.since|ago }}{% endif %}. Solve it in a browser on the same session and the bot resumes on its own within ~20s (no restart needed). Background pollers are still running, which is why the process looks alive.</div>
+		<div class="sit-sub">Blocked on a captcha prompt{% if overview.summary.watchdog.since %} since {{ overview.summary.watchdog.since|ago }}{% endif %}. Solve it in a browser on the same session and the bot resumes on its own within ~20s (no restart needed). <strong>Incoming attacks are not being detected</strong> until then. Background pollers are still running, which is why the process looks alive.</div>
 		{% else %}
 		<div class="sit-sub">No heartbeat from the main loop for {{ overview.summary.watchdog.heartbeat_age|dur }}. It may be hung. Background pollers are still running, which is why the process looks alive.</div>
+		{% endif %}
 		{% endif %}
 	</div>
 </div>

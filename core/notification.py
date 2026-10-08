@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 
 import telegram
 
@@ -14,6 +15,10 @@ class _Notification:
     token = None
     loop = None
     events = {}
+    label = ""
+    # The background runners send from their own threads, and one event loop
+    # cannot run two sends at once: the second raises and its message is lost.
+    _lock = threading.Lock()
 
     # Message categories that can be toggled individually via
     # notifications.notify_<category> in config.json. A missing key defaults to
@@ -41,6 +46,7 @@ class _Notification:
             self.enabled = notification_config.get("enabled", False)
             self.channel_id = notification_config.get("channel_id")
             self.token = notification_config.get("token")
+            self.label = str(notification_config.get("label") or "").strip()
             self.events = {
                 cat: notification_config.get("notify_" + cat, True)
                 for cat in self.CATEGORIES
@@ -50,6 +56,7 @@ class _Notification:
             self.channel_id = None
             self.token = None
             self.events = {}
+            self.label = ""
 
     def _ensure_bot(self):
         """(Re)load config and build the bot/loop on demand.
@@ -87,9 +94,14 @@ class _Notification:
         # restarting - which is exactly what happened on 2026-08-03, when a
         # dropped game request crashed a cycle and telegram.error.TimedOut
         # turned that into a full stop.
+        # Two worlds posting to one chat are otherwise indistinguishable: none
+        # of the messages name the world they came from.
+        if self.label:
+            message = "[%s] %s" % (self.label, message)
         try:
-            task = self.loop.create_task(self.send_async(message))
-            self.loop.run_until_complete(task)
+            with self._lock:
+                task = self.loop.create_task(self.send_async(message))
+                self.loop.run_until_complete(task)
         except Exception as exc:
             logging.getLogger("Notification").warning(
                 "Could not send notification (%s): %s", category, exc)

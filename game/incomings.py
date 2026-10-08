@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.notification import Notification
+from core.request import WebWrapper
 
 # Standard TribalWars unit speeds (minutes per field at world speed 1 /
 # unit_speed 1). Only used as a fallback when the world's real values have not
@@ -76,6 +77,20 @@ WORLD_CACHE_TTL = 24 * 3600
 GROUPS_CACHE_TTL = 3600
 # While the session stays logged out, re-send the warning at most this often.
 SESSION_RENOTIFY_TTL = 6 * 3600
+# The same bookkeeping for a captcha standing in front of the poller: when it
+# was first and last seen, and when the user was last told about it.
+CAPTCHA_STATE_CACHE = "cache/world/incoming_captcha.json"
+# A second blocked read this long after the first is what counts as a captcha
+# standing. One blocked read alone is usually the main loop's to announce - it
+# makes most of the requests, so it runs into the captcha within minutes - or
+# was solved before anyone needed telling.
+CAPTCHA_CONFIRM_SECONDS = 120
+# Hours between reminders while it stands, unless the config says otherwise
+# (notifications.captcha_reminder_hours; 0 turns reminders off).
+CAPTCHA_REMINDER_HOURS = 3
+# A record not refreshed for this long belongs to an older captcha - the bot
+# was stopped while one stood - and must not date or silence the next one.
+CAPTCHA_STATE_TTL = 3600
 
 
 def field_distance(a, b):
@@ -296,10 +311,19 @@ def _parse_arrival_clock(text):
 class IncomingManager:
     """Scrapes incoming attacks and keeps cache/incomings up to date."""
 
-    def __init__(self, village_id=None, wrapper=None):
+    def __init__(self, village_id=None, wrapper=None, captcha_alerts=False,
+                 captcha_reminder_hours=CAPTCHA_REMINDER_HOURS, night_check=None):
         self.village_id = village_id
         self.wrapper = wrapper
         self.logger = logging.getLogger("Incomings")
+        # Only the poller speaks up about a captcha (see _note_captcha). Other
+        # callers read this page once for their own reasons, and a one-off
+        # read is not what "attacks are not being detected" is about.
+        self.captcha_alerts = captcha_alerts
+        self.captcha_reminder_hours = captcha_reminder_hours
+        # Callable saying whether it is night for the player, when a reminder
+        # would only be something to wake up to. None means never.
+        self.night_check = night_check
         # Whether the last scrape actually reached a logged-in page; the view
         # reset is pointless (and unwanted during a captcha) when it did not.
         self._session_ok = False
@@ -542,12 +566,16 @@ class IncomingManager:
 
         status = self._session_status(res)
         if status != "ok":
-            # A captcha interstitial is transient; only a genuine logout means
-            # we are silently missing attacks and should warn.
+            # A logout means attacks are silently being missed until the
+            # cookie is refreshed. So does a captcha, for as long as it stands.
             if status == "logged_out":
                 self._note_logged_out()
+            elif self.captcha_alerts:
+                self._note_captcha()
             return None
         self._note_logged_in()
+        if self.captcha_alerts:
+            self._note_captcha_clear()
         self._session_ok = True
 
         now = self._server_time(res)
@@ -643,6 +671,87 @@ class IncomingManager:
             self.logger.info("Incoming poll session restored")
             Notification.send("TWB: incoming-attack tracking session restored.", category="session")
             FileManager.save_json_file({"logged_out": False}, SESSION_STATE_CACHE)
+
+    def _note_captcha(self):
+        """Say that a captcha is hiding the incomings, and keep saying it.
+
+        The poller is deliberately not gated on the activity window, so that an
+        attack sent at 04:00 is seen at 04:00. A captcha quietly undoes that:
+        every poll is refused, and a refused poll logs exactly like a quiet
+        night. The main loop does announce a captcha, but only one it runs
+        into itself, and it is asleep for most of the hours this matters - on
+        a live world the poller was first refused at 00:48 and the message
+        went out at 05:00, when the main loop woke up.
+
+        So the poller raises it itself, once, at any hour: that message is the
+        one that says detection is down. After that it repeats on a slow
+        cadence and never at night, because a reminder nobody is awake for is
+        only noise to wake up to. The main loop's own announcement counts as
+        having been told, so the two do not echo each other.
+        """
+        now = int(time.time())
+        state = FileManager.load_json_file(CAPTCHA_STATE_CACHE) or {}
+        if now - int(state.get("seen_at") or 0) > CAPTCHA_STATE_TTL:
+            state = {}
+        since = int(state.get("since") or now)
+        notified = int(state.get("notified_at") or 0)
+        block = FileManager.load_json_file(WebWrapper.CAPTCHA_BLOCK_FILE) or {}
+        main_since = int(block.get("since") or 0)
+        told = max(notified, main_since)
+        message = None
+        if not told:
+            if now - since >= CAPTCHA_CONFIRM_SECONDS:
+                message = (
+                    "TWB: a captcha is blocking the incoming-attack check. "
+                    "Attacks are NOT being detected until you solve it in a "
+                    "browser on the same session.")
+        elif self._captcha_reminder_due(now - told):
+            message = (
+                "TWB: the captcha is still unsolved after %s. Incoming attacks "
+                "are NOT being detected until you solve it."
+                % self._duration(now - min(since, main_since or since)))
+        if message:
+            self.logger.warning(message)
+            Notification.send(message, category="captcha")
+            notified = now
+        FileManager.save_json_file(
+            {"since": since, "seen_at": now, "notified_at": notified,
+             # Whoever announced it also announces the end of it.
+             "main_knew": bool(state.get("main_knew") or main_since)},
+            CAPTCHA_STATE_CACHE)
+
+    def _captcha_reminder_due(self, waited):
+        """Whether `waited` seconds since the user was last told is long enough."""
+        try:
+            hours = float(self.captcha_reminder_hours or 0)
+        except (TypeError, ValueError):
+            hours = CAPTCHA_REMINDER_HOURS
+        if hours <= 0 or waited < hours * 3600:
+            return False
+        try:
+            return not (self.night_check and self.night_check())
+        except Exception as exc:
+            # A broken clock setting must not be what silences the reminder.
+            self.logger.debug("Night check failed: %s", exc)
+            return True
+
+    @staticmethod
+    def _duration(seconds):
+        hours, minutes = divmod(int(seconds) // 60, 60)
+        return "%dh %02dm" % (hours, minutes) if hours else "%d min" % minutes
+
+    def _note_captcha_clear(self):
+        """Forget a captcha once the page reads again, confirming if we raised it."""
+        state = FileManager.load_json_file(CAPTCHA_STATE_CACHE)
+        if not state:
+            return
+        FileManager.remove_file(CAPTCHA_STATE_CACHE)
+        self.logger.info("Incoming poll is past the captcha")
+        # The main loop sends its own "captcha cleared" for one it waited out.
+        if state.get("notified_at") and not state.get("main_knew"):
+            Notification.send(
+                "TWB: captcha cleared, incoming attacks are being detected again.",
+                category="captcha")
 
     # -- in-game label endpoint capture -------------------------------------
 

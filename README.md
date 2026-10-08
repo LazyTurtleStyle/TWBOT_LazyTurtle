@@ -100,6 +100,7 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 **Staying alive**
 - Telegram notifications with per-category toggles (crashes, captcha, sessions, farming, attacks…)
 - Captcha auto-resume: solve it in your browser and the bot picks up where it left off, no restart
+- A captcha also stops incoming attacks being detected, so the bot says so on Telegram the moment it notices, at any hour, and reminds you every few hours while it stands (never at night)
 - A browser extension that restores your game session in one click, so opening the game yourself doesn't kill the bot's session (Chrome, Edge and Firefox)
 - Socket timeouts, world-aware re-auth, crash recovery, daily login bonus claiming, premium point trading
 - A dead session puts the bot to sleep instead of crashing it, and it stays quiet during your inactive hours, captcha checks included
