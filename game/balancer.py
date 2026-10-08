@@ -784,6 +784,23 @@ class ResourceBalancer:
             limit = min(int(want), self._spare(res, stock))
             if limit > 0:
                 cap[res] = limit
+        # Nothing is pushed up on its own. The water line below only levels the
+        # resources this sender can supply, so one sitting on stone alone used
+        # to "level" a receiver on 15k wood, 48k stone and 12k iron by sending
+        # it 58k stone: a quarter of all live sends left the receiver more
+        # lopsided than they found it, and each one used up the receiver's
+        # delivery for the window on the resource it needed least. So a
+        # resource may rise no higher than the best of the other two can get -
+        # by what this send brings, or by where it already stands. A village
+        # that is short across the board still gets everything the sender has;
+        # a send that could only widen the gap is left for a sender that can
+        # close it.
+        reach = {r: int(room.get(r, 0)) - cap.get(r, 0) for r in RESOURCES}
+        for res in list(cap):
+            others = min(reach[r] for r in RESOURCES if r != res)
+            cap[res] = min(cap[res], int(room[res]) - others)
+            if cap[res] <= 0:
+                del cap[res]
         budget = int(merchants) * MERCHANT_CAPACITY
         if not cap or budget <= 0:
             return {}
@@ -965,6 +982,13 @@ class ResourceBalancer:
             if not self.may_serve(vid, self.rank_senders(villages, target)):
                 self.logger.debug(
                     "Leaving %s to a better-ranked sender", vid)
+                continue
+            # Asked of the snapshot first because the live reading below costs
+            # a request: a sender with nothing this receiver is short of has no
+            # reason to go and look.
+            if not self._plan(room, my_stock, merchants):
+                self.logger.debug(
+                    "Skipping %s: nothing spare here that it is short of", vid)
                 continue
             # Everything up to here ran off cached snapshots and the in-flight
             # ledger, which is fine for choosing who to help. It is not good
