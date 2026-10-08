@@ -211,33 +211,3 @@ game counts.
 
 Delete `/root/twb-captcha-tracker/` and back out the `core/request.py`
 instrumentation once this is closed.
-
-
-## Alert when a captcha blinds the incoming poller
-
-**Found:** 2026-08-27 overnight, alongside the night-mode change above.
-
-Making the incoming poller ungated was the whole point of letting the bot sleep
-- an attack landing at 04:00 is the one you cannot afford to first hear about
-at 05:00. On that world that night the poller ran ~65 times and *every single one*
-logged `Bot protection hit during background poll, skipping` (`core/request.py`
-in `get_url`/`post_url`, where `block_on_captcha` is false). Attack detection
-was dead for 8 hours while the logs showed a poller dutifully polling.
-
-Nothing was actually lost - `Tracking 0 incoming attack(s)` all night, and the
-22:40 Telegram alert went out with no send failure logged - but that was luck.
-The failure mode is that a skipped poll and a genuinely quiet night look
-identical unless you go looking, so the guarantee the ungated poller was meant
-to provide silently evaporates exactly when a captcha is standing.
-
-**Worth doing:** the poller knows it is being refused. A run of consecutive
-skips while `cache/captcha_block.json` exists should escalate - a distinct
-Telegram message ("captcha standing, incoming detection is down"), repeated on
-a slow cadence rather than once, since the existing captcha notification fires
-at the moment of the hit and is easy to sleep through. The dashboard banner
-should probably say the same thing: not just "captcha", but "captcha, and you
-are blind to incomings until it clears".
-
-Deliberately not folded into the poll-interval fix above, which only changes
-how *often* a blocked session is re-checked, not whether anyone is told that
-the blocking has a second cost.

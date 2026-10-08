@@ -763,7 +763,19 @@ class TWB:
                 target = next(iter(config["villages"]), None)
                 if not target:
                     continue
-                IncomingManager(village_id=target, wrapper=poller).run()
+                # Re-read so the reminder settings and the activity window can
+                # be changed while the bot runs. A config caught mid-write must
+                # not cost a poll, so the startup copy stands in for it.
+                try:
+                    live = FileManager.load_json_file("config.json") or config
+                except Exception:
+                    live = config
+                IncomingManager(
+                    village_id=target, wrapper=poller, captcha_alerts=True,
+                    captcha_reminder_hours=(live.get("notifications") or {}).get(
+                        "captcha_reminder_hours", 3),
+                    night_check=lambda: not self.is_active_hours(config=live),
+                ).run()
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)
 

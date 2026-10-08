@@ -17,6 +17,8 @@
     "enabled": false,
     "channel_id": "",
     "token": "",
+    "label": "",
+    "captcha_reminder_hours": 3,
     "notify_startup": true,
     "notify_crash": true,
     "notify_session": true,
