@@ -14,6 +14,14 @@ services:
     image: twb-lazyturtle:latest
     container_name: twb
     restart: unless-stopped
+    # Docker keeps everything a container prints, forever, unless told not to -
+    # and the bot prints every request it makes, 7 to 13 MB a day per world.
+    # Three files of 10 MB is still days of `docker compose logs`.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "${PORT:-5000}:5000"
     environment:

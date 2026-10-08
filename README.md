@@ -321,7 +321,7 @@ Different worlds run side by side, but the **same account never runs twice**: a 
 | Setup | How |
 |---|---|
 | **Docker** | Already handled: it restarts after a crash or reboot. |
-| **Raspberry Pi / VPS** | `sudo cp deploy/twb.service /etc/systemd/system/`, edit the user and paths inside, then `sudo systemctl enable --now twb`. Watch it with `journalctl -u twb -f`. |
+| **Raspberry Pi / VPS** | `sudo cp deploy/twb.service /etc/systemd/system/`, edit the user and paths inside, then `sudo systemctl enable --now twb`. Watch it with `journalctl -u twb -f`. On a small disk, also cap the system journal: the three commands are in the header of that file. |
 | **Windows PC** | Leave the `start.bat` window open. For always-on play, a Pi or cheap VPS is far kinder to your power bill. |
 
 ---

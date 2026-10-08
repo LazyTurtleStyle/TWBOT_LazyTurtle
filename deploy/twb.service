@@ -11,6 +11,13 @@
 #   systemctl status twb
 #   journalctl -u twb -f
 #
+# Worth doing on an SD card or a small VPS disk: the bot's output goes to the
+# system journal, which by default is allowed to take 10% of the disk. systemd
+# has no per-service size setting, so the limit is on the journal as a whole:
+#   sudo mkdir -p /etc/systemd/journald.conf.d
+#   sudo cp deploy/journald-twb.conf /etc/systemd/journald.conf.d/
+#   sudo systemctl restart systemd-journald
+#
 # This runs the dashboard, and the dashboard starts your world bots (either from
 # its Start buttons, or set WORLDS below to bring them up automatically).
 
