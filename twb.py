@@ -49,6 +49,7 @@ from game import accountmanager
 from game import dailybonus
 from game import events
 from game import flags
+from game import lightpass
 from game import markings
 from game import minter
 from game import reportanalysis
@@ -144,6 +145,9 @@ class TWB:
     res = None
     wrapper = None
     should_run = True
+    # When the villages that need no visit were last refreshed from the
+    # overview pages (game/lightpass.py). 0 = not yet, so a start refreshes.
+    light_refreshed_at = 0
     runs = 0
     # When this process started. Stamped into the heartbeat so the dashboard can
     # tell "reports stopped coming in" apart from "the bot only just came back
@@ -1116,6 +1120,94 @@ class TWB:
             except Exception as exc:
                 logger.warning("Noble-barb poll failed: %s", exc)
 
+    def light_prepare(self, light):
+        """Decide what this cycle does about the villages that need no visit.
+
+        Returns (mode, production, snapshots, due). `mode` is "refresh" when
+        the production overview was read and every village's snapshot brought
+        up to date from it, "skip" when that was done recently enough that
+        those villages are simply passed over, and None when the feature is off
+        or the overview could not be read - in which case every village is
+        opened, which is what the bot did before and is tried again next cycle.
+
+        The refresh has its own, slower clock than the cycle
+        (bot.light_cycle_minutes): villages that are farmed or built in keep
+        the cycle's pace, the rest have nothing that needs looking at more
+        often than a full pass over the account used to come round.
+        """
+        if not light["enabled"] or not self.found_villages:
+            return None, {}, {}, set()
+        if time.time() - self.light_refreshed_at < light["cycle_minutes"] * 60:
+            return "skip", {}, {}, set()
+        try:
+            # Both are topped up per visit; with nobody visited, here. Each
+            # keeps its own refresh window.
+            self.update_troop_movements()
+            self.update_troop_templates()
+            production = lightpass.read_production(
+                self.wrapper, self.found_villages[0])
+        except Exception as exc:
+            logging.getLogger("LightPass").warning(
+                "Reading the production overview failed: %s", exc)
+            production = {}
+        if not production:
+            logging.getLogger("LightPass").warning(
+                "No usable production overview - visiting every village this pass")
+            return None, {}, {}, set()
+        snapshots = {vid: lightpass.refresh_snapshot(vid, row)
+                     for vid, row in production.items()}
+        due = lightpass.due_for_visit(
+            {vid: snap for vid, snap in snapshots.items() if snap},
+            light["full_visit_hours"], light["full_visits_per_pass"])
+        self.light_refreshed_at = time.time()
+        return "refresh", production, snapshots, due
+
+    def light_handle(self, village, config, mode, production, snapshots, due):
+        """Deal with one village without opening it, if nothing needs it opened.
+
+        Returns None when the village is done for this cycle, otherwise the
+        reason it has to be visited after all.
+        """
+        vid = str(village.village_id)
+        row = production.get(vid)
+        if not mode:
+            return "light villages off"
+        if mode == "refresh" and row is None:
+            # Missing from an overview that was just read: not understood, and
+            # what is not understood is visited.
+            return "not on the overview"
+        snapshot = (snapshots.get(vid) if mode == "refresh"
+                    else FileManager.load_json_file(lightpass.SNAPSHOT % vid))
+        reason = village.visit_reason(config, snapshot)
+        if reason is None and vid in due:
+            reason = "periodic visit"
+        if reason is not None:
+            logging.getLogger("LightPass").debug(
+                "Opening village %s: %s", vid, reason)
+            return reason
+        if mode == "refresh":
+            try:
+                village.run_light(config, row)
+            except Exception as exc:
+                logging.getLogger("LightPass").warning("Village %s: %s", vid, exc)
+            self.heartbeat()
+        return None
+
+    def idle(self, seconds):
+        """Sleep out the gap between two cycles, stamping the heartbeat on the way.
+
+        The watchdog allows the configured delay plus a grace period. A light
+        pass can sleep well past that (bot.light_cycle_minutes), and an idle
+        bot must not read as a hung one.
+        """
+        until = time.time() + seconds
+        while self.should_run:
+            left = until - time.time()
+            if left <= 0:
+                break
+            time.sleep(min(left, 300))
+            self.heartbeat()
+
     def heartbeat(self, sleeping=False):
         """Stamp proof that the main loop is still turning.
 
@@ -1459,6 +1551,27 @@ class TWB:
                 ReportManager.new_cycle()
                 village_number = int(
                     config["bot"].get("village_name_number_start", 1) or 1)
+                # Villages with nothing per-village switched on are refreshed
+                # from the account-wide overviews instead of being opened one
+                # by one - see light_prepare.
+                light = lightpass.settings(config)
+                light_pass, production, snapshots, due = self.light_prepare(light)
+                # Whether any village was opened for work this pass, as opposed
+                # to bookkeeping - which decides how soon the next pass is.
+                opened_for_work = False
+                refreshed = 0
+                if light_pass == "refresh":
+                    # A visit is what reads the reports, once per cycle for the
+                    # whole account. With no village visited nobody would.
+                    try:
+                        if not rm:
+                            rm = ReportManager(
+                                wrapper=self.wrapper,
+                                village_id=self.found_villages[0])
+                        rm.read(full_run=False)
+                    except Exception as exc:
+                        logging.getLogger("Reports").warning(
+                            "Report read failed: %s", exc)
                 for village in self.villages:
                     if village.village_id not in self.found_villages:
                         print(
@@ -1486,6 +1599,14 @@ class TWB:
 
                     village.troop_reserve = self.troop_reserve.get(
                         str(village.village_id), {})
+                    reason = self.light_handle(
+                        village, config, light_pass, production, snapshots, due)
+                    if reason is None:
+                        refreshed += light_pass == "refresh"
+                        village_number += 1
+                        continue
+                    if reason not in lightpass.NOT_WORK:
+                        opened_for_work = True
                     # The recruiter counts troops standing in other villages
                     # from this cache, and a full cycle takes far longer than
                     # its refresh window - so top it up here rather than once
@@ -1532,6 +1653,18 @@ class TWB:
                         sleep = config["bot"]["inactive_delay"]
 
                 sleep += random.randint(20, 120)
+                if light_pass == "refresh":
+                    logging.getLogger("LightPass").info(
+                        "%d villages refreshed from the overviews, %d opened",
+                        refreshed, len(production) - refreshed)
+                if light_pass and not opened_for_work:
+                    # No village is farmed, built or recruited in, so there is
+                    # nothing for a cycle to do until the next refresh. Waking
+                    # up every few minutes to find that out would spend what
+                    # was just saved on the account-wide pages a cycle reads.
+                    sleep = max(sleep, self.light_refreshed_at
+                                + light["cycle_minutes"] * 60 - time.time()
+                                + random.randint(20, 120))
                 dtn = datetime.datetime.now()
                 dt_next = dtn + datetime.timedelta(0, sleep)
                 self.runs += 1
@@ -1553,7 +1686,7 @@ class TWB:
                 # before the long sleep, so a healthy idle bot is never older
                 # than its own configured delay.
                 self.heartbeat()
-                time.sleep(sleep)
+                self.idle(sleep)
 
     def start(self):
         """

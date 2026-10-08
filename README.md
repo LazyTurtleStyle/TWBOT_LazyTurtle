@@ -76,6 +76,7 @@ On top of upstream's building, recruiting, research, market, farming and noble a
 
 **Premium Account Manager**
 - Hand building, recruiting and research to the in-game Account Manager, and the bot stops doing them (and stops reading the screens it only needed for them)
+- With `light_villages` on (alpha), a village that has nothing left to do is no longer opened at all: it is refreshed from the account-wide overview pages, one request for every village instead of five per village. On a 73-village world that was 79% of all requests
 - Keep a group &rarr; sjabloon plan on the Account manager page and have it re-applied every morning, because the manager's build queue runs dry after a few days
 
 **Economy**

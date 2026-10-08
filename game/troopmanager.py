@@ -505,6 +505,12 @@ class TroopManager:
         options = (village_data or {}).get("options") or {}
         if not options:
             return status
+        # Remembered so the caller can stop asking once everything it wants is
+        # open. Nothing recorded this before, and gather() - the only other
+        # reader of this screen - never runs where the mass pass scavenges, so
+        # such a village re-read the screen every cycle for good.
+        self.scavenge_locked = sorted(
+            int(opt) for opt, o in options.items() if (o or {}).get("is_locked"))
 
         # The game only allows one option to be unlocking at a time. If any is
         # mid-unlock, there is nothing to start this cycle.

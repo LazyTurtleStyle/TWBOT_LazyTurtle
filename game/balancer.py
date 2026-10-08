@@ -898,8 +898,12 @@ class ResourceBalancer:
 
     # -------------------------------------------------------------------- main
 
-    def run(self, my_points, my_stock, my_needs=None):
+    def run(self, my_points, my_stock, my_needs=None, merchants_free=None):
         """Send spare resources to poorer villages. Returns sends performed.
+
+        `merchants_free` is how many merchants the production overview says are
+        home, when the caller has it. With none free the market is not opened
+        at all: the page would only say the same thing.
 
         `my_needs` is the resource manager's request table. It used to be a
         single boolean that vetoed the whole run - one unpaid queue item and a
@@ -936,6 +940,12 @@ class ResourceBalancer:
         if not targets:
             self.logger.debug("No village under %d points has room right now",
                               self.receiver_max_points)
+            return 0
+
+        if merchants_free is not None and merchants_free - self.reserve_merchants < 1:
+            self.logger.info(
+                "No merchants free to balance resources (%d reserved)",
+                self.reserve_merchants)
             return 0
 
         url = "game.php?village=%s&screen=market&mode=send" % self.village_id

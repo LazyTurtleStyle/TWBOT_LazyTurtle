@@ -15,6 +15,7 @@ from game.balancer import ResourceBalancer
 from game.buildingmanager import BuildingManager
 from game.defence_manager import DefenceManager
 from game.incomings import load_groups
+from game import lightpass
 from game.map import Map, MapCache
 from game import massgather
 from game.reports import ReportManager
@@ -558,13 +559,19 @@ class Village:
                         continue
                     self.units.start_update(building, self.disabled_units)
 
-    def run_balancer(self):
+    def run_balancer(self, light=None):
         """Push spare resources to poorer villages (see game/balancer.py).
 
         Runs after manage_local_resources so resman.requested is already pruned
         of empty entries: anything left there means this village still wants
         resources itself, and a village that needs resources never gives any
         away.
+
+        `light` is this village's row of the production overview, for a village
+        that is not being visited (run_light): its stock, points and free
+        merchants are read from there instead of from pages nobody opened. It
+        has no queue of its own to hold resources back for - that is what makes
+        it a village that needs no visit.
         """
         if not self.get_config(section="balancer", parameter="enabled", default=False):
             return
@@ -599,9 +606,16 @@ class Village:
         # on a village's first pass after a restart it is still None and this
         # village reads as 0 points - under any sender threshold, so the whole
         # account skips a full balancing cycle every time the bot is restarted.
-        public = MapCache.get_cache(village_id=self.village_id)
-        my_points = int((public or {}).get("points") or 0)
         try:
+            if light is not None:
+                return self.balancer.run(
+                    my_points=int(light["points"]),
+                    my_stock=light["resources"],
+                    my_needs={},
+                    merchants_free=light["merchants_free"],
+                )
+            public = MapCache.get_cache(village_id=self.village_id)
+            my_points = int((public or {}).get("points") or 0)
             self.balancer.run(
                 my_points=my_points,
                 my_stock=self.resman.actual,
@@ -882,6 +896,12 @@ class Village:
         ):
             self.builder.hold_for_scavenge = False
             return
+        # The same answer from the unlock check's own last look at the screen,
+        # for a village that never scavenges for itself (see unlock_scavenge).
+        locked = getattr(self.units, "scavenge_locked", None)
+        if locked is not None and not any(o <= target for o in locked):
+            self.builder.hold_for_scavenge = False
+            return
 
         status = self.units.unlock_scavenge(max_option=target)
         prioritise = self.get_village_config(
@@ -1087,6 +1107,98 @@ class Village:
             self.resman.do_premium_trade = True
             self.resman.do_premium_stuff()
 
+    def visit_reason(self, config, snapshot):
+        """Why this village has to be opened this cycle, or None when the
+        account-wide overview pages cover it (game/lightpass.py).
+
+        The test is whether anything is switched on that works inside the
+        village. Each line below is one of run()'s steps and the condition
+        under which that step does something; a step that would only read a
+        page to find it has nothing to do is not a reason. Erring towards a
+        visit is free - it is what the bot did for every village anyway - so
+        anything not understood here should be a reason.
+        """
+        self.config = config
+        if not self.logger:
+            self.logger = logging.getLogger(
+                "Village %s" % ((snapshot or {}).get("name") or self.village_id))
+        vid = self.village_id
+        if not self.get_village_config(vid, parameter="managed", default=False):
+            return "not managed"
+        if not snapshot:
+            return "never visited"
+        if self.village_set_name and snapshot.get("name") != self.village_set_name:
+            return "to be renamed"
+        if (self.get_village_config(vid, parameter="building", default=None) is not False
+                and not self.account_manager_handles("building")
+                and self.get_config(section="building", parameter="manage_buildings",
+                                    default=True)):
+            return "building"
+        if (self.get_village_config(vid, parameter="units", default=None) is not False
+                and not self.account_manager_handles("recruiting")
+                and self.get_config(section="units", parameter="recruit", default=False)):
+            return "recruiting"
+        if (not self.account_manager_handles("research")
+                and self.get_config(section="units", parameter="upgrade", default=False)):
+            return "research"
+        if self.get_village_config(vid, parameter="snobs", default=None):
+            return "nobles"
+        if (self.get_config(section="farms", parameter="farm", default=False)
+                and self.get_village_config(vid, parameter="farm_enabled", default=True)):
+            return "farming"
+        if self.get_config(section="farms", parameter="barb_shaper", default=False):
+            return "barb shaper"
+        if self.scavenging_enabled() and not self._mass_scavenged():
+            return "scavenging"
+        if self.get_village_config(vid, parameter="scavenge_unlock_enabled", default=False):
+            hq = int((snapshot.get("buidling_levels") or {}).get("main") or 0)
+            target = self._scavenge_target_option(hq)
+            state = snapshot.get("scavenge_state")
+            locked = snapshot.get("scavenge_locked")
+            if state:
+                pending = any(o.get("locked") for o in state
+                              if o.get("option", 0) <= target)
+            elif locked is not None:
+                pending = any(o <= target for o in locked)
+            else:
+                pending = True      # nobody has looked yet
+            if target >= 1 and pending:
+                return "scavenge unlock"
+        if self.get_config(section="market", parameter="auto_trade", default=False):
+            return "market trading"
+        if (self.get_config(section="market", parameter="trade_for_premium", default=False)
+                and self.get_village_config(vid, parameter="trade_for_premium",
+                                            default=False)):
+            return "premium trading"
+        if self.get_config(section="units", parameter="manage_defence", default=False):
+            return "defence"
+        return None
+
+    def run_light(self, config, row):
+        """This cycle's work for a village that is not being opened.
+
+        Its snapshot has already been refreshed from the overview pages, so all
+        that is left of a visit is the one thing such a village still does:
+        give its spare resources away. Returns the sends made.
+        """
+        self.config = config
+        if not self.logger:
+            self.logger = logging.getLogger(
+                "Village %s" % (row.get("name") or self.village_id))
+        if row["under_attack"] and not self.last_attack:
+            self.logger.warning("Village under attack!")
+            self.wrapper.reporter.report(
+                self.village_id, "TWB_ATTACK",
+                "Village: %s under attack" % (row.get("name") or self.village_id))
+        self.last_attack = row["under_attack"]
+        stock = dict(row["resources"])
+        sent = self.run_balancer(light=dict(row, resources=stock)) or 0
+        if sent:
+            # What went out is no longer here; the snapshot other senders and
+            # the dashboard read should not have to wait a pass to know it.
+            lightpass.refresh_snapshot(self.village_id, dict(row, resources=stock))
+        return sent
+
     def run(self, config=None, first_run=False):
         # setup and check if village still exists / is accessible
         self.config = config
@@ -1288,6 +1400,10 @@ class Village:
                 "iron": _prod_per_hour("iron_prod"),
             },
             "scavenge_state": getattr(self.units, "scavenge_state", None),
+            "scavenge_locked": getattr(self.units, "scavenge_locked", None),
             "last_run": int(time.time()),
+            # last_run moves on every refresh, including the ones made from the
+            # overview pages (game/lightpass.py); this one only on a visit.
+            "last_visit": int(time.time()),
         }
         FileManager.save_json_file(village_entry, f"cache/managed/{self.village_id}.json")
