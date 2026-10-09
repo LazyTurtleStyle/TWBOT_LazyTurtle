@@ -41,6 +41,7 @@ help_file = {
     'bot.light_full_visit_hours': 'How often a village that is otherwise left alone is still opened for real, to pick up what no overview page shows: quest rewards, production rates, a village waiting to be renamed. 0 = never.',
     'bot.light_full_visits_per_pass': 'How many of those periodic visits one pass may make, longest-unvisited first, so they are spread over the day instead of arriving as one long burst.',
     'bot.light_cycle_minutes': 'How often the villages that need no visit are refreshed from the overview pages, and their spare resources balanced. Villages that are farmed or built in keep the normal cycle. When no village needs a visit at all, the bot sleeps until the next refresh instead of waking every few minutes to find nothing to do.',
+    'bot.dynamic_group_hours': 'In-game village groups are re-read every hour. Manual groups come from one page. Dynamic groups cost one request each, so on an account with dozens of them this is a large part of what the bot asks the game for. The dynamic groups the bot itself uses (the mass scavenge group, the scavenge policies, the flag plan) are always re-read hourly; this is how many hours the member list of every other dynamic group may stand before it is read again. Those only feed the dashboard\'s group filters. 1 = re-read all of them every hour.',
     'bot.claim_daily_bonus': 'Open the daily login-bonus chests automatically: once per day (during active hours) the bot visits the daily-bonus screen and claims every unlocked, uncollected chest. Locked chests and premium unlocks are never touched.',
     'account_manager': 'The in-game (premium) Account Manager. Say which jobs it is doing so the bot stops doing them too, and let the bot re-apply your group templates every morning - see the Account manager page.',
     'account_manager.enabled': 'Master switch. While off, the three switches below are ignored and the bot keeps doing everything itself, so a hand-over can be set up before it takes effect.',
@@ -330,7 +331,7 @@ config_groups = {
         ('Housekeeping', ['clean_reports', 'farm_prune_days']),
         ('Fewer requests (alpha)', ['light_villages', 'light_full_visit_hours',
                                     'light_full_visits_per_pass',
-                                    'light_cycle_minutes']),
+                                    'light_cycle_minutes', 'dynamic_group_hours']),
     ],
     'units': [
         ('Recruitment', ['recruit', 'default', 'batch_size', 'randomize_unit_queue',

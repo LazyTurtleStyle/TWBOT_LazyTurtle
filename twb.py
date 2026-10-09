@@ -732,6 +732,25 @@ class TWB:
             poller.headers["user-agent"] = config["bot"]["user_agent"]
         return poller
 
+    @staticmethod
+    def hot_groups(config):
+        """The in-game groups the bot's own modules read, by name or id.
+
+        Their member lists steer what the bot does - who is scavenged, who
+        keeps troops home, who gets which flag - so they are refreshed every
+        time, whatever bot.dynamic_group_hours allows the others.
+        """
+        farms = config.get("farms") or {}
+        refs = [(farms.get("mass_scavenge") or {}).get("group")]
+        refs += list((farms.get("gather_group_policies") or {}).keys())
+        try:
+            for row in flags.load_plan().get("rows") or []:
+                refs += [row.get("group_id"), row.get("group_name")]
+        except Exception as exc:
+            logging.getLogger("Incomings").debug(
+                "Could not read the flag plan's groups: %s", exc)
+        return {str(ref).strip().lower() for ref in refs if ref not in (None, "")}
+
     def incoming_poller(self, config):
         """Background loop: track incoming attacks on their own short cadence.
 
@@ -780,6 +799,9 @@ class TWB:
                     captcha_reminder_hours=(live.get("notifications") or {}).get(
                         "captcha_reminder_hours", 3),
                     night_check=lambda: not self.is_active_hours(config=live),
+                    hot_groups=self.hot_groups(live),
+                    dynamic_group_hours=(live.get("bot") or {}).get(
+                        "dynamic_group_hours"),
                 ).run()
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)

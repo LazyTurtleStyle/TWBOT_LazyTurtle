@@ -24,6 +24,7 @@ import math
 import re
 import time
 import xml.etree.ElementTree as ET
+from html import unescape as _unescape
 
 import requests
 from bs4 import BeautifulSoup
@@ -75,6 +76,12 @@ SUPPORT_CACHE = "cache/incoming_support.json"
 WORLD_CACHE_TTL = 24 * 3600
 # Group membership changes (dynamic groups especially), so refresh hourly.
 GROUPS_CACHE_TTL = 3600
+# One row of the manual-groups overview: the village's groups, by name, and
+# the game's own count of them to check the split against.
+_RE_GROUP_NAMES = re.compile(
+    r'(?s)<td id="assigned_groups_(\d+)_names">(.*?)</td>')
+_RE_GROUP_COUNT = re.compile(
+    r'(?s)<td id="assigned_groups_(\d+)_count">\s*(\d+)\s*</td>')
 # While the session stays logged out, re-send the warning at most this often.
 SESSION_RENOTIFY_TTL = 6 * 3600
 # The same bookkeeping for a captcha standing in front of the poller: when it
@@ -312,10 +319,15 @@ class IncomingManager:
     """Scrapes incoming attacks and keeps cache/incomings up to date."""
 
     def __init__(self, village_id=None, wrapper=None, captcha_alerts=False,
-                 captcha_reminder_hours=CAPTCHA_REMINDER_HOURS, night_check=None):
+                 captcha_reminder_hours=CAPTCHA_REMINDER_HOURS, night_check=None,
+                 hot_groups=None, dynamic_group_hours=None):
         self.village_id = village_id
         self.wrapper = wrapper
         self.logger = logging.getLogger("Incomings")
+        # Which dynamic groups have to be current (names or ids, any case), and
+        # how old the member list of the others may get. See ensure_groups.
+        self.hot_groups = {str(g).strip().lower() for g in (hot_groups or ())}
+        self.dynamic_group_hours = dynamic_group_hours
         # Only the poller speaks up about a captcha (see _note_captcha). Other
         # callers read this page once for their own reasons, and a one-off
         # read is not what "attacks are not being detected" is about.
@@ -415,8 +427,24 @@ class IncomingManager:
         their current member villages, at most once per GROUPS_CACHE_TTL.
 
         The group list comes from the group menu's ajax endpoint; membership
-        from the villages overview filtered on each group - both GETs the
-        browser itself makes, so no new endpoint shapes are guessed."""
+        from the villages overview - both GETs the browser itself makes, so no
+        new endpoint shapes are guessed.
+
+        Reading the overview once per group is one request per group per hour,
+        and an account that sorts its villages has dozens of groups: 34 on a
+        live world, 800 requests a day, the largest thing the bot still asked
+        for once it stopped opening every village. Two things bring that down.
+
+        Manual groups are all on one page: the manual-groups overview lists
+        every village with the groups it was put in.
+
+        Dynamic groups are not listed anywhere - the game works their members
+        out when asked - so they still cost a request each. But only a few are
+        ever read by the bot itself (hot_groups: the mass scavenge group, the
+        scavenge policies, the flag plan). Those are refreshed every time. The
+        rest only feed the dashboard's filters, and may stand for
+        dynamic_group_hours before they are asked for again.
+        """
         cached = FileManager.load_json_file(GROUPS_CACHE)
         if cached and (time.time() - cached.get("_fetched", 0)) < GROUPS_CACHE_TTL:
             return
@@ -429,13 +457,86 @@ class IncomingManager:
             groups = self._parse_group_menu(res.text)
             if groups is None:
                 return  # unparseable: raw payload dumped, keep any older cache
+            now = int(time.time())
+            before = {str(g.get("id")): g
+                      for g in (cached or {}).get("groups") or []
+                      if isinstance(g, dict)}
+            manual = self._manual_group_villages(
+                [g for g in groups if g["type"] == "static"])
+            read = 0
             for group in groups:
-                group["villages"] = self._group_villages(group["id"])
+                if manual is not None and group["id"] in manual:
+                    group["villages"], group["read_at"] = manual[group["id"]], now
+                    continue
+                old = before.get(group["id"])
+                if old and self._may_stand(group, old, now):
+                    group["villages"] = old.get("villages") or []
+                    group["read_at"] = old.get("read_at")
+                    continue
+                group["villages"], group["read_at"] = \
+                    self._group_villages(group["id"]), now
+                read += 1
             FileManager.save_json_file(
-                {"groups": groups, "_fetched": int(time.time())}, GROUPS_CACHE)
-            self.logger.info("Cached %d village group(s)", len(groups))
+                {"groups": groups, "_fetched": now}, GROUPS_CACHE)
+            self.logger.info(
+                "Cached %d village group(s): %d read one by one, %d from the "
+                "manual-groups overview, %d left standing", len(groups), read,
+                len(manual or {}), len(groups) - read - len(manual or {}))
         except Exception as exc:
             self.logger.warning("Could not fetch village groups: %s", exc)
+
+    def _may_stand(self, group, old, now):
+        """Whether a group's cached member list is still good enough.
+
+        Only for a dynamic group that nothing in the bot reads, and only when
+        the user has said such a list may be older than one refresh.
+        """
+        try:
+            hours = float(self.dynamic_group_hours or 0)
+        except (TypeError, ValueError):
+            return False
+        if group.get("type") != "dynamic" or hours * 3600 <= GROUPS_CACHE_TTL:
+            return False
+        if {str(group.get("id")).lower(),
+                str(group.get("name", "")).strip().lower()} & self.hot_groups:
+            return False
+        return now - int(old.get("read_at") or 0) < hours * 3600
+
+    def _manual_group_villages(self, groups):
+        """{group id: [village ids]} for every manual group, from one page.
+
+        Returns None when the page cannot be trusted to say it - not readable,
+        a name on it that is not one of `groups`, two groups sharing a name, or
+        a village whose names do not add up to the game's own count (a group
+        name with the separator in it). The caller then reads each group the
+        old way, so the worst case is the request count it always had.
+        """
+        if not groups:
+            return {}
+        by_name = {}
+        for group in groups:
+            if group["name"] in by_name:
+                return None
+            by_name[group["name"]] = group["id"]
+        res = self.wrapper.get_url(
+            f"game.php?village={self.village_id}&screen=overview_villages"
+            "&mode=groups&type=static&group=0&page=-1")
+        text = getattr(res, "text", "") or ""
+        rows = _RE_GROUP_NAMES.findall(text)
+        counts = dict(_RE_GROUP_COUNT.findall(text))
+        if not rows:
+            return None
+        members = {group["id"]: [] for group in groups}
+        for village_id, cell in rows:
+            names = [name.strip() for name in _unescape(
+                re.sub(r"<[^>]+>", "", cell)).split(";") if name.strip()]
+            if village_id not in counts or int(counts[village_id]) != len(names):
+                return None
+            for name in names:
+                if name not in by_name:
+                    return None
+                members[by_name[name]].append(village_id)
+        return members
 
     def _parse_group_menu(self, text):
         """The group-menu ajax payload -> [{id, name, type}], skipping the
