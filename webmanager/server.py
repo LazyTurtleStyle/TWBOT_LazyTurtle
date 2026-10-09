@@ -1061,6 +1061,13 @@ def minting_run_now():
     return jsonify({"ok": DataReader.minting_run_now()})
 
 
+@app.route('/app/groups/refresh', methods=['POST'])
+def groups_refresh():
+    """Ask the bot to re-read every in-game village group now, instead of on
+    its own schedule - for after a group was made or changed in game."""
+    return jsonify({"ok": DataReader.groups_refresh()})
+
+
 @app.route('/events', methods=['GET'])
 def events_page():
     data = sync()
@@ -2115,6 +2122,7 @@ def get_home():
     return render_template('bot.html', data=data, session=session,
                            overview=OverviewBuilder.build(data),
                            quick=quick_settings_state(),
+                           groups=DataReader.groups_status(),
                            portal_domain=DataReader.portal_domain(),
                            portal_saved=bool(DataReader.portal_cookies_get()))
 

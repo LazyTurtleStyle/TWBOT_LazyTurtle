@@ -170,6 +170,74 @@ def test_an_account_without_manual_groups_asks_for_no_page():
     assert game.kinds() == ["menu", "group 21", "group 22", "group 23"]
 
 
+def press_refresh(at):
+    FileManager.save_json_file({"requested": at}, incomings.GROUPS_REFRESH_REQUEST)
+
+
+def test_the_refresh_button_reads_every_group_now():
+    game = world()
+    settings = dict(hot_groups={"scavengers"}, dynamic_group_hours=6)
+    refresh(game, 1_000_000, **settings)
+    DYNAMIC["23"] = ["101", "103"]
+    try:
+        # Ten minutes later: inside the hour, and West would stand for six.
+        assert refresh(game, 1_000_000 + 600, **settings)["West"] == ["101"]
+        assert game.urls == []
+        press_refresh(1_000_000 + 600)
+        assert incomings.groups_refresh_requested() == 1_000_000 + 600
+        got = refresh(game, 1_000_000 + 610, **settings)
+        assert game.kinds() == ["menu", "manual page", "group 21", "group 22", "group 23"]
+        assert got["West"] == ["101", "103"]
+        # Served once: the request is gone and the normal schedule is back.
+        assert incomings.groups_refresh_requested() is None
+        assert refresh(game, 1_000_000 + 700, **settings) and game.urls == []
+    finally:
+        DYNAMIC["23"] = ["101"]
+
+
+def test_a_refresh_the_game_refuses_stays_owed():
+    game = world()
+    refresh(game, 1_000_000)
+    press_refresh(1_000_000 + 60)
+    menu, game.menu = game.menu, None
+    game_get = game.get_url
+    game.get_url = lambda url, headers=None: (
+        game.urls.append(url), Page("false"))[1] if "load_group_menu" in url else game_get(url)
+    refresh(game, 1_000_000 + 70)
+    assert incomings.groups_refresh_requested() == 1_000_000 + 60
+    assert incomings.load_groups()                      # the old list is kept
+    game.get_url, game.menu = game_get, menu
+    refresh(game, 1_000_000 + 500)
+    assert incomings.groups_refresh_requested() is None and len(game.urls) == 5
+
+
+def test_the_poller_wakes_for_a_new_request_once():
+    import importlib.util
+    here = os.getcwd()
+    spec = importlib.util.spec_from_file_location(
+        "twb_under_test", os.path.join(os.path.dirname(__file__), "..", "twb.py"))
+    twb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(twb)
+    os.chdir(here)
+    logging.disable(logging.CRITICAL)
+    world()
+    clock = [1_000_000.0]
+    slept = []
+    twb.time.time = lambda: clock[0]
+    twb.time.sleep = lambda s: (slept.append(s), clock.__setitem__(0, clock[0] + s))
+    bot = twb.TWB.__new__(twb.TWB)
+
+    assert bot.poll_wait(300) is None and sum(slept) == 300      # nothing asked
+    del slept[:]
+    press_refresh(1_000_500)
+    assert bot.poll_wait(300) == 1_000_500 and slept == []        # woken at once
+    # Still unserved on the next round: that one is slept out in full.
+    assert bot.poll_wait(300, woke_for=1_000_500) == 1_000_500 and sum(slept) == 300
+    del slept[:]
+    press_refresh(1_000_900)                                       # pressed again
+    assert bot.poll_wait(300, woke_for=1_000_500) == 1_000_900 and slept == []
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

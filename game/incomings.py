@@ -58,6 +58,8 @@ GROUPS_CACHE = "cache/world/groups.json"
 # When the group menu response cannot be parsed, the raw payload is dumped
 # here so the parser can be adapted to what the server actually sends.
 GROUPS_RAW_DUMP = "cache/world/groups_raw.json"
+# Written by the dashboard's "Refresh groups" button, removed once served.
+GROUPS_REFRESH_REQUEST = "cache/world/groups_refresh.json"
 INCOMINGS_DIR = "cache/incomings"
 # The in-game "rename incoming attack" request, captured from the live incomings
 # page so we replicate exactly what the browser does instead of guessing.
@@ -446,7 +448,11 @@ class IncomingManager:
         dynamic_group_hours before they are asked for again.
         """
         cached = FileManager.load_json_file(GROUPS_CACHE)
-        if cached and (time.time() - cached.get("_fetched", 0)) < GROUPS_CACHE_TTL:
+        # Asked for from the dashboard: every group is read now, whatever its
+        # age - somebody just changed a group and wants the bot to know.
+        forced = groups_refresh_requested() is not None
+        if not forced and cached \
+                and (time.time() - cached.get("_fetched", 0)) < GROUPS_CACHE_TTL:
             return
         try:
             res = self.wrapper.get_url(
@@ -469,7 +475,7 @@ class IncomingManager:
                     group["villages"], group["read_at"] = manual[group["id"]], now
                     continue
                 old = before.get(group["id"])
-                if old and self._may_stand(group, old, now):
+                if old and not forced and self._may_stand(group, old, now):
                     group["villages"] = old.get("villages") or []
                     group["read_at"] = old.get("read_at")
                     continue
@@ -478,6 +484,9 @@ class IncomingManager:
                 read += 1
             FileManager.save_json_file(
                 {"groups": groups, "_fetched": now}, GROUPS_CACHE)
+            if forced:
+                # Only now: a refresh that did not get this far is still owed.
+                FileManager.remove_file(GROUPS_REFRESH_REQUEST)
             self.logger.info(
                 "Cached %d village group(s): %d read one by one, %d from the "
                 "manual-groups overview, %d left standing", len(groups), read,
@@ -1047,6 +1056,18 @@ class IncomingManager:
             arrival = entry.get("arrival")
             if arrival is None or arrival <= now:
                 FileManager.remove_file(f"{INCOMINGS_DIR}/{name}")
+
+
+def groups_refresh_requested():
+    """When the dashboard's Refresh groups button was pressed, if that has not
+    been served yet; None otherwise."""
+    try:
+        request = FileManager.load_json_file(GROUPS_REFRESH_REQUEST)
+    except Exception:
+        return None     # caught mid-write; it will read fine in a moment
+    if not isinstance(request, dict):
+        return None
+    return int(request.get("requested") or 0) or None
 
 
 def load_groups():
