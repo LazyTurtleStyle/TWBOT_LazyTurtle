@@ -1358,6 +1358,32 @@ class DataReader:
         groups = data.get("groups")
         return groups if isinstance(groups, list) else []
 
+    @staticmethod
+    def groups_status():
+        """How many groups the bot knows, when it last read them, and whether
+        a refresh asked for from the dashboard is still waiting."""
+        data = (DataReader.cache_grab("world") or {}).get("groups") or {}
+        groups = data.get("groups")
+        return {
+            "count": len(groups) if isinstance(groups, list) else 0,
+            "read_at": int(data.get("_fetched") or 0) or None,
+            "pending": os.path.exists(
+                DataReader.data_path("cache", "world", "groups_refresh.json")),
+        }
+
+    @staticmethod
+    def groups_refresh():
+        """Ask the bot to re-read every in-game group now (game/incomings.py,
+        ensure_groups). The dashboard never talks to the game itself."""
+        try:
+            DataReader.ensure_data_dir("cache", "world")
+            path = DataReader.data_path("cache", "world", "groups_refresh.json")
+            with open(path, "w") as handle:
+                json.dump({"requested": int(time.time())}, handle)
+            return True
+        except OSError:
+            return False
+
     # -- in-game Account Manager ------------------------------------------
     # The plan is a list of (group, template) rows per screen, kept out of
     # config.json on purpose: the all-settings editor renders every key of a

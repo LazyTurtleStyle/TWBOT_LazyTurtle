@@ -274,6 +274,18 @@
 		</div>
 
 		<div class="panel">
+			<div class="panel-head"><h3>Village groups</h3>
+				<div class="flex" style="gap:8px;align-items:center">
+					<span class="faint" style="font-size:12px" id="groups_status">{% if groups.pending %}refresh asked for, the bot is on it{%
+						elif groups.read_at %}{{ groups.count }} group(s), read {{ groups.read_at|ago }}{%
+						else %}not read yet{% endif %}</span>
+					<button class="btn btn-sm" id="groups_refresh_btn" onclick="refresh_groups()" {{ 'disabled' if groups.pending }}
+						title="Re-read every in-game group now. Use it after making or changing a group in game; it takes the bot a few minutes, one request per dynamic group.">Refresh groups</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="panel">
 			<div class="panel-head"><h3>Session</h3>
 				<div class="flex" style="gap:8px;align-items:center">
 					<span class="coord">{{ active_world or 'default' }} &middot; {{ session.endpoint }}</span>
@@ -316,6 +328,17 @@
 
 {% block scripts %}
 <script>
+function refresh_groups() {
+	var btn = document.getElementById('groups_refresh_btn'), status = document.getElementById('groups_status');
+	btn.disabled = true;
+	fetch('/app/groups/refresh', {method: 'POST'})
+		.then(function (r) { return r.json(); })
+		.then(function (resp) {
+			if (!resp || !resp.ok) throw 0;
+			status.textContent = 'refresh asked for, the bot is on it';
+		})
+		.catch(function () { btn.disabled = false; status.textContent = 'could not ask for a refresh'; });
+}
 function setActivityCount(n, btn) {
 	document.querySelectorAll('#activityFeed .fi').forEach(function(el) {
 		var idx = parseInt(el.getAttribute('data-idx'), 10);

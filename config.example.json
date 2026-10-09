@@ -52,7 +52,8 @@
     "light_villages": false,
     "light_full_visit_hours": 24,
     "light_full_visits_per_pass": 3,
-    "light_cycle_minutes": 60
+    "light_cycle_minutes": 60,
+    "dynamic_group_hours": 1
   },
   "building": {
     "manage_buildings": true,

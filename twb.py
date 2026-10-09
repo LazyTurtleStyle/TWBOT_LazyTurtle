@@ -40,7 +40,7 @@ from core.instance_lock import InstanceLock
 from core.output_cap import cap_redirected_output
 from core.request import WebWrapper
 from game.village import Village
-from game.incomings import IncomingManager
+from game.incomings import IncomingManager, groups_refresh_requested
 from game.reports import ReportManager
 from game import attack_scheduler
 from game import csnipe
@@ -732,6 +732,46 @@ class TWB:
             poller.headers["user-agent"] = config["bot"]["user_agent"]
         return poller
 
+    def poll_wait(self, seconds, woke_for=None):
+        """Sleep out the gap between two incoming polls, cut short by the
+        dashboard's Refresh groups button.
+
+        The poll is what re-reads the groups, and somebody who just pressed a
+        button should not wait nine minutes for it. `woke_for` is the request
+        this loop last woke up for, and is returned updated: one press cuts one
+        sleep short. A refresh the game refuses stays owed and is retried at
+        the normal pace, not every few seconds.
+        """
+        until = time.time() + seconds
+        while self.should_run:
+            left = until - time.time()
+            if left <= 0:
+                break
+            asked = groups_refresh_requested()
+            if asked and asked != woke_for:
+                return asked
+            time.sleep(min(left, 5))
+        return woke_for
+
+    @staticmethod
+    def hot_groups(config):
+        """The in-game groups the bot's own modules read, by name or id.
+
+        Their member lists steer what the bot does - who is scavenged, who
+        keeps troops home, who gets which flag - so they are refreshed every
+        time, whatever bot.dynamic_group_hours allows the others.
+        """
+        farms = config.get("farms") or {}
+        refs = [(farms.get("mass_scavenge") or {}).get("group")]
+        refs += list((farms.get("gather_group_policies") or {}).keys())
+        try:
+            for row in flags.load_plan().get("rows") or []:
+                refs += [row.get("group_id"), row.get("group_name")]
+        except Exception as exc:
+            logging.getLogger("Incomings").debug(
+                "Could not read the flag plan's groups: %s", exc)
+        return {str(ref).strip().lower() for ref in refs if ref not in (None, "")}
+
     def incoming_poller(self, config):
         """Background loop: track incoming attacks on their own short cadence.
 
@@ -745,6 +785,7 @@ class TWB:
         low = int(config["bot"].get("incoming_check_min", 300))
         high = int(config["bot"].get("incoming_check_max", 570))
         first = True
+        woke_for = None
         while self.should_run:
             # Poll immediately on the first pass instead of sleeping first - a
             # restart otherwise leaves the dashboard's live incomings cache
@@ -753,7 +794,7 @@ class TWB:
             if first:
                 first = False
             else:
-                time.sleep(random.randint(low, high))
+                woke_for = self.poll_wait(random.randint(low, high), woke_for)
                 if not self.should_run:
                     break
             # Deliberately NOT gated on the activity window. Attack detection
@@ -780,6 +821,9 @@ class TWB:
                     captcha_reminder_hours=(live.get("notifications") or {}).get(
                         "captcha_reminder_hours", 3),
                     night_check=lambda: not self.is_active_hours(config=live),
+                    hot_groups=self.hot_groups(live),
+                    dynamic_group_hours=(live.get("bot") or {}).get(
+                        "dynamic_group_hours"),
                 ).run()
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)
