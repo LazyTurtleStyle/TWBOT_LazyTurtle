@@ -224,11 +224,13 @@
 					{% else %}<span class="faint">{{ c.craft.next.reason }}</span>{% endif %}</div>
 				<div class="small text-muted">Targets best first. Rare metals (bronze, silver, gold) are held
 					back for the first target that needs them; a recipe is dealt per player, so an unknown one shows
-					the bot's guess.</div>
+					the bot's guess. <strong>Max</strong> is how many of an item is enough for this event: once
+					made, its metals go to untried recipes and then to whatever has been made least. Empty = no limit.</div>
 			</div>
 			<div class="table-responsive ev-scroll">
 				<table class="table table-sm mb-0 ev-log">
-					<thead><tr><th>Item</th><th class="text-right">Rare</th><th>Recipe</th></tr></thead>
+					<thead><tr><th>Item</th><th class="text-right">Rare</th><th>Recipe</th>
+						<th class="text-right">Made</th><th class="text-right" title="How many is enough. Empty = no limit, 0 = never">Max</th></tr></thead>
 					<tbody>
 					{% for t in c.craft.targets %}
 					<tr>
@@ -237,6 +239,10 @@
 						<td>{% if t.known %}<span class="badge gold">{{ t.known|join(' + ') }}</span>
 							{% elif t.guess %}<span class="faint">{{ t.guess|join(' + ') }}?</span>
 							{% else %}<span class="faint">unknown</span>{% endif %}</td>
+						<td class="text-right mono">{{ t.made or 0 }}</td>
+						<td class="text-right"><input type="number" min="0" step="1" class="form-control form-control-sm ev-limit"
+							style="width:4.5em;display:inline-block" placeholder="&infin;" data-item="{{ t.item_id }}"
+							value="{{ t.max if t.max is not none else '' }}"></td>
 					</tr>
 					{% endfor %}
 					</tbody>
@@ -535,6 +541,19 @@ $(function () {
 			.then(function () { evToast('Targets change from the next cycle'); })
 			.catch(function () { evToast('Could not change the targets'); });
 	};
+	Array.prototype.forEach.call(document.querySelectorAll('.ev-limit'), function (input) {
+		input.onchange = function () {
+			var value = this.value.trim();
+			fetch('/app/event/set?key=craft_limit&item=' + this.getAttribute('data-item')
+					+ '&value=' + encodeURIComponent(value))
+				.then(function (r) { return r.json(); })
+				.then(function (resp) {
+					if (!resp || !resp.ok) throw 0;
+					evToast(value === '' ? 'No limit on this item' : 'Limit applies from the next cycle');
+				})
+				.catch(function () { evToast('Could not save the limit'); });
+		};
+	});
 	var spare = document.getElementById('ev-spare');
 	if (spare) spare.onclick = function () {
 		var next = this.getAttribute('data-on') === '1' ? '0' : '1', btn = this;

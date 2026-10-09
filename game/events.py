@@ -700,7 +700,43 @@ def anvil_targets(settings):
     return list((ANVIL_PROFILES.get(profile) or ANVIL_PROFILES["noble"])["items"])
 
 
-def anvil_plan(stock, materials, recipes, known, targets, spare=True):
+def anvil_limits(settings):
+    """{item id: the most of it to make this event}, from events.craft_limits.
+
+    A priority list says what is wanted; it cannot say when there is enough.
+    Without this the first target that only needs common metals is made every
+    time those metals are in - eleven of one booster in a week on a live
+    world, while the items actually being saved for waited on rare metals.
+    How many is enough is the player's call, so it is theirs to set and is
+    not part of any profile. 0 means never; no entry means no limit.
+    """
+    out = {}
+    for item, most in ((settings or {}).get("craft_limits") or {}).items():
+        try:
+            if most is not None and int(most) >= 0:
+                out[int(item)] = int(most)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def anvil_made(state, recipes):
+    """{item id: how many the bot has crafted this event}, from its own log.
+
+    By item id, not by name: the three strengths of a booster share a name.
+    """
+    item_of = {int(r["recipe_id"]): int(((r.get("item") or {}).get("item_id")) or 0)
+               for r in recipes or []}
+    made = {}
+    for craft in (state or {}).get("log") or []:
+        item = craft.get("item_id") or item_of.get(int(craft.get("recipe_id") or 0))
+        if item:
+            made[int(item)] = made.get(int(item), 0) + 1
+    return made
+
+
+def anvil_plan(stock, materials, recipes, known, targets, spare=True,
+               made=None, limits=None):
     """The next craft, as (combo, reason, recipe_id), or (None, why, None).
 
     Walks the targets best first. The first one that can be made (a known
@@ -711,7 +747,17 @@ def anvil_plan(stock, materials, recipes, known, targets, spare=True):
     no target has claimed is spare and, if allowed, is crafted anyway: every
     craft moves the event pass and the daily ranking, and an untried
     combination teaches the book something.
+
+    An item that has reached its limit (`limits`, against what `made` says
+    was crafted so far) is not made again, as a target or as a way to use up
+    spare metals, and holds nothing back for itself.
     """
+    made = made or {}
+    limits = limits or {}
+
+    def enough(item):
+        return item in limits and made.get(item, 0) >= limits[item]
+
     tier_of, predict, trust = _anvil_layout(materials, recipes, known)
     rare = {int(m) for m, spec in (materials or {}).items()
             if int((spec or {}).get("rarity") or 0) >= _ANVIL_RARE}
@@ -735,7 +781,11 @@ def anvil_plan(stock, materials, recipes, known, targets, spare=True):
         item = int(((recipe.get("item") or {}).get("item_id")) or 0)
         by_item.setdefault(item, []).append(int(recipe["recipe_id"]))
 
+    item_of = {rid: item for item, rids in by_item.items() for rid in rids}
+
     for item in targets:
+        if enough(item):
+            continue
         for recipe_id in sorted(by_item.get(item, []), reverse=True):
             combo = known_combo.get(recipe_id)
             if combo:
@@ -774,15 +824,22 @@ def anvil_plan(stock, materials, recipes, known, targets, spare=True):
     if not spare:
         return None, "waiting for metals", None
     # Spare metals: an untried combination first (highest block, then highest
-    # guessed id - the ids rise with value), then anything at all.
-    untried = [c for c in all_combos if c not in tried and affordable(c, avail)]
+    # guessed id - the ids rise with value), then something already known.
     guessed_id = {combo: rid for rid, combo in predict.items()}
+    untried = [c for c in all_combos if c not in tried and affordable(c, avail)
+               # Only a guess that has earned its trust may rule a combination
+               # out; otherwise trying it is how the book gets filled in.
+               and not (trust == "trusted" and enough(item_of.get(guessed_id.get(c))))]
     if untried:
         untried.sort(key=lambda c: (rares_in(c), guessed_id.get(c, 0)), reverse=True)
         return untried[0], "spare", guessed_id.get(untried[0])
-    reusable = [(rid, c) for rid, c in known_combo.items() if affordable(c, avail)]
+    reusable = [(rid, c) for rid, c in known_combo.items()
+                if affordable(c, avail) and not enough(item_of.get(rid))]
     if reusable:
-        rid, combo = max(reusable, key=lambda rc: (rares_in(rc[1]), rc[0]))
+        # Whatever has been made least, so the leftovers are spread over the
+        # book instead of piling up as one item; the dearer recipe on a tie.
+        rid, combo = min(reusable, key=lambda rc: (
+            made.get(item_of.get(rc[0]), 0), -rares_in(rc[1]), -rc[0]))
         return combo, "spare", rid
     return None, "waiting for metals", None
 
@@ -878,6 +935,8 @@ def _anvil_snapshot(state, poll, settings=None):
     by_recipe = {str(r): k for k, r in known.items()}
     names = {str(m): (spec or {}).get("label") or m for m, spec in materials.items()}
 
+    made = anvil_made(state, recipes)
+    limits = anvil_limits(settings)
     targets = []
     for item in anvil_targets(settings):
         for rid, iid in sorted(recipe_item.items(), key=lambda kv: -int(kv[0])):
@@ -893,10 +952,13 @@ def _anvil_snapshot(state, poll, settings=None):
                 "rares": tier_of.get(int(rid)),
                 "known": [names.get(m, m) for m in key.split("-")] if key else None,
                 "guess": [names.get(str(m), m) for m in guess] if guess and not key else None,
+                "made": made.get(item, 0),
+                "max": limits.get(item),
             })
     plan, reason, _rid = anvil_plan(poll.get("stock"), materials, recipes, known,
                                     anvil_targets(settings),
-                                    spare=bool(settings.get("craft_spare", True)))
+                                    spare=bool(settings.get("craft_spare", True)),
+                                    made=made, limits=limits)
     return {
         "craft": {
             "stock": [{"id": m, "name": names.get(m, m),
@@ -927,11 +989,13 @@ def _anvil_play(wrapper, village_id, screen, state, poll, settings=None):
     settings = settings or {}
     targets = anvil_targets(settings)
     spare = bool(settings.get("craft_spare", True))
+    limits = anvil_limits(settings)
+    made = anvil_made(state, poll.get("recipes"))
     done = []
     while len(done) < MAX_ACTIONS_PER_CYCLE:
         combo, reason, recipe_id = anvil_plan(
             poll.get("stock"), poll.get("materials"), poll.get("recipes"),
-            poll.get("known"), targets, spare=spare)
+            poll.get("known"), targets, spare=spare, made=made, limits=limits)
         if not combo:
             break
         known_before = dict(poll.get("known") or {})
@@ -943,6 +1007,7 @@ def _anvil_play(wrapper, village_id, screen, state, poll, settings=None):
             break
         response = result.get("response") or result
         item = (response.get("item") or {}).get("name") if isinstance(response, dict) else None
+        item_id = (response.get("item") or {}).get("item_id") if isinstance(response, dict) else None
         if not item:
             # An error answer (no metals, event over) has no item: stop rather
             # than loop on it.
@@ -956,10 +1021,19 @@ def _anvil_play(wrapper, village_id, screen, state, poll, settings=None):
         found = str((poll.get("known") or {}).get(key) or "")
         names = {str(m): (spec or {}).get("label") or m
                  for m, spec in (poll.get("materials") or {}).items()}
+        # What was made, by id, so the limits can count it: from the answer
+        # itself, or failing that from the recipe the craft turned out to be.
+        if not item_id and found:
+            item_id = next(
+                (((r.get("item") or {}).get("item_id")) for r in poll.get("recipes") or []
+                 if str(r.get("recipe_id")) == found), None)
+        if item_id:
+            made[int(item_id)] = made.get(int(item_id), 0) + 1
         entry = {
             "ts": int(time.time()),
             "materials": [names.get(str(m), str(m)) for m in combo],
             "item": item,
+            "item_id": int(item_id) if item_id else None,
             "reason": reason,
             "recipe_id": int(found) if found else None,
             "new": key not in known_before,
