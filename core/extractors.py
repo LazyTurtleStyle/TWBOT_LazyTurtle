@@ -68,6 +68,11 @@ _RE_OPTION_VALUE = re.compile(r'<option value="(\d+)"')
 _RE_FARM_ICON = re.compile(
     r'<a([^>]*class="farm_village_(\d+) farm_icon farm_icon_([a-d])[^"]*"[^>]*)>')
 _RE_FORECAST = re.compile(r'data-units-forecast="([^"]*)"')
+# The same page's template editor and the troop count its buttons are greyed
+# out against: what each template sends, and what is home to send.
+_RE_FARM_TEMPLATE_ID = re.compile(r'name="template\[(\d+)\]\[id\]"')
+_RE_FARM_TEMPLATE_UNIT = re.compile(r'name="([a-z]+)\[(\d+)\]"[^>]*value="(\d+)"')
+_RE_FARM_UNITS_HOME = re.compile(r'Accountmanager\.farm\.current_units\s*=\s*(\{.*?\});')
 # The mass-scavenge screen inlines its state as bare JSON objects in a script
 # tag. Matched without DOTALL on purpose: the game emits one object per line and
 # the pattern is greedy, so letting it cross lines would swallow the whole tag.
@@ -691,6 +696,37 @@ class Extractor:
                 "forecast": forecast,
             }
         return result
+
+    @staticmethod
+    def farm_assistant_templates(res):
+        """
+        What each Farm Assistant template sends, from the editor on the am_farm
+        page: {template id: {unit: count}}, units a template does not use left
+        out. {} when the page carries no editor.
+        """
+        if type(res) != str:
+            res = getattr(res, "text", "") or ""
+        templates = {int(tid): {} for tid in _RE_FARM_TEMPLATE_ID.findall(res)}
+        for unit, tid, count in _RE_FARM_TEMPLATE_UNIT.findall(res):
+            if int(tid) in templates and int(count) > 0:
+                templates[int(tid)][unit] = int(count)
+        return templates
+
+    @staticmethod
+    def farm_assistant_units(res):
+        """
+        The troops the Farm Assistant counts as home in this village, {unit:
+        count}, or None when the page does not say.
+        """
+        if type(res) != str:
+            res = getattr(res, "text", "") or ""
+        match = _RE_FARM_UNITS_HOME.search(res)
+        if not match:
+            return None
+        try:
+            return {unit: int(count) for unit, count in json.loads(match.group(1)).items()}
+        except (ValueError, TypeError):
+            return None
 
     @staticmethod
     def daily_bonus_data(res):

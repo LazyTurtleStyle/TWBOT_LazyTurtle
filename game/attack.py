@@ -93,6 +93,10 @@ class AttackManager:
         # Per-run refusal bookkeeping, see max_kind_refusals
         self._kind_refusals = {}
         self._exhausted_kinds = set()
+        # What the A and B templates send and what is home to send, read off
+        # the Farm Assistant page each run - see _out_of_troops.
+        self._template_units = {}
+        self._units_home = None
 
     def run(self):
         """
@@ -157,9 +161,37 @@ class AttackManager:
         forecast the game calculated, which we otherwise can't see ahead of sending.
         """
         res = self.wrapper.get_url(f"game.php?village={self.village_id}&screen=am_farm")
+        self._template_units, self._units_home = {}, None
         if not res:
             return {}
+        self._template_units = Extractor.farm_assistant_templates(res)
+        self._units_home = Extractor.farm_assistant_units(res)
         return Extractor.farm_assistant_icons(res)
+
+    def _template_for(self, kind):
+        """The troops an A ("scout") or B ("minimal") send takes, or None when
+        that is not known - C is sized by the game per target, so never."""
+        tid = {"scout": self.template_id_scout,
+               "minimal": self.template_id_minimal}.get(kind)
+        try:
+            return self._template_units.get(int(tid)) or None
+        except (TypeError, ValueError):
+            return None
+
+    def _out_of_troops(self, kind):
+        """Whether the village cannot cover one more send of this kind.
+
+        The game refuses a template it has no troops for, and the bot used to
+        find that out by asking: three refused sends per kind, every farm run,
+        whenever the scouts or the cavalry were all out - and on a new village
+        with no stable, every run all day. The page the run already loads says
+        what each template takes and what is home, so the answer is there
+        without sending anything. Unknown means "try", as before.
+        """
+        needs = self._template_for(kind)
+        if not needs or self._units_home is None:
+            return False
+        return any(self._units_home.get(unit, 0) < count for unit, count in needs.items())
 
     def send_farm(self, target):
         """
@@ -311,6 +343,14 @@ class AttackManager:
                 "Skipping target %s, %s farms already gave up this run", vid, kind
             )
             return
+        if self._out_of_troops(kind):
+            self._exhausted_kinds.add(kind)
+            self.logger.info(
+                "%s: not enough troops home for another %s farm (%s) - no more "
+                "%s farms this run", self.village_id, kind,
+                ", ".join("%d %s" % (n, u) for u, n in self._template_for(kind).items()),
+                kind)
+            return
 
         if kind == "scout":
             result = self.farm_template(vid, self.template_id_scout)
@@ -321,6 +361,11 @@ class AttackManager:
 
         if result and not (isinstance(result, dict) and result.get("error")):
             self._kind_refusals[kind] = 0
+            # Those troops have left; count them out so the last send is not
+            # followed by refusals.
+            for unit, count in (self._template_for(kind) or {}).items():
+                if self._units_home is not None:
+                    self._units_home[unit] = self._units_home.get(unit, 0) - count
             self.logger.info(
                 "Farm Assistant [%s] %s -> %s", kind, self.village_id, vid
             )
