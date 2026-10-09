@@ -1073,9 +1073,10 @@ def event_refresh():
     return jsonify({"ok": DataReader.event_refresh(request.args.get("screen"))})
 
 
-# The anvil's two settings, set from the Events page itself: which items to
-# aim for, and whether metals no target needs are crafted anyway. Anything else
-# is refused, so this cannot become a way to write arbitrary config.
+# The anvil's settings, set from the Events page itself: which items to aim
+# for, whether metals no target needs are crafted anyway, and how many of one
+# item is enough. Anything else is refused, so this cannot become a way to
+# write arbitrary config.
 EVENT_SETTINGS = {"craft_priority": ("noble", "defense", "building", "custom"),
                   "craft_spare": ("true", "false")}
 
@@ -1084,6 +1085,15 @@ EVENT_SETTINGS = {"craft_priority": ("noble", "defense", "building", "custom"),
 def event_set():
     key = request.args.get("key")
     value = request.args.get("value")
+    if key == "craft_limit":
+        # One limit per item: a whole number, or empty for "no limit".
+        item = request.args.get("item") or ""
+        value = (value or "").strip()
+        if not item.isdigit() or not (value == "" or value.isdigit()):
+            return jsonify({"ok": False, "error": "not a number"})
+        DataReader.config_set(parameter="events.craft_limits.%s" % item,
+                              value=value or "null")
+        return jsonify({"ok": True})
     if value not in EVENT_SETTINGS.get(key, ()):
         return jsonify({"ok": False, "error": "unknown setting"})
     # config_set JSON-decodes the value, so "true" lands as a boolean and a
