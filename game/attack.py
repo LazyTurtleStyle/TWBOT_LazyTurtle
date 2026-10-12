@@ -4,6 +4,8 @@ Sounds dangerous but it just sends farms
 """
 
 from core.extractors import Extractor
+import ast
+import json
 import logging
 import random
 import time
@@ -12,6 +14,34 @@ from datetime import timedelta
 
 from core.filemanager import FileManager
 from game.simulator import Simulator
+
+
+def parse_template_troops(value):
+    """
+    farms.template_minimal_troops as a {unit: count} dict. The setting is typed by
+    hand, so it also arrives as text: JSON, or the single-quoted form a Python dict
+    prints as (what the dashboard used to show, and so what got typed back into it).
+    Raises ValueError for anything that is not a unit -> whole number mapping.
+    """
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                raise ValueError("not a troop list like {\"light\": 5, \"spy\": 1}")
+    if not isinstance(value, dict):
+        raise ValueError("not a troop list like {\"light\": 5, \"spy\": 1}")
+    troops = {}
+    for unit, count in value.items():
+        if not isinstance(unit, str) or isinstance(count, bool) \
+                or not isinstance(count, int) or count < 0:
+            raise ValueError("%r: %r is not a unit with a whole number" % (unit, count))
+        troops[unit] = count
+    return troops
 
 
 class AttackManager:

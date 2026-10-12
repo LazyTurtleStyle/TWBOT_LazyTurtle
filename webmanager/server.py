@@ -6,6 +6,7 @@ sys.path.insert(0, "../")
 
 from flask import Flask, jsonify, request, render_template, redirect, Response
 from jinja2 import UndefinedError
+from game.attack import parse_template_troops
 
 try:
     from webmanager.helpfile import (help_file, buildings, section_labels, config_groups,
@@ -2170,7 +2171,16 @@ def get_bot_log():
 def config_set():
     vid = request.args.get("village_id", None)
     if not vid:
-        DataReader.config_set(parameter=request.args.get("parameter"), value=request.args.get("value", None))
+        parameter = request.args.get("parameter")
+        value = request.args.get("value", None)
+        if parameter == "farms.template_minimal_troops":
+            # Stored as text this crashes the bot, so it is checked and saved as
+            # the dict it stands for rather than as whatever was typed.
+            try:
+                value = json.dumps(parse_template_troops(value))
+            except ValueError as e:
+                return jsonify({"error": "B template troops: %s" % e}), 400
+        DataReader.config_set(parameter=parameter, value=value)
     else:
         param = request.args.get("parameter")
         if param.startswith("village."):

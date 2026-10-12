@@ -86,7 +86,9 @@
                num('farm', 'template_id_minimal', f.template_id_minimal, '1', 'e.g. 1235'),
                'The id of your in-game <strong>B (minimal)</strong> fallback template, found the same way.') }}
         {{ row('B template troops (template_minimal_troops)',
-               text('farm', 'template_minimal_troops', f.template_minimal_troops, '{"light": 5, "spy": 1}'),
+               text('farm', 'template_minimal_troops',
+                    (f.template_minimal_troops|tojson|forceescape) if f.template_minimal_troops is mapping
+                    else f.template_minimal_troops, '{"light": 5, "spy": 1}'),
                'Exactly what the B template sends, as JSON e.g. <code>{"light": 5, "spy": 1}</code>.
                 There is no API to read this back. If it is wrong the wall-risk check silently does nothing.') }}
       </div>
@@ -693,7 +695,9 @@
     } else {
       url = '/app/scavenge/set?parameter=' + encodeURIComponent(param) + '&value=' + encodeURIComponent(value);
     }
-    return $.getJSON(url, function () { flashSaved(); });
+    return $.getJSON(url, function () { flashSaved(); }).fail(function (xhr) {
+      alert('Not saved: ' + ((xhr.responseJSON || {}).error || 'the panel refused the value'));
+    });
   }
 
   $(document).ready(function () {
