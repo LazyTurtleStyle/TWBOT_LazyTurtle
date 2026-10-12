@@ -9,7 +9,7 @@ from core.extractors import Extractor
 from core.filemanager import FileManager
 from core.templates import TemplateManager
 from core.twstats import TwStats
-from game.attack import AttackManager
+from game.attack import AttackManager, parse_template_troops
 from game.barbshaper import BarbShaper
 from game.balancer import ResourceBalancer
 from game.buildingmanager import BuildingManager
@@ -639,6 +639,20 @@ class Village:
         self.logger.debug("Current resources: %s", str(self.resman.actual))
         self.logger.debug("Requested resources: %s", str(self.resman.requested))
 
+    def minimal_template_troops(self):
+        """The configured B template troops, or none when the setting is unreadable:
+        a typo in it should cost the wall-risk check, not the whole bot."""
+        raw = self.get_config(
+            section="farms", parameter="template_minimal_troops", default={}
+        )
+        try:
+            return parse_template_troops(raw)
+        except ValueError as e:
+            self.logger.error(
+                "farms.template_minimal_troops is unreadable (%s), ignoring it: %r", e, raw
+            )
+            return {}
+
     def set_farm_options(self):
         """
         Sets various options for farming management
@@ -670,9 +684,7 @@ class Village:
         self.attack.template_id_minimal = self.get_config(
             section="farms", parameter="template_id_minimal", default=None
         )
-        self.attack.template_minimal_troops = self.get_config(
-            section="farms", parameter="template_minimal_troops", default={}
-        )
+        self.attack.template_minimal_troops = self.minimal_template_troops()
         self.attack.check_farm_unit_composition()
         self.attack.minimal_loss_tolerance = self.get_config(
             section="farms", parameter="minimal_loss_tolerance", default=0.5
@@ -731,8 +743,7 @@ class Village:
         if not self.troop_reserve:
             return []
         spends = {"spy", "light"}
-        spends.update(self.get_config(
-            section="farms", parameter="template_minimal_troops", default={}) or {})
+        spends.update(self.minimal_template_troops())
         return sorted(u for u in self.troop_reserve if u in spends)
 
     def run_farming(self):
