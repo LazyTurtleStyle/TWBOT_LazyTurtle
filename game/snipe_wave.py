@@ -194,13 +194,14 @@ def window(incomings, target_id, hit_ms, settings):
     hi = hit_ms - 1
     before = int(settings.get("aim_before_ms") or 0)
     if before > 0:
-        # Right in front of the noble. The keep window is measured from the
-        # aim both ways, so on the late side it reaches the noble's own
-        # millisecond - which the engine keeps as the coin flip it is, and
-        # never past it - and on the early side it stops at the previous
-        # command, as mid-gap does.
+        # Right in front of the noble. The keep window is how far before the
+        # aim a landing may still be; it stops at the previous command, as
+        # mid-gap does. It is not cut down to the room left behind the aim:
+        # the engine never keeps a landing past the noble whatever the window
+        # says (and keeps one on the noble's own millisecond as the coin flip
+        # it is), so "aim 1, keep 3" means what it reads - 4 to 0 ms before.
         aim = max(lo, hit_ms - before)
-        keep = max(0, min(int(settings["max_keep_ms"]), aim - lo, hit_ms - aim))
+        keep = max(0, min(int(settings["max_keep_ms"]), aim - lo))
         return aim, keep, lo, hi
     aim = (lo + hi) // 2
     keep = max(0, min(int(settings["max_keep_ms"]), (hi - lo) // 2))

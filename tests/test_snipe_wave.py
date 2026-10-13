@@ -88,9 +88,12 @@ def test_aim_right_before_the_noble():
     assert (aim, keep, lo) == (int(T + 99), 1, int(T + 1))
     # Second noble 100ms behind the first: same thing behind noble 1.
     assert w.window(INC, "A", int(T + 200), st)[:2] == (int(T + 199), 1)
-    # A wider window never reaches past the noble or before the previous command.
-    wide = dict(st, aim_before_ms=10, max_keep_ms=50)
-    assert w.window(INC, "A", int(T + 100), wide)[:2] == (int(T + 90), 10)
+    # The window is how much earlier than the aim a landing may be: aim 1 with
+    # keep 3 is 4..0 ms before the noble (the engine never keeps one past it).
+    assert w.window(INC, "A", int(T + 100), dict(st, max_keep_ms=3))[:2] == (int(T + 99), 3)
+    # It still never reaches back past the previous command.
+    wide = dict(st, aim_before_ms=10, max_keep_ms=200)
+    assert w.window(INC, "A", int(T + 100), wide)[:2] == (int(T + 90), 89)
     near = [c("x", "Z", 0, "Ram"), c("y", "Z", 4, "Edel")]
     assert w.window(near, "Z", int(T + 4), wide)[:2] == (int(T + 1), 0)
     # 0 keeps the mid-gap aim it always had.
