@@ -59,6 +59,13 @@ DEFAULTS = {
     "exclude_tag": "C-SNIPE",
     # Plan untagged noble trains too, after the tagged ones.
     "include_untagged": True,
+    # Only the nobles that carry the tag themselves, each on its own: one
+    # tagged noble no longer brings the rest of its train along, and a snipe
+    # that holds covers that noble only. For a wave where the nobles on one
+    # village come from different villages and only some are worth standing in
+    # front of - a noble riding in with its village's whole army kills a
+    # support, one from a village that only ever sent fakes does not.
+    "tagged_nobles_only": False,
     # Stop once this many snipes kept on a noble (or behind a train's first).
     "keep_hits": 1,
     "prefer_behind_first": True,
@@ -225,7 +232,11 @@ def covered(groups, kept, settings):
     done = set()
     for group in groups:
         hits = [n["arrival_ms"] for n in group]
-        if settings["prefer_behind_first"] and len(hits) > 1:
+        if settings.get("tagged_nobles_only"):
+            # Each noble stands alone: what may land between two of them is
+            # exactly what the tags were set to avoid.
+            done.update(h for h in hits if kept.get(h, 0) >= need)
+        elif settings["prefer_behind_first"] and len(hits) > 1:
             if hits[0] in kept and kept[hits[0]] >= need:
                 done.add(hits[0])
             if sum(kept.get(h, 0) for h in hits[1:]) >= need:
@@ -315,6 +326,8 @@ def plan(incomings, snipes, own_villages, troops, speeds, settings, now):
                 label = (n.get("game_label") or "").lower()
                 h = n["arrival_ms"]
                 if h / 1000.0 <= now or h in done or (excl and excl in label):
+                    continue
+                if settings.get("tagged_nobles_only") and not (tag and tag in label):
                     continue
                 aim, keep, lo, hi = window(incomings, tid, h, settings)
                 if keep < int(settings["min_keep_ms"]):
