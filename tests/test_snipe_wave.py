@@ -110,6 +110,24 @@ def test_aim_before_plans_tight_attempts():
     assert w.plan(INC, [], OWN, TROOPS, SPEEDS, dict(st, min_keep_ms=4), NOW) == []
 
 
+def test_only_the_tagged_nobles():
+    # Train on A: n1 and n2 carry the tag, n3 does not. B and C have none.
+    st = dict(w.DEFAULTS, tagged_nobles_only=True, include_untagged=False,
+              attempts_per_noble=2)
+    out = w.plan(INC, [], OWN, TROOPS, SPEEDS, st, NOW)
+    assert {e["incoming_id"] for e in out} == {"n1", "n2"}
+    # Without the switch one tag brings the whole train along.
+    whole = w.plan(INC, [], OWN, TROOPS, SPEEDS, dict(st, tagged_nobles_only=False), NOW)
+    assert {e["incoming_id"] for e in whole} == {"n1", "n2", "n3"}
+    # A hold covers its own noble and no other: the rest stay open.
+    groups = w.trains(INC)["A"]
+    held = {int(T + 200): 1}
+    assert w.covered(groups, held, st) == {int(T + 200)}
+    # Without the switch the same hold, behind the first noble, covers the train.
+    assert w.covered(groups, held, dict(st, tagged_nobles_only=False)) == {
+        int(T + 100), int(T + 200), int(T + 300)}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
