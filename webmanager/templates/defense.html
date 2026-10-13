@@ -627,7 +627,7 @@
 		</span></div>
 	<div class="card-body py-2">
 		<p class="text-muted small mb-2">Every 20s the bot plans each free village (spear+sword, spear only, +1 catapult
-			for a slower pace, heavy cavalry on its own) onto every open noble, aiming mid-gap before the noble and
+			for a slower pace, heavy cavalry on its own) onto every open noble, aiming mid-gap before the noble (or a set number of ms before it) and
 			keeping whatever lands inside the gap. A miss is recalled within seconds, so its troops can try again.
 			Once enough snipes hold, the remaining attempts are cancelled. It stops by itself when no noble is left
 			in the air.</p>
@@ -635,7 +635,9 @@
 			<div class="form-group col-6 col-md-2"><label class="small mb-0">Hits to keep per noble</label>
 				<input type="number" min="1" max="3" class="form-control form-control-sm" name="keep_hits" value="{{ ws.keep_hits }}"></div>
 			<div class="form-group col-6 col-md-2"><label class="small mb-0">Attempts per noble</label>
-				<input type="number" min="1" max="30" class="form-control form-control-sm" name="attempts_per_noble" value="{{ ws.attempts_per_noble }}"></div>
+				<input type="number" min="1" max="200" class="form-control form-control-sm" name="attempts_per_noble" value="{{ ws.attempts_per_noble }}"></div>
+			<div class="form-group col-6 col-md-2"><label class="small mb-0" title="0 = aim at the middle of the gap. 1 = aim 1 ms before the noble: with a keep window of 1 that keeps a landing 2, 1 or 0 ms before it.">Aim ms before the noble</label>
+				<input type="number" min="0" max="500" class="form-control form-control-sm" name="aim_before_ms" value="{{ ws.aim_before_ms }}"></div>
 			<div class="form-group col-6 col-md-2"><label class="small mb-0">Keep window up to &plusmn;ms</label>
 				<input type="number" min="1" max="200" class="form-control form-control-sm" name="max_keep_ms" value="{{ ws.max_keep_ms }}"></div>
 			<div class="form-group col-6 col-md-2"><label class="small mb-0">Skip gaps under &plusmn;ms</label>
