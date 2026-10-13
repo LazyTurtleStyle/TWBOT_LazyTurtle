@@ -81,6 +81,32 @@ def test_cancellations():
                if e["village_id"] == kept["village_id"] and w._pools(e["units"]) == pool)
 
 
+def test_aim_right_before_the_noble():
+    st = dict(w.DEFAULTS, aim_before_ms=1, max_keep_ms=1)
+    # Ram at T, noble at T+100: aim 1ms before the noble, keep 2/1/0 ms before.
+    aim, keep, lo, hi = w.window(INC, "A", int(T + 100), st)
+    assert (aim, keep, lo) == (int(T + 99), 1, int(T + 1))
+    # Second noble 100ms behind the first: same thing behind noble 1.
+    assert w.window(INC, "A", int(T + 200), st)[:2] == (int(T + 199), 1)
+    # A wider window never reaches past the noble or before the previous command.
+    wide = dict(st, aim_before_ms=10, max_keep_ms=50)
+    assert w.window(INC, "A", int(T + 100), wide)[:2] == (int(T + 90), 10)
+    near = [c("x", "Z", 0, "Ram"), c("y", "Z", 4, "Edel")]
+    assert w.window(near, "Z", int(T + 4), wide)[:2] == (int(T + 1), 0)
+    # 0 keeps the mid-gap aim it always had.
+    assert w.window(INC, "A", int(T + 100), dict(w.DEFAULTS))[:2] == (int(T + 50), 49)
+
+
+def test_aim_before_plans_tight_attempts():
+    st = dict(w.DEFAULTS, aim_before_ms=1, max_keep_ms=1, min_keep_ms=1,
+              attempts_per_noble=3)
+    out = w.plan(INC, [], OWN, TROOPS, SPEEDS, st, NOW)
+    assert out and all(e["max_delta_ms"] == 1 and e["land_ms"] == e["hit_ms"] - 1
+                       for e in out)
+    # The default minimum (4) would have skipped every one of these windows.
+    assert w.plan(INC, [], OWN, TROOPS, SPEEDS, dict(st, min_keep_ms=4), NOW) == []
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

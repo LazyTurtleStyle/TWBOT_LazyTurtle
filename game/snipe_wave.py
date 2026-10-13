@@ -62,6 +62,13 @@ DEFAULTS = {
     # Stop once this many snipes kept on a noble (or behind a train's first).
     "keep_hits": 1,
     "prefer_behind_first": True,
+    # Aim this many ms before the noble instead of at the middle of the gap
+    # (0 = mid-gap). Mid-gap is the easy target, and the right one while
+    # attempts are scarce. It also leaves room in front of the noble: a nuke
+    # sent later, timed into that room, clears the support again. With dozens
+    # of attempts to spend, aiming right in front of the noble - with a keep
+    # window of a millisecond or two - gives that nuke nowhere to land.
+    "aim_before_ms": 0,
     # Keep window: the whole gap before the noble, at most this wide each way.
     "max_keep_ms": 50,
     # Gaps whose keep window comes out narrower than this are skipped.
@@ -185,6 +192,16 @@ def window(incomings, target_id, hit_ms, settings):
     else:
         lo = hit_ms - int(settings["lone_gap_ms"])
     hi = hit_ms - 1
+    before = int(settings.get("aim_before_ms") or 0)
+    if before > 0:
+        # Right in front of the noble. The keep window is measured from the
+        # aim both ways, so on the late side it reaches the noble's own
+        # millisecond - which the engine keeps as the coin flip it is, and
+        # never past it - and on the early side it stops at the previous
+        # command, as mid-gap does.
+        aim = max(lo, hit_ms - before)
+        keep = max(0, min(int(settings["max_keep_ms"]), aim - lo, hit_ms - aim))
+        return aim, keep, lo, hi
     aim = (lo + hi) // 2
     keep = max(0, min(int(settings["max_keep_ms"]), (hi - lo) // 2))
     return aim, keep, lo, hi
