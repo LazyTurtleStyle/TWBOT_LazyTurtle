@@ -1384,6 +1384,70 @@ class DataReader:
         except OSError:
             return False
 
+    # -- vakantievervanging (an account you sit for) ------------------------
+    # The bot reads it (game/sitter.py); the dashboard only stores the pasted
+    # replacement session and shows what the bot read. The session is a
+    # working login to somebody else's account, so it is never sent back to
+    # the page - the page only learns whether one is stored and when.
+
+    @staticmethod
+    def sitter_session_set(raw, player_id=""):
+        cookies = DataReader.parse_cookie_string(raw)
+        if not cookies:
+            return False
+        DataReader.ensure_data_dir("cache")
+        path = DataReader.data_path("cache", "sitter_session.json")
+        pid = "".join(c for c in str(player_id or "") if c.isdigit())
+        with open(path, "w") as handle:
+            json.dump({"cookies": cookies, "player_id": pid, "saved": int(time.time())}, handle)
+        # A stale error from the old session must not stand over the new one.
+        state_path = DataReader.data_path("cache", "sitter.json")
+        try:
+            with open(state_path) as handle:
+                state = json.load(handle) or {}
+            state.pop("error", None)
+            with open(state_path, "w") as handle:
+                json.dump(state, handle)
+        except (OSError, ValueError):
+            pass
+        return True
+
+    @staticmethod
+    def sitter_session_clear():
+        for name in ("sitter_session.json", "sitter_refresh.json"):
+            path = DataReader.data_path("cache", name)
+            if os.path.exists(path):
+                os.remove(path)
+        return True
+
+    @staticmethod
+    def sitter_refresh():
+        try:
+            DataReader.ensure_data_dir("cache")
+            with open(DataReader.data_path("cache", "sitter_refresh.json"), "w") as handle:
+                json.dump({"requested": int(time.time())}, handle)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def sitter_view():
+        def load(name):
+            try:
+                with open(DataReader.data_path("cache", name)) as handle:
+                    return json.load(handle) or {}
+            except (OSError, ValueError):
+                return {}
+        session = load("sitter_session.json")
+        state = load("sitter.json")
+        return {
+            "has_session": bool(session.get("cookies")),
+            "session_saved": session.get("saved"),
+            "player_id": session.get("player_id") or "",
+            "pending": os.path.exists(DataReader.data_path("cache", "sitter_refresh.json")),
+            "state": state,
+        }
+
     # -- in-game Account Manager ------------------------------------------
     # The plan is a list of (group, template) rows per screen, kept out of
     # config.json on purpose: the all-settings editor renders every key of a
