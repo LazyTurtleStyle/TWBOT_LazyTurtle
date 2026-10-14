@@ -1,0 +1,153 @@
+{% extends "shell.html" %}
+{% block title %}Sat account (VV){% endblock %}
+
+{% block content %}
+{% set st = vv.state %}
+{% set acc = (st.accounts or [])|first if st.accounts else none %}
+<p class="text-muted small mt-1">
+	A read-only overview of an account you are the vacation replacement (vakantievervanging) for.
+	The bot cannot log in as a replacement by itself, so you do that in your own browser and paste
+	that session below. It is kept apart from the bot's own session and only used to read three
+	overview pages of that account &mdash; production, troops and incoming attacks &mdash; every
+	half hour while the bot is awake, or when you press refresh. It never sends anything from that account.
+</p>
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center flex-wrap" style="gap:.5rem">
+		<strong>{{ (st.player or {}).name or (acc.name if acc else 'No account read yet') }}</strong>
+		{% if (st.player or {}).id or vv.player_id or acc %}<small class="text-muted">player {{ (st.player or {}).id or vv.player_id or acc.player_id }}</small>{% endif %}
+		<small class="text-muted">{% if st.read_at %}read {{ st.read_at|ago }}{% else %}not read yet{% endif %}</small>
+		<span class="ml-auto d-flex align-items-center" style="gap:.4rem">
+			<button class="btn btn-sm" id="vv_refresh" {{ 'disabled' if not vv.has_session or vv.pending }}>Refresh now</button>
+			{% if vv.has_session %}<button class="btn btn-sm btn-danger" id="vv_clear">Remove session</button>{% endif %}
+		</span>
+	</div>
+	<div class="card-body py-2">
+		{% if st.error %}
+		<div class="alert alert-warning py-2 small mb-2">
+			<strong>Could not read the account:</strong> {{ st.error }}{% if st.error_at %} ({{ st.error_at|ago }}){% endif %}.
+			Log in as replacement again in your browser and paste the new session below.
+		</div>
+		{% endif %}
+		{% if vv.pending %}<div class="small mb-2" style="color:var(--ember)">&#9201; Refresh asked for &mdash; the bot reads it within a minute.</div>{% endif %}
+		{% if st.totals %}
+		<div class="stats">
+			<div class="stat"><div class="v">{{ st.totals.villages }}</div><div class="k">Villages</div>
+				<div class="sub">{{ st.totals.points|comma }} points</div></div>
+			<div class="stat"><div class="v">{{ st.totals.off_total|kshort }}</div><div class="k">Offence</div>
+				<div class="sub">population, home + away</div></div>
+			<div class="stat"><div class="v">{{ st.totals.def_total|kshort }}</div><div class="k">Defence</div>
+				<div class="sub">population, home + away</div></div>
+			<div class="stat"><div class="v">{{ st.totals.nobles }}</div><div class="k">Nobles</div>
+				<div class="sub">owned</div></div>
+			<div class="stat"><div class="v {{ 'blood' if st.totals.attacks }}">{{ st.totals.attacks }}</div><div class="k">Attacks incoming</div>
+				<div class="sub">{{ st.totals.nobles_incoming }} of them nobles</div></div>
+		</div>
+		{% endif %}
+	</div>
+</div>
+
+{% if st.villages %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Villages</strong></div>
+	<div class="table-responsive">
+		<table class="table table-sm mb-0">
+			<thead><tr><th>Village</th><th class="text-right">Points</th><th class="text-right">Wood / clay / iron</th>
+				<th class="text-right">Farm</th><th class="text-right">Off home</th><th class="text-right">Def home</th>
+				<th class="text-right">Def standing</th><th class="text-right">Nobles</th><th>Incoming</th></tr></thead>
+			<tbody>
+			{% for v in st.villages %}
+			<tr>
+				<td>{{ v.name }} <span class="faint">{% if v.location %}({{ v.location[0] }}|{{ v.location[1] }}){% endif %}</span></td>
+				<td class="text-right mono">{{ v.points|comma }}</td>
+				<td class="text-right mono">{{ v.resources.wood|kshort }} / {{ v.resources.stone|kshort }} / {{ v.resources.iron|kshort }}
+					<span class="faint">of {{ v.storage_max|kshort }}</span></td>
+				<td class="text-right mono">{{ v.pop_used|comma }} / {{ v.pop_max|comma }}</td>
+				<td class="text-right mono">{{ v.off_home|comma }}</td>
+				<td class="text-right mono">{{ v.def_home|comma }}</td>
+				<td class="text-right mono" title="Everything defending in the village, support included">{{ v.def_standing|comma }}</td>
+				<td class="text-right mono">{{ v.nobles or '' }}</td>
+				<td>{% if v.attacks %}<span class="badge blood">{{ v.attacks }}{% if v.nobles_incoming %}, {{ v.nobles_incoming }} noble{{ 's' if v.nobles_incoming > 1 }}{% endif %}</span>
+					<span class="faint">first {{ (v.first_hit_ms / 1000)|tsms }}</span>{% endif %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+{% if st.incomings %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Incoming attacks</strong> <small class="text-muted ml-2">{{ st.incomings|length }}</small></div>
+	<div class="table-responsive ev-scroll">
+		<table class="table table-sm mb-0">
+			<thead><tr><th>Lands</th><th>On</th><th>From</th><th>Player</th><th>Label</th></tr></thead>
+			<tbody>
+			{% for c in st.incomings %}
+			<tr>
+				<td class="mono">{{ (c.arrival_ms / 1000)|tsms }}</td>
+				<td class="mono">{% if c.target_coords %}{{ c.target_coords[0] }}|{{ c.target_coords[1] }}{% endif %}</td>
+				<td class="mono">{% if c.origin_coords %}{{ c.origin_coords[0] }}|{{ c.origin_coords[1] }}{% endif %} <span class="faint">{{ c.origin_name or '' }}</span></td>
+				<td>{{ c.player_name or '' }}</td>
+				<td>{{ c.game_label or '' }}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Replacement session</strong>
+		<small class="text-muted ml-2">{% if vv.has_session %}stored {{ vv.session_saved|ago }}{% else %}none stored{% endif %}</small></div>
+	<div class="card-body py-2">
+		<ol class="small text-muted pl-3 mb-2">
+			<li>In your browser: Settings &rarr; Vakantievervanging &rarr; press <em>Inloggen</em> next to the account.</li>
+			<li>On a page of that account, copy the whole <code>cookie:</code> header (F12 &rarr; Network &rarr; any request to game.php).</li>
+			<li>Paste it here. It is never shown again on this page.</li>
+		</ol>
+		<textarea id="vv_session" rows="3" class="field mono" style="font-size:12px" placeholder="Paste the replacement session's cookie string"></textarea>
+		<div class="flex mt-2" style="gap:.5rem;align-items:center">
+			<input id="vv_player" class="field" style="width:12rem" placeholder="player id (optional)" value="{{ vv.player_id }}">
+			<button class="btn btn-ember btn-sm" id="vv_save">Save session</button>
+			<span id="vv_status" class="faint"></span>
+		</div>
+		<small class="faint d-block mt-1">Leave the player id empty if you replace one account: the bot finds it on your own settings page.</small>
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+	function post(url, body) {
+		return fetch(url, {method: 'POST', body: body}).then(function (r) { return r.json(); });
+	}
+	var status = document.getElementById('vv_status');
+	document.getElementById('vv_save').onclick = function () {
+		var form = new FormData();
+		form.append('session', document.getElementById('vv_session').value);
+		form.append('player_id', document.getElementById('vv_player').value);
+		post('/app/sitter/session', form).then(function (resp) {
+			if (!resp || !resp.ok) throw resp;
+			document.getElementById('vv_session').value = '';
+			status.textContent = 'Saved - the bot reads the account within a minute.';
+			setTimeout(function () { location.reload(); }, 1500);
+		}).catch(function (resp) { status.textContent = (resp && resp.error) || 'Could not save the session'; });
+	};
+	var refresh = document.getElementById('vv_refresh');
+	if (refresh) refresh.onclick = function () {
+		refresh.disabled = true;
+		post('/app/sitter/refresh').then(function () { location.reload(); })
+			.catch(function () { refresh.disabled = false; });
+	};
+	var clear = document.getElementById('vv_clear');
+	if (clear) clear.onclick = function () {
+		if (!confirm('Remove the stored replacement session?')) return;
+		post('/app/sitter/clear').then(function () { location.reload(); });
+	};
+})();
+</script>
+{% endblock %}

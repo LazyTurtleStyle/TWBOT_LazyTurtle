@@ -51,6 +51,7 @@ from game import dailybonus
 from game import events
 from game import flags
 from game import lightpass
+from game import sitter
 from game import markings
 from game import minter
 from game import reportanalysis
@@ -828,6 +829,77 @@ class TWB:
             except Exception as exc:
                 logger.warning("Incoming poll failed: %s", exc)
 
+    def sitter_runner(self, config):
+        """Background loop: keep the read-only overview of a sat account fresh.
+
+        Idle until a replacement session has been pasted on the dashboard (see
+        game/sitter.py), and then cheap: three page reads per refresh, on a
+        slow clock and only while the bot is awake, unless the dashboard asks.
+        A refresh that fails - the replacement login ran out, or the pages are
+        not the sat account's - is not retried on its own: the session will
+        not get better by asking again, and asking a dead session over and
+        over is noise on somebody else's account. A new paste or the refresh
+        button tries again.
+        """
+        logger = logging.getLogger("Sitter")
+        own = self._make_poller_wrapper(config)
+        parser = IncomingManager()
+        seen_session = None
+        while self.should_run:
+            time.sleep(30)
+            if not self.should_run:
+                break
+            try:
+                session = sitter.load_session()
+                if not session:
+                    continue
+                try:
+                    live = FileManager.load_json_file("config.json") or config
+                except Exception:
+                    live = config
+                minutes = float((live.get("bot") or {}).get(
+                    "sitter_refresh_minutes", sitter.DEFAULT_REFRESH_MINUTES) or 0)
+                state = sitter.load_state()
+                asked = sitter.refresh_requested()
+                fresh_paste = session.get("saved") != seen_session
+                due = (minutes > 0 and self.is_active_hours(config=live)
+                       and time.time() - int(state.get("read_at") or 0) >= minutes * 60)
+                if state.get("error") and not (asked or fresh_paste):
+                    continue
+                if not (asked or fresh_paste or due):
+                    continue
+                seen_session = session.get("saved")
+                accounts = state.get("accounts") or []
+                if not accounts or fresh_paste:
+                    cookies = (FileManager.load_json_file("cache/session.json") or {}).get("cookies")
+                    if cookies:
+                        own.web.cookies.update(cookies)
+                    page = own.get_url("game.php?screen=settings&mode=vacation")
+                    accounts = sitter.sat_accounts(page) if page else accounts
+                pid = str(session.get("player_id") or "") or (
+                    accounts[0]["player_id"] if accounts else "")
+                if not pid:
+                    state.update({"error": "no account found that you are the replacement for",
+                                  "error_at": int(time.time()), "accounts": accounts})
+                else:
+                    reader = self._make_poller_wrapper(config)
+                    reader.web.cookies.clear()
+                    reader.web.cookies.update(session["cookies"])
+                    result, error = sitter.read_overview(reader, pid, parser.parse_incomings)
+                    if result:
+                        state = dict(result, accounts=accounts)
+                        logger.info("Read %s: %d villages, %d attacks incoming",
+                                    (result.get("player") or {}).get("name") or pid,
+                                    result["totals"]["villages"], result["totals"]["attacks"])
+                    else:
+                        state.update({"error": error, "error_at": int(time.time()),
+                                      "accounts": accounts})
+                        logger.warning("Could not read the sat account %s: %s", pid, error)
+                FileManager.save_json_file_atomic(state, sitter.STATE_FILE)
+                FileManager.remove_file(sitter.REQUEST_FILE)
+            except Exception as exc:
+                logger.warning("Sitter pass failed: %s", exc)
+
     def minting_runner(self, config):
         """Background loop: keep the coin village stocked on a real clock.
 
@@ -1435,6 +1507,8 @@ class TWB:
             target=self.minting_runner, args=(config,), daemon=True
         )
         mint_thread.start()
+        # Idle (a file check every 30s) until a replacement session is pasted.
+        threading.Thread(target=self.sitter_runner, args=(config,), daemon=True).start()
         print("Coin-minting runner started")
         # Same reasoning, and just as cheap while idle: an armed noble job that
         # has to wait out a whole village loop is a noble sitting at home.
