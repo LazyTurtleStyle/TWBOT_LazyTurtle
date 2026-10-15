@@ -1062,29 +1062,6 @@ def minting_run_now():
     return jsonify({"ok": DataReader.minting_run_now()})
 
 
-@app.route('/sitter', methods=['GET'])
-def sitter_page():
-    data = sync()
-    return render_template('sitter.html', data=data, vv=DataReader.sitter_view())
-
-
-@app.route('/app/sitter/session', methods=['POST'])
-def sitter_session():
-    ok = DataReader.sitter_session_set(request.form.get("session", ""),
-                                       request.form.get("player_id", ""))
-    return jsonify({"ok": ok} if ok else {"ok": False, "error": "no cookies found in that text"})
-
-
-@app.route('/app/sitter/clear', methods=['POST'])
-def sitter_clear():
-    return jsonify({"ok": DataReader.sitter_session_clear()})
-
-
-@app.route('/app/sitter/refresh', methods=['POST'])
-def sitter_refresh():
-    return jsonify({"ok": DataReader.sitter_refresh()})
-
-
 @app.route('/app/groups/refresh', methods=['POST'])
 def groups_refresh():
     """Ask the bot to re-read every in-game village group now, instead of on
