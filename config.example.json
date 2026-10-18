@@ -245,6 +245,7 @@
     "manage": false,
     "auto_assign": false,
     "auto_upgrade": false,
+    "keep_manual": true,
     "max_reads_per_run": 15
   },
   "villages": {}

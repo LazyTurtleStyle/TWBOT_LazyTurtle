@@ -72,6 +72,7 @@
 			{% endif %}
 			<span class="badge {{ 'badge-success' if fl.auto_assign else 'badge-secondary' }}">daily auto-assign {{ 'ON' if fl.auto_assign else 'OFF' }}</span>
 			<span class="badge {{ 'badge-success' if fl.auto_upgrade else 'badge-secondary' }}">auto-upgrade {{ 'ON' if fl.auto_upgrade else 'OFF' }}</span>
+			<span class="badge {{ 'badge-success' if fl.keep_manual else 'badge-secondary' }}">hand-hung flags {{ 'kept' if fl.keep_manual else 'replaced' }}</span>
 			<a href="/config#flags" class="ml-2">change</a>
 		</div>
 		{% if not fl.manage %}
@@ -81,6 +82,11 @@
 			plan on paper before handing them over.
 		</div>
 		{% endif %}
+		<div class="small text-muted mt-2">
+			Within one flag type the levels follow village size: the biggest village gets the highest
+			level. Apply would make <strong>{{ fl.moves_planned }}</strong> change(s) right now
+			&mdash; see the <em>Next</em> column below.
+		</div>
 		{% if fl.cooldown %}
 		<div class="small mt-2" style="color:var(--ember)">
 			&#9201; The game has flag changes on <strong>cooldown</strong>. Moves wait for the next pass.
@@ -191,7 +197,8 @@
 			{% for r in fl.last_result %}
 			<tr>
 				<td><a class="vlink" href="village?id={{ r.village_id }}">{{ r.name }}</a></td>
-				<td>{{ r.flag_name }}{% if r.level %} <span class="fl-lv">lv {{ r.level }}</span>{% endif %}</td>
+				<td>{{ r.flag_name }}{% if r.level %} <span class="fl-lv">lv {{ r.level }}</span>{% endif %}
+					{% if r['from'] %}<span class="faint small">(was {{ ('lv ' ~ r['from'][1]) if r['from'][0] == r.flag_type else 'another type' }})</span>{% endif %}</td>
 				<td>{% if r.ok %}<span class="badge badge-success">assigned</span>
 					{% else %}<span class="badge badge-danger">{{ r.error or 'failed' }}</span>{% endif %}</td>
 			</tr>
@@ -209,11 +216,12 @@
 			{% if fl.unread %}&middot; {{ fl.unread|length }} never read{% endif %}</small></div>
 	<div class="table-responsive fl-scroll">
 		<table class="table table-sm table-striped mb-0 fl-state-table">
-			<thead><tr><th>Village</th><th>Should carry</th><th>Decided by</th><th>Carrying now</th><th></th></tr></thead>
+			<thead><tr><th>Village</th><th class="text-right">Points</th><th>Should carry</th><th>Decided by</th><th>Carrying now</th><th>Next</th></tr></thead>
 			<tbody>
 			{% for v in fl.villages %}
 			<tr>
 				<td><a class="vlink" href="village?id={{ v.id }}">{{ v.name }}</a></td>
+				<td class="text-right">{{ v.points or '' }}</td>
 				<td>{% if v.want %}{{ v.want_name }}{% else %}<span class="faint">no flag</span>{% endif %}</td>
 				<td class="small text-muted">{% if v.source == 'group' %}group <strong>{{ v.group }}</strong>
 					{% else %}its own setting{% endif %}</td>
@@ -221,6 +229,10 @@
 					{% elif v.read %}<span class="faint">none</span>
 					{% else %}<span class="faint">not read yet</span>{% endif %}</td>
 				<td>{% if not v.read %}<span class="badge badge-secondary">unknown</span>
+					{% elif v.next == 'move' %}<span class="badge badge-warning">{{ v.want_name|lower }} lv {{ v.next_level }}</span>
+					{% elif v.next == 'waiting' %}<span class="badge badge-secondary" title="needs a flag another move frees first">waits for lv {{ v.next_level }}</span>
+					{% elif v.next == 'kept' %}<span class="badge badge-dark" title="a flag of another type, taken to be hung by hand">hung by hand</span>
+					{% elif v.next == 'held' %}<span class="badge badge-dark" title="changed in the last 24 hours">cooldown</span>
 					{% elif v.ok %}<span class="badge badge-success">right flag</span>
 					{% elif not v.want %}<span class="badge badge-dark">not managed</span>
 					{% else %}<span class="badge badge-warning">wants {{ v.want_name|lower }}</span>{% endif %}</td>
