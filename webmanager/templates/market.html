@@ -1,0 +1,136 @@
+{% extends "shell.html" %}
+{% block title %}Market{% endblock %}
+
+{% block content %}
+<style>
+	.mk-table td, .mk-table th { padding: .3rem .55rem; vertical-align: middle; }
+	.mk-scroll { max-height: 620px; overflow-y: auto; }
+	.mk-res { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono, monospace); font-size: 12px; }
+	.mk-res img { width: 13px; height: 13px; }
+	.mk-spare { color: var(--moss); font-weight: 600; }
+	.mk-short { color: var(--blood); font-weight: 600; }
+	.mk-fill { color: var(--ink-faint); font-size: 11px; margin-left: 2px; }
+	.mk-tag { font-size: 10px; letter-spacing: .02em; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--ink-dim); }
+	.mk-tag.spare { border-color: var(--moss); color: var(--moss); }
+	.mk-tag.short { border-color: var(--blood); color: var(--blood); }
+</style>
+
+<p class="text-muted small mt-1">
+	Where your wood, clay and iron are. A resource is marked <span class="mk-spare">spare</span> or
+	<span class="mk-short">short</span> the way the balancer's evening-out judges it: against that
+	village's own average of the three, {{ mk.margin }}% either side &mdash; never by warehouse size
+	or fill percent.
+	<a href="/config#market" class="ml-1">Market settings</a> &middot;
+	<a href="/config#balancer">Balancer settings</a> &middot;
+	<a href="/balancer">Convoys on the road</a>
+</p>
+
+<div class="small mb-3">
+	<span class="badge {{ 'badge-success' if mk.settings.enabled else 'badge-secondary' }}">balancer {{ 'ON' if mk.settings.enabled else 'OFF' }}</span>
+	<span class="badge {{ 'badge-success' if mk.settings.boost_small else 'badge-secondary' }}">boost small villages {{ 'ON' if mk.settings.boost_small else 'OFF' }}</span>
+	<span class="badge {{ 'badge-success' if mk.settings.ratio_balance else 'badge-secondary' }}">evening out {{ 'ON' if mk.settings.ratio_balance else 'OFF' }}</span>
+	<span class="badge {{ 'badge-success' if mk.settings.use_transport_overview else 'badge-secondary' }}">transport overview {{ 'ON' if mk.settings.use_transport_overview else 'OFF' }}</span>
+	<span class="badge {{ 'badge-success' if mk.settings.auto_trade else 'badge-secondary' }}">market trading {{ 'ON' if mk.settings.auto_trade else 'OFF' }}</span>
+</div>
+
+<div class="stats mb-3">
+	{% for a in mk.account %}
+	<div class="stat">
+		<div class="v"><span class="mk-res" style="font-size:inherit"><img src="/static/images/{{ a.res }}.png" alt="{{ a.res }}" style="width:18px;height:18px">{{ a.total|kshort }}</span></div>
+		<div class="k">{{ {'wood':'Wood','stone':'Clay','iron':'Iron'}[a.res] }} &middot; account</div>
+		<div class="sub">{{ '%+d'|format(a.dev) }}% vs the other two &middot;
+			<span class="mk-spare">{{ a.spare }} spare</span> / <span class="mk-short">{{ a.short }} short</span></div>
+	</div>
+	{% endfor %}
+	<div class="stat"><div class="v">{% if mk.merchants_total %}{{ mk.merchants_free }}<span class="mk-fill">/{{ mk.merchants_total }}</span>{% else %}—{% endif %}</div>
+		<div class="k">Merchants home</div><div class="sub">all villages, from the last overview</div></div>
+	<div class="stat"><div class="v {{ 'gold' if mk.incoming_total }}">{{ mk.incoming_total|kshort }}</div>
+		<div class="k">On its way</div>
+		<div class="sub">{% if mk.transport_read %}transport overview {{ mk.transport_read|ago }}{% else %}transport overview not read yet{% endif %}</div></div>
+	<div class="stat"><div class="v">{{ mk.moved_total|kshort }}</div>
+		<div class="k">Moved &middot; 24h</div><div class="sub">{{ mk.moved_sends }} send(s) by the balancer</div></div>
+</div>
+
+{% if mk.moved %}
+<div class="card mb-3">
+	<div class="card-header py-2"><strong>Moved by the balancer</strong>
+		<small class="text-muted ml-2">last 24 hours</small></div>
+	<div class="table-responsive">
+		<table class="table table-sm table-striped mb-0 mk-table">
+			<thead><tr><th>What</th><th class="text-right">Sends</th>
+				<th class="text-right">Wood</th><th class="text-right">Clay</th><th class="text-right">Iron</th>
+				<th class="text-right">Total</th></tr></thead>
+			<tbody>
+			{% for m in mk.moved %}
+			<tr><td>{{ m.label }}</td><td class="text-right mono">{{ m.sends }}</td>
+				<td class="text-right mono">{{ m.wood|comma }}</td><td class="text-right mono">{{ m.stone|comma }}</td>
+				<td class="text-right mono">{{ m.iron|comma }}</td><td class="text-right mono">{{ m.total|comma }}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+	<div class="card-header py-2 d-flex align-items-center">
+		<span><strong>Per village</strong>
+			<small class="text-muted ml-2">{{ mk.villages|length }} villages &middot; biggest first &middot;
+				{{ mk.storage_total|kshort }} storage in all</small></span>
+		<label class="ml-auto small mb-0" style="cursor:pointer">
+			<input type="checkbox" id="mk-lopsided"> only lopsided villages</label>
+	</div>
+	<div class="table-responsive mk-scroll">
+		<table class="table table-sm table-striped mb-0 mk-table">
+			<thead><tr><th>Village</th><th class="text-right">Points</th>
+				<th>Wood</th><th>Clay</th><th>Iron</th><th class="text-right">Warehouse</th>
+				<th class="text-right">Merchants</th><th>On its way</th><th></th></tr></thead>
+			<tbody>
+			{% for v in mk.villages %}
+			{% set lopsided = v.judged.wood or v.judged.stone or v.judged.iron %}
+			<tr class="{{ 'mk-lop' if lopsided else 'mk-even' }}">
+				<td><a class="vlink" href="village?id={{ v.id }}">{{ v.name }}</a></td>
+				<td class="text-right mono">{{ v.points|comma }}</td>
+				{% for r in ['wood', 'stone', 'iron'] %}
+				<td><span class="mk-res {{ 'mk-' ~ v.judged[r] if v.judged[r] }}" title="{{ v.fill[r] }}% of the warehouse">
+					{{ v.stock[r]|kshort }}</span><span class="mk-fill">{{ v.fill[r] }}%</span></td>
+				{% endfor %}
+				<td class="text-right mono">{{ v.cap|kshort }}</td>
+				<td class="text-right mono">{% if v.merchants_total is not none %}{{ v.merchants_free }}/{{ v.merchants_total }}{% else %}<span class="faint">—</span>{% endif %}</td>
+				<td>{% if v.incoming_total %}
+					{% for r in ['wood', 'stone', 'iron'] %}{% if v.incoming[r] %}
+					<span class="mk-res mr-1"><img src="/static/images/{{ r }}.png" alt="{{ r }}">{{ v.incoming[r]|kshort }}</span>
+					{% endif %}{% endfor %}
+					{% else %}<span class="faint">—</span>{% endif %}</td>
+				<td>{% for r in ['wood', 'stone', 'iron'] %}{% if v.judged[r] %}
+					<span class="mk-tag {{ v.judged[r] }}">{{ {'wood':'wood','stone':'clay','iron':'iron'}[r] }} {{ v.judged[r] }}</span>
+					{% endif %}{% endfor %}</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	<div class="card-body py-2 small text-muted">
+		Stock is each village's last snapshot{% if mk.villages %} (refreshed every bot pass){% endif %}.
+		<em>On its way</em> is the last transport overview the balancer read.
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+	const box = document.getElementById('mk-lopsided');
+	if (!box) return;
+	let saved = false;
+	try { saved = localStorage.getItem('mk-lopsided') === '1'; } catch (e) {}
+	box.checked = saved;
+	function apply() {
+		document.querySelectorAll('tr.mk-even').forEach(tr => { tr.style.display = box.checked ? 'none' : ''; });
+		try { localStorage.setItem('mk-lopsided', box.checked ? '1' : '0'); } catch (e) {}
+	}
+	box.addEventListener('change', apply);
+	apply();
+})();
+</script>
+{% endblock %}
