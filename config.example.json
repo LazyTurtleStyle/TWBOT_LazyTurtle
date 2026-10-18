@@ -230,6 +230,9 @@
     "reserve_merchants": 0,
     "sender_keep": 0,
     "min_send_amount": 250,
+    "boost_small": true,
+    "ratio_balance": false,
+    "ratio_margin_pct": 20,
     "merchant_minutes_per_field": null
   },
   "world": {
