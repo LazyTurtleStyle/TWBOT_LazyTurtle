@@ -23,14 +23,22 @@ What makes this pass different from the old one is that it counts. Demand (how
 many villages want a type) is weighed against supply (how many of that type you
 own), villages are served in plan order until the pool runs out, and whoever is
 left over is *reported* as unmet rather than being given a flag stolen off a
-village that already had it. A village whose flag is already the one it wants is
-never touched, which is what stops the shuffling.
+village that already had it.
 
-ALPHA. The flag screen's own reading has never run on a live account here
-(flags.manage has been off since the fork), so the parser below is written to
-survive a shape it did not expect: whatever setFlagCounts sends is kept raw in
-the state cache, and the dashboard shows it when the parse comes up empty.
-Nothing is assigned unless you ask for it - see `run`.
+Within one type the levels follow village size: the biggest village gets the
+highest level, the smallest the lowest. A percentage flag is worth most where
+there is most to multiply - +18% on a fully built village's mines is far more
+than +18% on a fresh one's - so a high flag on a small village is moved up to a
+bigger one, and that village takes a lower flag from the pool in exchange.
+
+A flag of another type than the plan asks for is taken to be one the player hung
+by hand (an attack flag for an op, a defence flag under fire, a coin flag for
+minting) and is left where it is unless flags.keep_manual is switched off.
+
+ALPHA. The flag screen's own reading has run against one live account (read
+only). Whatever setFlagCounts sends is kept raw in the state cache, and the
+dashboard shows it when the parse comes up empty. Nothing is assigned unless you
+ask for it - see `run`.
 """
 
 import json
@@ -79,14 +87,20 @@ DEFAULT_MAX_READS = 15
 
 _RE_FLAG_COUNTS = re.compile(r"FlagsScreen\.setFlagCounts\((.+?)\);")
 # The flag standing on a village is rendered as its own image inside the
-# current-flag block, named <type>_<level>.png. Only that pairing is looked for:
-# the block's surrounding markup (the name in a <p>, the closing tags) differs
+# current-flag block, named <type>_<level> - as .png on older skins and as
+# <type>_<level>@2x.webp on current ones. Only that pairing is looked for: the
+# block's surrounding markup (the name in a <p>, the closing tags) differs
 # between worlds and skins, and an exact-shape match on it reads a village that
 # HAS a flag as one that has none - which is the reading that makes the pass
 # assign a flag the village is already carrying.
 _RE_CURRENT_FLAG_BLOCK = re.compile(r'(?s)<div id="current_flag"(.{0,2000})')
-_RE_FLAG_IMAGE = re.compile(r'/(\d+)_(\d+)\.png')
+_RE_FLAG_IMAGE = re.compile(r'/(\d+)_(\d+)(?:@2x)?\.(?:png|webp)')
 _NO_FLAG_MARKER = '<div id="current_flag" style="margin-top: 10px; display: none">'
+# A village whose flag changed in the last 24 hours shows a timer in the
+# cooldown box; the game's own script checks for a ".cooldown" element there
+# before it lets you pick another flag.
+_RE_COOLDOWN_BOX = re.compile(r'(?s)<div id="cooldown_container">(.*?)</div>')
+_RE_COOLDOWN_CLASS = re.compile(r'class="[^"]*\bcooldown\b')
 _COOLDOWN_MARKER = '<span class="timer cooldown">'
 
 
@@ -237,10 +251,29 @@ def parse_current_flag(page):
     block = _RE_CURRENT_FLAG_BLOCK.search(page)
     if not block:
         return None
-    image = _RE_FLAG_IMAGE.search(block.group(1))
+    text = block.group(1)
+    opening = text.split(">", 1)[0]
+    if re.search(r"display:\s*none", opening):
+        return None
+    # The inventory grid follows right after, drawn with the same
+    # <type>_<level> images: stop before it, or a village with no flag reads
+    # as carrying the first flag in the collection.
+    for end in ('id="flags_container"', "flag_box"):
+        cut = text.find(end)
+        if cut != -1:
+            text = text[:cut]
+    image = _RE_FLAG_IMAGE.search(text)
     if not image:
         return None
     return [int(image.group(1)), int(image.group(2))]
+
+
+def parse_cooldown(page):
+    """True when this village's flag cannot be changed yet (the 24-hour timer)."""
+    if _COOLDOWN_MARKER in page:
+        return True
+    box = _RE_COOLDOWN_BOX.search(page)
+    return bool(box and _RE_COOLDOWN_CLASS.search(box.group(1)))
 
 
 def read_screen(wrapper, village_id):
@@ -258,7 +291,7 @@ def read_screen(wrapper, village_id):
         "inventory": inventory,
         "raw": raw,
         "current": parse_current_flag(page),
-        "cooldown": _COOLDOWN_MARKER in page,
+        "cooldown": parse_cooldown(page),
     }
 
 
@@ -353,61 +386,135 @@ def resolve_desired(rows, groups, village_ids, config):
     return desired
 
 
-def allocate(desired, inventory, readings):
-    """Decide who gets a flag this pass, and who has to wait.
+def _flag_of(reading):
+    flag = (reading or {}).get("flag")
+    return (int(flag[0]), int(flag[1])) if flag else None
 
-    Supply is what you own minus what is already standing on a village
-    (`readings`), so a flag that is doing its job is never counted as spare and
-    never taken. Villages already carrying the type they want are left
-    untouched - that, not the counting, is what stops the shuffling.
 
-    Everyone else is served best-level-first in priority order, and a village
-    that gets a new flag hands its old one back to the pool, because that is
-    what the game does. Whoever is left over comes back under "unmet" for the
-    dashboard to explain, rather than being served a flag stolen from a village
-    that already had it.
+def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
+    """Decide which flag every village should carry, and the moves to get there.
 
-    Returns (moves, unmet, free) where moves is [{village_id, flag_type, level,
-    from}], unmet is [{village_id, flag_type}] and free is the pool left over.
+    `inventory` is the game's own count, which is the *free* pool - a flag
+    standing on a village is not in it. `readings` is what each village is
+    carrying now, `sizes` its points.
+
+    Villages are left alone when they cannot be judged or changed:
+      - unread: its flag screen has not been read, so what it carries is unknown
+        (assigning on a guess is how a flag gets thrown off a village that had
+        it);
+      - held: its flag changed within the last 24 hours and the game will not
+        take another;
+      - kept: it carries a flag of a type the plan does not ask of it, which is
+        taken to be one hung by hand (keep_manual).
+
+    Everyone else that wants type T is ranked - most specific plan row first,
+    then the bigger village first - and the levels of type T that are free or
+    already standing on one of them are handed out best-first down that ranking.
+    So the biggest village ends on the highest level, and a high flag on a small
+    village is moved up and replaced by a lower one. A village that already
+    carries its target level is not touched.
+
+    When there are more villages than flags, a village already carrying the
+    right type keeps what it has (nothing is taken off a village to give to
+    another) and only the free flags are handed out, biggest village first.
+
+    Returns {moves, waiting, unmet, kept, held, unread, free}. `moves` is in an
+    order the game can carry out: every move's flag is free at the moment it
+    runs, because the moves before it handed theirs back. A move whose flag only
+    a cycle of swaps could free (A needs B's level, B needs A's) is in `waiting`
+    for a later pass instead.
     """
-    free = {int(t): dict(levels) for t, levels in (inventory or {}).items()}
-    for vid, reading in (readings or {}).items():
-        flag = (reading or {}).get("flag")
-        if not flag:
-            continue
-        flag_type, level = int(flag[0]), int(flag[1])
-        if free.get(flag_type, {}).get(level):
-            free[flag_type][level] -= 1
-
-    def _current(vid):
-        flag = ((readings or {}).get(str(vid)) or {}).get("flag")
-        return (int(flag[0]), int(flag[1])) if flag else None
-
-    # Most specific row first; a plain village setting last. Ties break on
-    # village id so a pass that changes nothing produces the same plan twice.
-    order = sorted(desired.items(),
-                   key=lambda kv: (-kv[1].get("priority", -1), str(kv[0])))
-    moves, unmet = [], []
-    for vid, want in order:
+    free = {}
+    for flag_type, levels in (inventory or {}).items():
+        free[int(flag_type)] = {int(lvl): int(count)
+                                for lvl, count in (levels or {}).items()
+                                if int(count) > 0}
+    readings = readings or {}
+    sizes = sizes or {}
+    kept, held, unread, unmet = [], [], [], []
+    by_type = {}
+    for vid, want in (desired or {}).items():
+        vid = str(vid)
         flag_type = int(want.get("flag_type") or 0)
         if flag_type <= 0:
             continue  # 0 = never assign a flag to this village
-        current = _current(vid)
-        if current and current[0] == flag_type:
-            continue  # already carrying the right type, at whatever level
-        levels = free.get(flag_type) or {}
-        best = max((lvl for lvl, count in levels.items() if count > 0),
-                   default=None)
-        if best is None:
-            unmet.append({"village_id": str(vid), "flag_type": flag_type})
+        reading = readings.get(vid)
+        if not reading:
+            unread.append(vid)
             continue
-        free[flag_type][best] -= 1
-        if current:  # the flag it was carrying goes back in the drawer
-            free.setdefault(current[0], {})
-            free[current[0]][current[1]] = free[current[0]].get(current[1], 0) + 1
-        moves.append({"village_id": str(vid), "flag_type": flag_type,
-                      "level": best, "from": list(current) if current else None})
-    return moves, unmet, free
+        current = _flag_of(reading)
+        if reading.get("cooldown"):
+            held.append(vid)
+            continue
+        if current and current[0] != flag_type and keep_manual:
+            kept.append({"village_id": vid, "flag_type": flag_type,
+                         "carrying": list(current)})
+            continue
+        by_type.setdefault(flag_type, []).append((vid, want, current))
+
+    targets = []
+    for flag_type, villages in sorted(by_type.items()):
+        # Most specific row first, then the biggest village; ties on village id
+        # so a pass that changes nothing plans the same thing twice.
+        villages.sort(key=lambda v: (-int(v[1].get("priority", -1)),
+                                     -int(sizes.get(v[0]) or 0), v[0]))
+        spare = sorted((lvl for lvl, count in (free.get(flag_type) or {}).items()
+                        for _ in range(count)), reverse=True)
+        standing = [v[2][1] for v in villages if v[2] and v[2][0] == flag_type]
+        if len(spare) + len(standing) >= len(villages):
+            pool = sorted(spare + standing, reverse=True)
+            for index, (vid, _want, current) in enumerate(villages):
+                targets.append((vid, flag_type, pool[index], current))
+        else:
+            # Short: whoever has one keeps it, the rest share what is free.
+            for vid, _want, current in villages:
+                if current and current[0] == flag_type:
+                    continue
+                if spare:
+                    targets.append((vid, flag_type, spare.pop(0), current))
+                else:
+                    unmet.append({"village_id": vid, "flag_type": flag_type})
+
+    planned = [{"village_id": vid, "flag_type": flag_type, "level": level,
+                "from": list(current) if current else None}
+               for vid, flag_type, level, current in targets
+               if not (current and current[0] == flag_type and current[1] == level)]
+    moves, waiting, free = sequence_moves(planned, free)
+    return {"moves": moves, "waiting": waiting, "unmet": unmet, "kept": kept,
+            "held": held, "unread": unread, "free": free}
+
+
+def sequence_moves(planned, free):
+    """Order moves so each one's flag is in the pool when it runs.
+
+    A move takes its flag out of the free pool and puts the village's old flag
+    back, which is what can make the next move possible: a small village giving
+    up a level 5 for a level 2 frees the level 5 a big village is waiting for.
+    So moves that step down go first, and the list is walked until nothing more
+    can run. Returns (moves, waiting, free_after).
+    """
+    free = {t: dict(levels) for t, levels in (free or {}).items()}
+    pending = sorted(planned, key=lambda m: (
+        0 if m["from"] and m["from"][0] == m["flag_type"] and m["from"][1] > m["level"] else 1,
+        m["level"], m["village_id"]))
+    ordered = []
+    progress = True
+    while pending and progress:
+        progress = False
+        for move in list(pending):
+            levels = free.setdefault(move["flag_type"], {})
+            if levels.get(move["level"], 0) <= 0:
+                continue
+            levels[move["level"]] -= 1
+            if move["from"]:
+                back = free.setdefault(move["from"][0], {})
+                back[move["from"][1]] = back.get(move["from"][1], 0) + 1
+            ordered.append(move)
+            pending.remove(move)
+            progress = True
+    free = {t: {lvl: c for lvl, c in levels.items() if c > 0}
+            for t, levels in free.items()}
+    return ordered, pending, free
 
 
 def demand(desired):
@@ -476,7 +583,8 @@ def refresh(wrapper, village_ids, max_reads=None, state=None):
         if screen is None:
             logger.warning("Could not read the flag screen for village %s", vid)
             continue
-        readings[vid] = {"flag": screen["current"], "ts": now}
+        readings[vid] = {"flag": screen["current"], "ts": now,
+                         "cooldown": bool(screen["cooldown"])}
         cooldown = cooldown or screen["cooldown"]
         if screen["inventory"]:
             state["inventory"] = {str(t): {str(l): c for l, c in levels.items()}
@@ -548,6 +656,37 @@ def _auto_upgrade(wrapper, village_id, state):
     return upgraded
 
 
+# A reading younger than this is trusted as-is right before a move; an older
+# one is read again first, so a flag hung by hand since is never thrown off.
+RECHECK_AFTER = 10 * 60
+
+
+def _sizes(village_ids):
+    """{village_id: points} from the bot's per-village cache, 0 when unknown."""
+    sizes = {}
+    for vid in village_ids:
+        data = FileManager.load_json_file("cache/managed/%s.json" % vid) or {}
+        try:
+            sizes[str(vid)] = int(((data.get("public") or {}).get("points")) or 0)
+        except (TypeError, ValueError):
+            sizes[str(vid)] = 0
+    return sizes
+
+
+def _counts_from_response(result):
+    """The free pool the game sends back after an assign, if it sent one."""
+    flags = result.get("flags") if isinstance(result, dict) else None
+    if not isinstance(flags, dict):
+        return None
+    counts = {}
+    for flag_type, levels in flags.items():
+        if not isinstance(levels, dict):
+            continue
+        counts[str(flag_type)] = {str(lvl): _count(c) for lvl, c in levels.items()
+                                  if _count(c) > 0}
+    return counts or None
+
+
 def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
     """Read, decide, assign - and write down what happened for the dashboard.
 
@@ -556,56 +695,90 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
     """
     settings = (config or {}).get("flags", {}) or {}
     plan = load_plan()
-    state = refresh(wrapper, village_ids, settings.get("max_reads_per_run"))
+    # Pressing Apply reads every village it has to: a plan worked out on a
+    # half-read account would hand flags to villages that already carry one.
+    budget = len(village_ids) if source == "dashboard" \
+        else settings.get("max_reads_per_run")
+    state = refresh(wrapper, village_ids, budget)
 
     upgraded = 0
     if settings.get("auto_upgrade", False):
         upgraded = _auto_upgrade(wrapper, village_id, state)
         if upgraded:
-            state = refresh(wrapper, village_ids,
-                            settings.get("max_reads_per_run"), state=state)
+            state = refresh(wrapper, village_ids, budget, state=state)
 
     desired = resolve_desired(plan.get("rows"), load_groups(), village_ids, config)
-    moves, unmet, free = allocate(desired, _inventory(state),
-                                  state.get("readings") or {})
-
-    results = []
-    if moves and state.get("cooldown"):
-        # The game puts a timer on flag changes; a POST inside it is refused.
-        # Saying so once beats a row of identical failures.
-        logger.info("Flag changes are on cooldown - %d move(s) wait for the "
-                    "next pass", len(moves))
-        results = [{"village_id": move["village_id"], "flag_type": move["flag_type"],
-                    "level": move["level"], "ok": False,
-                    "error": "flag change is on cooldown"} for move in moves]
-        moves = []
+    outcome = allocate(desired, _inventory(state), state.get("readings") or {},
+                       sizes=_sizes(village_ids),
+                       keep_manual=settings.get("keep_manual", True))
 
     readings = dict(state.get("readings") or {})
-    for move in moves:
-        error = _api_error(assign_flag(wrapper, move["village_id"],
-                                       move["flag_type"], move["level"]))
+    live = {t: dict(levels) for t, levels in _inventory(state).items()}
+    results, waiting = [], list(outcome["waiting"])
+    game_counts = None
+    for move in outcome["moves"]:
+        vid, flag_type, level = move["village_id"], move["flag_type"], move["level"]
+        row = {"village_id": vid, "flag_type": flag_type, "level": level,
+               "from": move["from"], "ok": False, "error": None}
+        if live.get(flag_type, {}).get(level, 0) <= 0:
+            # An earlier move failed, so the flag it would have freed is not
+            # there. Not an error - the next pass picks it up.
+            waiting.append(move)
+            continue
+        reading = readings.get(vid) or {}
+        if time.time() - int(reading.get("ts", 0)) > RECHECK_AFTER:
+            screen = read_screen(wrapper, vid)
+            if screen is None:
+                row["error"] = "could not read the village's flag screen"
+                results.append(row)
+                continue
+            readings[vid] = {"flag": screen["current"], "ts": int(time.time()),
+                             "cooldown": bool(screen["cooldown"])}
+            if screen["current"] != move["from"]:
+                row["error"] = "its flag changed in the game since it was read"
+                results.append(row)
+                continue
+            if screen["cooldown"]:
+                row["error"] = "flag change is on cooldown"
+                results.append(row)
+                continue
+        result = assign_flag(wrapper, vid, flag_type, level)
+        error = _api_error(result)
         if not error:
-            readings[move["village_id"]] = {
-                "flag": [move["flag_type"], move["level"]], "ts": int(time.time())}
-            logger.info("Gave village %s the %s flag (level %d)",
-                        move["village_id"], flag_name(move["flag_type"]),
-                        move["level"])
+            readings[vid] = {"flag": [flag_type, level], "ts": int(time.time()),
+                             "cooldown": True}
+            live[flag_type][level] -= 1
+            if move["from"]:
+                back = live.setdefault(int(move["from"][0]), {})
+                back[int(move["from"][1])] = back.get(int(move["from"][1]), 0) + 1
+            game_counts = _counts_from_response(result) or game_counts
+            logger.info("Gave village %s the %s flag (level %d)%s", vid,
+                        flag_name(flag_type), level,
+                        " in place of level %d" % move["from"][1]
+                        if move["from"] and move["from"][0] == flag_type else "")
         else:
             logger.warning("Could not give village %s the %s flag: %s",
-                           move["village_id"], flag_name(move["flag_type"]), error)
-        results.append({"village_id": move["village_id"],
-                        "flag_type": move["flag_type"], "level": move["level"],
-                        "from": move["from"], "ok": not error, "error": error})
+                           vid, flag_name(flag_type), error)
+        row.update(ok=not error, error=error)
+        results.append(row)
 
     state["readings"] = readings
+    if results or waiting:
+        # The game's own count after the last assign is the truth; without one,
+        # the pool as this pass moved it.
+        state["inventory"] = game_counts or {
+            str(t): {str(l): c for l, c in levels.items() if c > 0}
+            for t, levels in live.items()}
     state["last_result"] = results
     state["last_result_when"] = int(time.time())
     state["last_result_source"] = "from the dashboard" if source == "dashboard" \
         else "by the bot"
-    state["unmet"] = unmet
+    state["unmet"] = outcome["unmet"]
+    state["kept"] = outcome["kept"]
+    state["held"] = outcome["held"]
+    state["waiting"] = waiting
     state["upgraded"] = upgraded
-    state["free"] = {str(t): {str(l): c for l, c in levels.items() if c > 0}
-                     for t, levels in free.items()}
+    state["free"] = state["inventory"]
     state["desired"] = desired
     save_state(state)
     return state

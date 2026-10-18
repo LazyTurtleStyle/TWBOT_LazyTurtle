@@ -164,6 +164,7 @@ help_file = {
     'flags.manage': 'Master switch. While OFF nothing is ever assigned - the Flags page still reads your inventory, which is the way to look before handing them over. While ON, the plan is applied when you press Apply (and daily if auto_assign is on).',
     'flags.auto_assign': 'Re-apply the plan once a day on its own, on the first cycle in active hours. OFF by default: the normal way to use this is to build a plan and press Apply on the Flags page, so nothing moves a flag you did not ask it to.',
     'flags.auto_upgrade': 'When ON, combine 3 spare flags of the same type and level into one of the next level. OFF by default so the bot never consumes your flags unless you ask, and a flag standing on a village is never one of the three.',
+    'flags.keep_manual': 'When ON (default), a village carrying a flag of another type than the plan asks of it is left alone: that is taken to be a flag you hung by hand, like an attack flag for an op or a defence flag under fire. Take it off in the game and the next Apply gives the village its planned flag again. OFF replaces it with the planned flag.',
     'flags.max_reads_per_run': 'How many village flag screens to read in one pass. Each is one request, and the reading is cached for half a day (a flag only moves when the bot moves it), so this only bites on the first run of a large account - which is then spread over a few cycles instead of going out as a burst.',
     'village.flag_type': 'Which flag this village keeps when NO row on the Flags page matches it: 1 Resource, 2 Recruitment, 3 Attack, 4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul. Off = never assign a flag. A group row on the Flags page beats this.',
     'village_template': 'The default template for villages to use',
@@ -395,6 +396,7 @@ config_groups = {
     'flags': [
         ('On/off', ['manage', 'auto_assign']),
         ('Upgrading', ['auto_upgrade']),
+        ('Hand-hung flags', ['keep_manual']),
         ('Cost', ['max_reads_per_run']),
     ],
 }

@@ -4977,10 +4977,29 @@ class FlagsOverview:
                 placed[int(flag[0])] = placed.get(int(flag[0]), 0) + 1
 
         wanted = flagmodule.demand(desired) if flagmodule else {}
+        # The game's count is the free pool only - a flag standing on a village
+        # is not in it - so what you own is the two added up.
+        sizes = {}
+        for village_id in village_ids:
+            try:
+                sizes[village_id] = int(((managed.get(village_id) or {})
+                                         .get("public") or {}).get("points") or 0)
+            except (TypeError, ValueError):
+                sizes[village_id] = 0
+        preview = flagmodule.allocate(
+            desired, inventory, readings, sizes=sizes,
+            keep_manual=settings.get("keep_manual", True)) if flagmodule else {}
+        next_move = {m["village_id"]: ("move", m["level"])
+                     for m in preview.get("moves") or []}
+        next_move.update({m["village_id"]: ("waiting", m["level"])
+                          for m in preview.get("waiting") or []})
+        kept_ids = {k["village_id"] for k in preview.get("kept") or []}
+        held_ids = set(preview.get("held") or [])
         types = []
         for type_id in (flagmodule.FLAG_TYPE_ORDER if flagmodule else ()):
             levels = inventory.get(type_id) or {}
-            owned = sum(levels.values())
+            spare = sum(levels.values())
+            owned = spare + placed.get(type_id, 0)
             name, effect = flagmodule.FLAG_TYPES[type_id]
             types.append({
                 "id": type_id, "name": name, "effect": effect,
@@ -4989,7 +5008,7 @@ class FlagsOverview:
                            for lvl in sorted(levels, reverse=True)],
                 "best": max(levels) if levels else None,
                 "placed": placed.get(type_id, 0),
-                "spare": max(0, owned - placed.get(type_id, 0)),
+                "spare": spare,
                 "want": wanted.get(type_id, 0),
                 # The number that decides whether the plan can be met at all.
                 "short": max(0, wanted.get(type_id, 0) - owned),
@@ -5034,8 +5053,16 @@ class FlagsOverview:
                 "level": int(current[1]) if current else None,
                 "read": bool(reading),
                 "ok": bool(current) and int(current[0]) == want_type,
+                "points": sizes.get(village_id, 0),
+                # What pressing Apply would do here, worked out the same way
+                # the bot will: "move" to a level, "waiting" for one to free up,
+                # "kept" (hung by hand), "held" (24h cooldown).
+                "next": next_move.get(village_id, (None, None))[0]
+                        or ("kept" if village_id in kept_ids else None)
+                        or ("held" if village_id in held_ids else None),
+                "next_level": next_move.get(village_id, (None, None))[1],
             })
-        villages.sort(key=lambda v: (v["ok"], str(v["name"]).lower()))
+        villages.sort(key=lambda v: (v["next"] is None, -int(v["points"] or 0)))
 
         unmet = []
         for entry in state.get("unmet") or []:
@@ -5058,6 +5085,8 @@ class FlagsOverview:
             "manage": bool(settings.get("manage")),
             "auto_assign": bool(settings.get("auto_assign")),
             "auto_upgrade": bool(settings.get("auto_upgrade")),
+            "keep_manual": bool(settings.get("keep_manual", True)),
+            "moves_planned": len(preview.get("moves") or []),
             "world_has_flags": (config.get("world") or {}).get("flags_enabled"),
             "rows": rows,
             "groups": [{"id": "0", "name": "All villages", "type": "all",
