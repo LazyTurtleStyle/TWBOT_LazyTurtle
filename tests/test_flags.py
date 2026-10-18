@@ -111,9 +111,11 @@ def test_an_unread_village_is_left_alone():
 def test_a_village_on_cooldown_is_left_alone():
     readings = read(a=(RES, 1), b=None)
     readings["a"]["cooldown"] = True
-    out = flags.allocate(want("a", "b"), {RES: {5: 1}}, readings,
+    out = flags.allocate(want("a", "b"), {RES: {5: 1, 2: 1}}, readings,
                          sizes={"a": 9000, "b": 1})
-    assert targets(out) == {"b": 5}
+    # a is on cooldown: it gets nothing now, but the level 5 it is due is not
+    # handed to the smaller b in the meantime.
+    assert targets(out) == {"b": 2}
     assert out["held"] == ["a"]
 
 
@@ -212,6 +214,44 @@ def test_apply_swaps_a_high_flag_up_and_keeps_a_hand_hung_one():
     assert [a[0] for a in game.assigned] == ["small", "big"]
     assert all(r["ok"] for r in state["last_result"])
     assert [k["village_id"] for k in state["kept"]] == ["op"]
+
+
+def test_a_village_the_game_refused_is_left_alone_while_it_carries_that_flag():
+    out = flags.allocate(want("a", "b"), {RES: {3: 2}},
+                         read(a=(6, 8), b=None), keep_manual=False,
+                         refused={"a": [6, 8]})
+    assert targets(out) == {"b": 3}
+    assert out["refused"] == ["a"]
+    # Once its flag is a different one, it is a candidate again.
+    out = flags.allocate(want("a"), {RES: {3: 1}}, read(a=(3, 2)),
+                         keep_manual=False, refused={"a": [6, 8]})
+    assert targets(out) == {"a": 3}
+
+
+def test_a_refusal_is_remembered_and_not_asked_again():
+    game = FakeGame({"pop": (6, 8), "b": None}, {RES: {2: 2}})
+    real = game.get_api_action
+
+    def refuse(village_id, action, params=None, data=None):
+        if village_id == "pop":
+            return {"error": ["population limit"]}
+        return real(village_id, action, params, data)
+    game.get_api_action = refuse
+    rows = [{"group_id": "0", "flag_type": RES}]
+    sizes = {"pop": 9000, "b": 10}
+    state = run_pass(game, ["pop", "b"], sizes, rows, {"keep_manual": False})
+    assert state["refused"]["pop"]["flag"] == [6, 8]
+    assert game.carrying["b"] == (RES, 2)
+    # Second pass, with what the first one saved: "pop" is not asked again.
+    saved = dict(state)
+    flags.load_state = lambda path=None: dict(saved)
+    asked = []
+    game.get_api_action = lambda vid, *a, **k: asked.append(vid) or refuse(vid, *a, **k)
+    flags.save_state = lambda st: None
+    config = {"flags": {"manage": True, "keep_manual": False},
+              "villages": {"pop": {}, "b": {}}}
+    flags.apply_plan(game, "pop", config, ["pop", "b"], source="bot")
+    assert "pop" not in asked
 
 
 if __name__ == "__main__":

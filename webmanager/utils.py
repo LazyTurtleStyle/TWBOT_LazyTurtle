@@ -4986,15 +4986,21 @@ class FlagsOverview:
                                          .get("public") or {}).get("points") or 0)
             except (TypeError, ValueError):
                 sizes[village_id] = 0
+        refused = {vid: entry.get("flag")
+                   for vid, entry in (state.get("refused") or {}).items()
+                   if time.time() - int(entry.get("when", 0))
+                   < getattr(flagmodule, "REFUSED_FOR", 0)}
         preview = flagmodule.allocate(
             desired, inventory, readings, sizes=sizes,
-            keep_manual=settings.get("keep_manual", True)) if flagmodule else {}
+            keep_manual=settings.get("keep_manual", True),
+            refused=refused) if flagmodule else {}
         next_move = {m["village_id"]: ("move", m["level"])
                      for m in preview.get("moves") or []}
         next_move.update({m["village_id"]: ("waiting", m["level"])
                           for m in preview.get("waiting") or []})
         kept_ids = {k["village_id"] for k in preview.get("kept") or []}
         held_ids = set(preview.get("held") or [])
+        refused_ids = set(preview.get("refused") or [])
         types = []
         for type_id in (flagmodule.FLAG_TYPE_ORDER if flagmodule else ()):
             levels = inventory.get(type_id) or {}
@@ -5059,7 +5065,8 @@ class FlagsOverview:
                 # "kept" (hung by hand), "held" (24h cooldown).
                 "next": next_move.get(village_id, (None, None))[0]
                         or ("kept" if village_id in kept_ids else None)
-                        or ("held" if village_id in held_ids else None),
+                        or ("held" if village_id in held_ids else None)
+                        or ("refused" if village_id in refused_ids else None),
                 "next_level": next_move.get(village_id, (None, None))[1],
             })
         villages.sort(key=lambda v: (v["next"] is None, -int(v["points"] or 0)))

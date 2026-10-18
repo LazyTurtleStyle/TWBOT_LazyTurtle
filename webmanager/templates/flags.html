@@ -232,6 +232,7 @@
 					{% elif v.next == 'move' %}<span class="badge badge-warning">{{ v.want_name|lower }} lv {{ v.next_level }}</span>
 					{% elif v.next == 'waiting' %}<span class="badge badge-secondary" title="needs a flag another move frees first">waits for lv {{ v.next_level }}</span>
 					{% elif v.next == 'kept' %}<span class="badge badge-dark" title="a flag of another type, taken to be hung by hand">hung by hand</span>
+					{% elif v.next == 'refused' %}<span class="badge badge-dark" title="the game would not take its flag off (e.g. a population flag its troops need); tried again in 3 days or once its flag changes">refused by game</span>
 					{% elif v.next == 'held' %}<span class="badge badge-dark" title="changed in the last 24 hours">cooldown</span>
 					{% elif v.ok %}<span class="badge badge-success">right flag</span>
 					{% elif not v.want %}<span class="badge badge-dark">not managed</span>

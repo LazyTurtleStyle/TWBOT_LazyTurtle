@@ -391,7 +391,8 @@ def _flag_of(reading):
     return (int(flag[0]), int(flag[1])) if flag else None
 
 
-def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
+def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
+             refused=None):
     """Decide which flag every village should carry, and the moves to get there.
 
     `inventory` is the game's own count, which is the *free* pool - a flag
@@ -403,9 +404,14 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
         (assigning on a guess is how a flag gets thrown off a village that had
         it);
       - held: its flag changed within the last 24 hours and the game will not
-        take another;
+        take another. It is still ranked, so the level it is due is kept for
+        it instead of going to a smaller village for a day;
       - kept: it carries a flag of a type the plan does not ask of it, which is
-        taken to be one hung by hand (keep_manual).
+        taken to be one hung by hand (keep_manual);
+      - refused: the game would not take its flag off last time (a population
+        flag on a village whose troops only fit because of it). `refused` is
+        {village_id: flag it was carrying}; while it still carries that flag,
+        asking again would only be refused again.
 
     Everyone else that wants type T is ranked - most specific plan row first,
     then the bigger village first - and the levels of type T that are free or
@@ -418,7 +424,7 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
     right type keeps what it has (nothing is taken off a village to give to
     another) and only the free flags are handed out, biggest village first.
 
-    Returns {moves, waiting, unmet, kept, held, unread, free}. `moves` is in an
+    Returns {moves, waiting, unmet, kept, held, unread, refused, free}. `moves` is in an
     order the game can carry out: every move's flag is free at the moment it
     runs, because the moves before it handed theirs back. A move whose flag only
     a cycle of swaps could free (A needs B's level, B needs A's) is in `waiting`
@@ -431,7 +437,8 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
                                 if int(count) > 0}
     readings = readings or {}
     sizes = sizes or {}
-    kept, held, unread, unmet = [], [], [], []
+    refused = refused or {}
+    kept, held, unread, unmet, blocked = [], [], [], [], []
     by_type = {}
     for vid, want in (desired or {}).items():
         vid = str(vid)
@@ -443,14 +450,17 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
             unread.append(vid)
             continue
         current = _flag_of(reading)
-        if reading.get("cooldown"):
-            held.append(vid)
+        if current and vid in refused and list(current) == list(refused[vid]):
+            blocked.append(vid)
             continue
         if current and current[0] != flag_type and keep_manual:
             kept.append({"village_id": vid, "flag_type": flag_type,
                          "carrying": list(current)})
             continue
-        by_type.setdefault(flag_type, []).append((vid, want, current))
+        on_cooldown = bool(reading.get("cooldown"))
+        if on_cooldown:
+            held.append(vid)
+        by_type.setdefault(flag_type, []).append((vid, want, current, on_cooldown))
 
     targets = []
     for flag_type, villages in sorted(by_type.items()):
@@ -463,12 +473,17 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
         standing = [v[2][1] for v in villages if v[2] and v[2][0] == flag_type]
         if len(spare) + len(standing) >= len(villages):
             pool = sorted(spare + standing, reverse=True)
-            for index, (vid, _want, current) in enumerate(villages):
+            for index, (vid, _want, current, on_cooldown) in enumerate(villages):
+                if on_cooldown:
+                    # Ranked like everyone else, so the level it is due stays
+                    # reserved for it rather than going to a smaller village
+                    # that would have to hand it over again in a day.
+                    continue
                 targets.append((vid, flag_type, pool[index], current))
         else:
             # Short: whoever has one keeps it, the rest share what is free.
-            for vid, _want, current in villages:
-                if current and current[0] == flag_type:
+            for vid, _want, current, on_cooldown in villages:
+                if on_cooldown or (current and current[0] == flag_type):
                     continue
                 if spare:
                     targets.append((vid, flag_type, spare.pop(0), current))
@@ -481,7 +496,7 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True):
                if not (current and current[0] == flag_type and current[1] == level)]
     moves, waiting, free = sequence_moves(planned, free)
     return {"moves": moves, "waiting": waiting, "unmet": unmet, "kept": kept,
-            "held": held, "unread": unread, "free": free}
+            "held": held, "unread": unread, "refused": blocked, "free": free}
 
 
 def sequence_moves(planned, free):
@@ -659,6 +674,9 @@ def _auto_upgrade(wrapper, village_id, state):
 # A reading younger than this is trusted as-is right before a move; an older
 # one is read again first, so a flag hung by hand since is never thrown off.
 RECHECK_AFTER = 10 * 60
+# How long a village the game would not take a flag off is left alone before it
+# is tried again - troops die and farms grow, so "never" would be wrong.
+REFUSED_FOR = 3 * 24 * 3600
 
 
 def _sizes(village_ids):
@@ -708,9 +726,14 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
             state = refresh(wrapper, village_ids, budget, state=state)
 
     desired = resolve_desired(plan.get("rows"), load_groups(), village_ids, config)
+    now = time.time()
+    refused = {vid: entry.get("flag")
+               for vid, entry in (state.get("refused") or {}).items()
+               if now - int(entry.get("when", 0)) < REFUSED_FOR}
     outcome = allocate(desired, _inventory(state), state.get("readings") or {},
                        sizes=_sizes(village_ids),
-                       keep_manual=settings.get("keep_manual", True))
+                       keep_manual=settings.get("keep_manual", True),
+                       refused=refused)
 
     readings = dict(state.get("readings") or {})
     live = {t: dict(levels) for t, levels in _inventory(state).items()}
@@ -759,6 +782,15 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
         else:
             logger.warning("Could not give village %s the %s flag: %s",
                            vid, flag_name(flag_type), error)
+            if isinstance(result, dict) and move["from"]:
+                # The game itself said no (rather than the request failing):
+                # it will not take that flag off this village. Asking again
+                # every pass only fills the log, so leave it be until the flag
+                # on it changes or REFUSED_FOR has passed.
+                refused[vid] = list(move["from"])
+                state.setdefault("refused", {})[vid] = {
+                    "flag": list(move["from"]), "when": int(time.time()),
+                    "error": error}
         row.update(ok=not error, error=error)
         results.append(row)
 
@@ -776,6 +808,8 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
     state["unmet"] = outcome["unmet"]
     state["kept"] = outcome["kept"]
     state["held"] = outcome["held"]
+    state["refused"] = {vid: entry for vid, entry in (state.get("refused") or {}).items()
+                        if vid in refused}
     state["waiting"] = waiting
     state["upgraded"] = upgraded
     state["free"] = state["inventory"]
