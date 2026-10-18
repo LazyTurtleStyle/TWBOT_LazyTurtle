@@ -598,6 +598,8 @@ class Village:
         self.balancer.boost_small = bool(cfg.get("boost_small", True))
         self.balancer.ratio_balance = bool(cfg.get("ratio_balance", False))
         self.balancer.ratio_margin_pct = int(cfg.get("ratio_margin_pct", 20))
+        self.balancer.use_transport_overview = bool(
+            cfg.get("use_transport_overview", False))
         # What to assume about merchant speed until the game has stated a real
         # trip time; after that the measured value wins and this is ignored.
         # See ResourceBalancer.minutes_per_field.
