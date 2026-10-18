@@ -90,6 +90,13 @@ class ResourceBalancer:
         self.reserve_merchants = 0
         self.min_send_amount = 250
         self.sender_keep = 0
+        # The two jobs a pass can do. Boosting is the original one: feed the
+        # small villages. Ratio balancing evens out each village's own mix of
+        # wood, clay and iron by swapping surpluses between villages - see
+        # ratio_surplus / ratio_shortfall.
+        self.boost_small = True
+        self.ratio_balance = False
+        self.ratio_margin_pct = 20
         # Minutes per field to assume until the game has told us better. None
         # means "no idea", and falls back to the classic-TW guess.
         self.merchant_minutes_per_field = None
@@ -836,6 +843,103 @@ class ResourceBalancer:
                 del plan[res]
         return plan
 
+    # ----------------------------------------------------------- ratio pass
+
+    def ratio_surplus(self, stock):
+        """What this village holds too much of next to its own other two.
+
+        A village's mix is judged against itself, never against anyone else's
+        warehouse: 200k clay next to 25k iron is a surplus of clay whatever
+        the size of the village, and 4k of everything is no surplus at all. A
+        resource counts once it is more than ratio_margin_pct above the
+        village's own average, and only the part above that average may go -
+        so a sender never ends up short of what it just gave away. What its
+        own queue is waiting for is held back first, as for any send.
+        """
+        have = {r: int(stock.get(r, 0) or 0) for r in RESOURCES}
+        mean = sum(have.values()) / 3.0
+        over = mean * (1 + self.ratio_margin_pct / 100.0)
+        surplus = {}
+        for res in RESOURCES:
+            if have[res] > over:
+                amount = min(int(have[res] - mean), self._spare(res, have))
+                if amount >= max(1, self.min_send_amount):
+                    surplus[res] = amount
+        return surplus
+
+    def ratio_shortfall(self, stock, coming=None, storage_max=0):
+        """What a receiver is short of next to its own other two.
+
+        The mirror of ratio_surplus: a resource more than ratio_margin_pct
+        under the village's own average is short by the distance to that
+        average. Whatever is already on its way counts as delivered, and
+        nothing is planned past target_fill_pct of the receiver's warehouse.
+        The two margins leave a dead band around the average, so a village
+        that has just been levelled is neither a sender nor a receiver of
+        that resource on the next pass - nothing goes back and forth.
+        """
+        coming = coming or {}
+        have = {r: int(stock.get(r, 0) or 0) + int(coming.get(r, 0) or 0)
+                for r in RESOURCES}
+        mean = sum(have.values()) / 3.0
+        under = mean * (1 - self.ratio_margin_pct / 100.0)
+        ceiling = int(int(storage_max or 0) * self.target_fill_pct / 100.0)
+        short = {}
+        for res in RESOURCES:
+            if have[res] >= under:
+                continue
+            amount = int(mean - have[res])
+            if ceiling:
+                amount = min(amount, ceiling - have[res])
+            if amount >= max(1, self.min_send_amount):
+                short[res] = amount
+        return short
+
+    def pick_ratio_targets(self, villages, surplus):
+        """Villages short of something this one has too much of, neediest
+        first. Judged on their snapshots plus the in-flight ledger; the amount
+        is measured again live right before anything is sent."""
+        if not surplus:
+            return []
+        me = villages.get(self.village_id) or {}
+        my_loc = self._location(me)
+        flights = self._in_flight_table()
+        candidates = []
+        for vid, village in villages.items():
+            if vid == self.village_id:
+                continue
+            if self._no_market_until(vid) > time.time():
+                continue
+            coming = self._pending(flights.get(vid),
+                                   int(village.get("last_run") or 0))
+            short = self.ratio_shortfall(village.get("resources") or {}, coming,
+                                         village.get("storage_max") or 0)
+            match = {r: min(short[r], surplus[r]) for r in short if r in surplus}
+            if not match:
+                continue
+            candidates.append((-sum(match.values()),
+                               self._distance(my_loc, self._location(village)),
+                               vid, village))
+        candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+        return [(vid, village) for _, _, vid, village in candidates]
+
+    def plan_ratio(self, short, surplus, merchants):
+        """Fit a swap into the free merchants: each resource the receiver is
+        short of and this village has spare, biggest first, in whole merchant
+        loads where it has to be cut."""
+        plan = {}
+        left = int(merchants)
+        wants = {r: min(short[r], surplus[r]) for r in short if r in surplus}
+        for res, amount in sorted(wants.items(), key=lambda kv: (-kv[1], kv[0])):
+            if left < 1:
+                break
+            amount = min(amount, left * MERCHANT_CAPACITY)
+            if amount < max(1, self.min_send_amount):
+                continue
+            plan[res] = amount
+            left -= -(-amount // MERCHANT_CAPACITY)
+        return plan
+
     @staticmethod
     def merchants_for(plan):
         """Whole merchants a plan occupies."""
@@ -953,10 +1057,15 @@ class ResourceBalancer:
             return 0
 
         villages = self._managed_villages()
-        targets = self.pick_targets(villages, my_points)
-        if not targets:
-            self.logger.debug("No village under %d points has room right now",
-                              self.receiver_max_points)
+        targets = self.pick_targets(villages, my_points) if self.boost_small else []
+        ratio_targets = self.pick_ratio_targets(
+            villages, self.ratio_surplus(my_stock)) if self.ratio_balance else []
+        if not targets and not ratio_targets:
+            self.logger.debug(
+                "Nothing to send: no village under %d points has room%s",
+                self.receiver_max_points,
+                ", and nobody is short of what this village has too much of"
+                if self.ratio_balance else "")
             return 0
 
         if merchants_free is not None and merchants_free - self.reserve_merchants < 1:
@@ -1047,18 +1156,76 @@ class ResourceBalancer:
             for res, amount in plan.items():
                 my_stock[res] = max(0, int(my_stock.get(res, 0)) - amount)
             merchants -= used
-            me = villages.get(self.village_id)
-            here, there = self._location(me), self._location(target)
-            travel = self.last_travel_seconds
-            if travel and here and there:
-                # The game timed this trip, and both ends are known, so it also
-                # measures this world's merchants for every later send. Both
-                # coordinates have to be real: `_distance` answers 9999 for a
-                # missing one, which would bank an absurdly fast rate and make
-                # every future convoy look like it had already landed.
-                self._record_merchant_speed(self._distance(here, there), travel)
-            elif not travel:
-                travel = self.travel_seconds(me, target)
-            self._mark_sent(vid, plan, time.time() + travel)
+            self._book_send(vid, target, plan, villages)
+            sent += 1
+
+        if self.ratio_balance and merchants >= 1:
+            sent += self._ratio_pass(villages, my_stock, merchants)
+        return sent
+
+    def _book_send(self, vid, target, plan, villages):
+        """Write a send down so nobody plans against the same warehouse room."""
+        me = villages.get(self.village_id)
+        here, there = self._location(me), self._location(target)
+        travel = self.last_travel_seconds
+        if travel and here and there:
+            # The game timed this trip, and both ends are known, so it also
+            # measures this world's merchants for every later send. Both
+            # coordinates have to be real: `_distance` answers 9999 for a
+            # missing one, which would bank an absurdly fast rate and make
+            # every future convoy look like it had already landed.
+            self._record_merchant_speed(self._distance(here, there), travel)
+        elif not travel:
+            travel = self.travel_seconds(me, target)
+        self._mark_sent(vid, plan, time.time() + travel)
+
+    def _ratio_pass(self, villages, my_stock, merchants):
+        """Swap this village's surpluses for other villages' shortfalls.
+
+        Runs after the small villages have been served, on the merchants they
+        left. Each send carries only resources this village holds too much of
+        to a village holding too little of them, so a def village drowning in
+        iron feeds the off villages that are starved of it, and they pay it
+        back in the clay they have piled up when their own turn comes.
+        Receivers are measured live first, exactly as a boost send is.
+        """
+        sent = 0
+        for vid, target in self.pick_ratio_targets(
+                villages, self.ratio_surplus(my_stock)):
+            if merchants < 1:
+                break
+            surplus = self.ratio_surplus(my_stock)
+            if not surplus:
+                break
+            live = self.read_receiver(vid)
+            if live is NO_MARKET:
+                self._mark_no_market(vid)
+                continue
+            if live is None:
+                self.logger.warning(
+                    "Could not read what is already heading to %s - not "
+                    "sending rather than guessing", vid)
+                continue
+            self._clear_no_market(vid)
+            short = self.ratio_shortfall(live["resources"], live["incoming"],
+                                         live["storage_max"])
+            plan = self.plan_ratio(short, surplus, merchants)
+            if not plan:
+                continue
+            used = self.merchants_for(plan)
+            name = target.get("name") or vid
+            self.logger.info(
+                "Evening out: sending %s to %s (%d merchants)",
+                ", ".join("%d %s" % (v, k) for k, v in plan.items()), name, used)
+            if not self.send(target, plan):
+                continue
+            self.wrapper.reporter.report(
+                self.village_id, "TWB_BALANCE",
+                "Evened out: sent %s to %s" % (
+                    ", ".join("%d %s" % (v, k) for k, v in plan.items()), name))
+            for res, amount in plan.items():
+                my_stock[res] = max(0, int(my_stock.get(res, 0)) - amount)
+            merchants -= used
+            self._book_send(vid, target, plan, villages)
             sent += 1
         return sent

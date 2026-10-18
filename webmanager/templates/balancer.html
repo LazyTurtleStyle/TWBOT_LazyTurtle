@@ -159,6 +159,8 @@
 	<div class="card-body py-2">
 		<div class="row small bal-set">
 			<div class="col-md-6"><dl class="mb-0">
+				<dt>Boost small villages</dt><dd>{{ 'on' if bal.settings.get('boost_small', True) else 'off' }}</dd>
+				<dt>Even out wood/clay/iron</dt><dd>{% if bal.settings.get('ratio_balance') %}on &middot; a resource {{ bal.settings.get('ratio_margin_pct', 20) }}% off a village's own average is evened out{% else %}off{% endif %}</dd>
 				<dt>Sends once it is over</dt><dd>{{ bal.settings.sender_min_points|comma if bal.settings.sender_min_points else '—' }} points</dd>
 				<dt>Receives while under</dt><dd>{{ bal.settings.receiver_max_points|comma if bal.settings.receiver_max_points else '—' }} points</dd>
 				<dt>Fills the receiver to</dt><dd>{{ bal.settings.target_fill_pct or '—' }}% of its own warehouse, {{ bal.settings.fill_mode or '—' }}</dd>

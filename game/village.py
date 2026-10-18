@@ -595,6 +595,9 @@ class Village:
         self.balancer.reserve_merchants = int(cfg.get("reserve_merchants", 0))
         self.balancer.sender_keep = int(cfg.get("sender_keep", 0))
         self.balancer.min_send_amount = int(cfg.get("min_send_amount", 250))
+        self.balancer.boost_small = bool(cfg.get("boost_small", True))
+        self.balancer.ratio_balance = bool(cfg.get("ratio_balance", False))
+        self.balancer.ratio_margin_pct = int(cfg.get("ratio_margin_pct", 20))
         # What to assume about merchant speed until the game has stated a real
         # trip time; after that the measured value wins and this is ignored.
         # See ResourceBalancer.minutes_per_field.
