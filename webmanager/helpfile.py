@@ -145,6 +145,7 @@ help_file = {
     'balancer.boost_small': 'Feed the small villages: everything under receiver_max_points is topped up from the big ones. This is what the balancer always did. Turn it off to use only the evening-out below.',
     'balancer.ratio_balance': 'Even out each village\'s own mix of wood, clay and iron by swapping between your villages. A village holding far more of one resource than of its other two sends the extra to villages holding far too little of it - a def village full of iron feeds the iron-starved off villages, which send their spare clay back on their own turn. Judged per village against itself, never by warehouse size or fill percent, so a small full village never pours into a big half-empty one. Only villages over sender_min_points send; anyone can receive. Runs after the small villages have been fed, on the merchants that are left.',
     'balancer.ratio_margin_pct': 'How lopsided a village has to be before evening out steps in. A resource more than this percent above the village\'s own average of the three is a surplus (sent down to the average); more than this percent below it is a shortfall (filled up to the average). The gap in between stops resources going back and forth. 20 is a good start; lower means more, smaller sends.',
+    'balancer.use_transport_overview': 'Read what is already on its way to your villages off the Transport overview - one page for the whole account, read once every few minutes - instead of opening each receiver\'s market page right before every send. Saves one request per send. The receiver\'s stock comes from its last snapshot plus what it has produced since, so it errs towards sending a little less, never more; your own sends made after the overview was read are added from the bot\'s ledger. Falls back to the market page whenever the overview cannot be read.',
     'balancer.merchant_minutes_per_field': 'How long a merchant takes to cross one field on this world. Normally leave this empty: the bot reads the real trip time off the game\'s own transport confirmation screen and remembers it, and that measurement always wins over anything set here. It is only consulted for sends made before the first confirmation page has been read. Do not guess low - too low makes the bot forget convoys that are still travelling, which is the overshoot this whole mechanism exists to prevent.',
     'market.auto_trade': 'Enable automated trading',
     'market.max_trade_duration': 'Max duration of trades (hours)',
@@ -372,6 +373,7 @@ config_groups = {
         ('Who sends, who receives', ['sender_min_points', 'receiver_max_points', 'sender_order', 'target_order']),
         ('How much', ['target_fill_pct', 'fill_mode', 'sender_keep', 'min_send_amount']),
         ('How often', ['send_cooldown_minutes', 'max_sends_per_receiver', 'reserve_merchants', 'merchant_minutes_per_field']),
+        ('Cost', ['use_transport_overview']),
     ],
     'village_template': [
         ('Templates', ['building', 'units']),

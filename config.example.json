@@ -233,6 +233,7 @@
     "boost_small": true,
     "ratio_balance": false,
     "ratio_margin_pct": 20,
+    "use_transport_overview": false,
     "merchant_minutes_per_field": null
   },
   "world": {

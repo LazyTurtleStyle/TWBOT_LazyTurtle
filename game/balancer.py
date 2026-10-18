@@ -59,6 +59,42 @@ NO_MARKET = "no_market"
 # re-asking the same dead page on every pass.
 NO_MARKET_TTL = 4 * 3600
 
+# The transport overview lists every convoy heading to any of the account's
+# villages on one page. Read once and shared by every sender in the pass; the
+# bot's own sends after the read are added from the ledger. See
+# ResourceBalancer.receiver_state.
+TRANSPORT_TTL = 5 * 60
+_TRANSPORT = {"ts": 0, "incoming": None}
+_RE_INFO_VILLAGE = re.compile(r'screen=info_village&(?:amp;)?id=(\d+)')
+_RE_TRANSPORT_RES = re.compile(
+    r'icon header (wood|stone|iron)"[^>]*>\s*</span>(.*?)</span>\s*(?:<span class="nowrap"|</td>)',
+    re.S)
+
+
+def parse_transport_overview(page_text):
+    """{village_id: {resource: amount}} heading to each village, or None.
+
+    Every row of the "Aankomend" list names the sending village first and the
+    receiving one second, then the load. An empty list is a real answer ({}),
+    told apart from a page that did not load by the overview's own form.
+    """
+    text = page_text or ""
+    start = text.find('id="trades_table"')
+    if start < 0:
+        return {} if "mode=trader" in text and "overview_villages" in text else None
+    end = text.find("</table>", start)
+    table = text[start:end if end > 0 else len(text)]
+    incoming = {}
+    for row in re.findall(r"(?s)<tr[^>]*>(.*?)</tr>", table):
+        ids = _RE_INFO_VILLAGE.findall(row)
+        if len(ids) < 2:
+            continue
+        target = incoming.setdefault(ids[1], {r: 0 for r in RESOURCES})
+        for res, cell in _RE_TRANSPORT_RES.findall(row):
+            digits = re.sub(r"\D", "", re.sub(r"<[^>]+>", "", cell))
+            target[res] += int(digits or 0)
+    return incoming
+
 
 def _load_state():
     if not FileManager.path_exists(STATE_FILE):
@@ -94,6 +130,9 @@ class ResourceBalancer:
         # small villages. Ratio balancing evens out each village's own mix of
         # wood, clay and iron by swapping surpluses between villages - see
         # ratio_surplus / ratio_shortfall.
+        # Read what is on its way to every village off one overview page per
+        # pass, instead of opening each receiver's market page before a send.
+        self.use_transport_overview = False
         self.boost_small = True
         self.ratio_balance = False
         self.ratio_margin_pct = 20
@@ -422,6 +461,63 @@ class ResourceBalancer:
             return None
         return {"incoming": total, "resources": stock,
                 "storage_max": int(cap.group(1))}
+
+    def _transport_incoming(self):
+        """The account-wide incoming list, read at most once per TRANSPORT_TTL."""
+        now = time.time()
+        if _TRANSPORT["incoming"] is not None and now - _TRANSPORT["ts"] < TRANSPORT_TTL:
+            return _TRANSPORT["incoming"], _TRANSPORT["ts"]
+        page = self.wrapper.get_url(
+            "game.php?village=%s&screen=overview_villages&mode=trader&type=inc&page=-1"
+            % self.village_id)
+        incoming = parse_transport_overview(getattr(page, "text", "") or "")
+        if incoming is None:
+            return None, 0
+        _TRANSPORT.update(ts=now, incoming=incoming)
+        return incoming, now
+
+    def receiver_state(self, vid, village):
+        """What a receiver holds, can hold and has coming - the same answer as
+        read_receiver, without opening the receiver's market page.
+
+        Stock is its snapshot plus what it has produced since, so it errs
+        towards less room, never more. What is coming is the transport
+        overview plus every send of this bot made after that overview was
+        read. Falls back to read_receiver when any of it is missing.
+        """
+        if not self.use_transport_overview:
+            return self.read_receiver(vid)
+        cap = int(village.get("storage_max") or 0)
+        stock = village.get("resources") or {}
+        if cap <= 0 or not stock:
+            return self.read_receiver(vid)
+        incoming, read_at = self._transport_incoming()
+        if incoming is None:
+            return self.read_receiver(vid)
+        now = time.time()
+        snapped = int(village.get("last_run") or 0)
+        hours = max(0.0, now - snapped) / 3600.0
+        production = village.get("production") or {}
+        landed = {r: 0 for r in RESOURCES}
+        coming = dict(incoming.get(str(vid)) or {r: 0 for r in RESOURCES})
+        for flight in self._in_flight_table().get(str(vid)) or []:
+            arrival = int(flight.get("arrival") or 0)
+            amounts = {r: int(a) for r, a in (flight.get("amounts") or {}).items()
+                       if r in RESOURCES}
+            if snapped < arrival <= now:
+                # Landed since the snapshot: no longer on the overview, not in
+                # the snapshot either - without this the room is overstated by
+                # exactly the convoy that just filled it.
+                for res, amount in amounts.items():
+                    landed[res] += amount
+            elif arrival > now and int(flight.get("sent") or 0) >= read_at:
+                # Sent after the overview was read, so not on it yet.
+                for res, amount in amounts.items():
+                    coming[res] = coming.get(res, 0) + amount
+        now_stock = {r: min(cap, int(stock.get(r, 0) or 0) + landed[r]
+                            + int(float(production.get(r, 0) or 0) * hours))
+                     for r in RESOURCES}
+        return {"incoming": coming, "resources": now_stock, "storage_max": cap}
 
     @staticmethod
     def _pending(flights, since):
@@ -1115,7 +1211,7 @@ class ResourceBalancer:
             # land, and a prediction that runs fast frees up room that does not
             # exist. So the room is re-measured against what the server says is
             # actually on its way, immediately before committing merchants.
-            live = self.read_receiver(vid)
+            live = self.receiver_state(vid, target)
             if live is NO_MARKET:
                 # Said once per village per TTL rather than once per sender per
                 # pass: with 50 senders this was 200+ identical warnings a day
@@ -1197,7 +1293,7 @@ class ResourceBalancer:
             surplus = self.ratio_surplus(my_stock)
             if not surplus:
                 break
-            live = self.read_receiver(vid)
+            live = self.receiver_state(vid, target)
             if live is NO_MARKET:
                 self._mark_no_market(vid)
                 continue
