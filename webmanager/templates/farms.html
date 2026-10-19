@@ -275,8 +275,9 @@
       <div class="card-body">
         <div class="fs-help text-muted mb-2">
           Scavenges a whole in-game group in one pass, on its own clock, using the game's own mass-scavenge
-          screen: two page reads and one send for sixty villages. Villages in the group stop scavenging in
-          their own run &mdash; the settings here replace their per-village ones completely. Everything else
+          screen: two page reads and one send for sixty villages. While it is on, <strong>only this group
+          scavenges</strong>: its villages follow the settings here, and villages outside it do not scavenge at
+          all &mdash; leave a village out of the group to keep its troops home. Everything else
           (night consolidation, stopping for incomings, noble escort reservations) still applies.
         </div>
         {{ row('Mass scavenging enabled',
@@ -300,7 +301,7 @@
             {% elif ms.group %}
             {{ farms.mass.group_size }} village{{ 's' if farms.mass.group_size != 1 else '' }} in this group. Dynamic groups refresh hourly via the incoming tracker.
             {% else %}
-            Only villages in this group are mass-scavenged; the rest keep scavenging in their own run.
+            Only villages in this group scavenge; the rest keep their troops home.
             {% endif %}
           </div>
         </div>
