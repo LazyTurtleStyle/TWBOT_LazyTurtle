@@ -1,5 +1,28 @@
 import math
 
+# What an empty village's wall alone defends with, per level: the "Basisverdediging"
+# the game's own wall screen prints (level 0 is the village's own 20). Measured on
+# two live worlds in 2026 - read off the wall screen where a village had that level,
+# and from the in-game battle simulator for the rest - because the long-standing
+# 20 * 1.25^level guess is four to seven times too low on a low wall and far too
+# high on a level 20 one. Past 20 it is extended by the last step.
+WALL_BASE_DEFENSE = (20, 97, 194, 275, 341, 402, 459, 512, 560, 613, 656,
+                     699, 740, 783, 822, 861, 898, 936, 971, 1006, 1040)
+
+
+def wall_base_defense(level):
+    level = max(0, int(level or 0))
+    if level < len(WALL_BASE_DEFENSE):
+        return WALL_BASE_DEFENSE[level]
+    step = WALL_BASE_DEFENSE[-1] - WALL_BASE_DEFENSE[-2]
+    return WALL_BASE_DEFENSE[-1] + step * (level - len(WALL_BASE_DEFENSE) + 1)
+
+
+def wall_bonus(level):
+    """Multiplier the wall gives the defending troops: the wall screen's
+    "Verdedigingsbonus" (+4% at 1, +44% at 10, +99% at 19)."""
+    return math.pow(1.037, max(0, int(level or 0)))
+
 from core.filemanager import FileManager
 
 
@@ -272,12 +295,16 @@ class Simulator:
         return res
 
     def pre_wall(self, num_rams=None, wall=None):
+        """Wall level the battle is fought at: rams knock off
+        rams * 2 / (8 * 1.09^wall) levels first (rounded), but never more than
+        half the wall - it stays at least at half, rounded down, so a level 1
+        wall can be fought at 0. Checked against the in-game simulator."""
         if not num_rams:
             num_rams = 0
         if not wall:
             wall = 0
-        result = wall - round(num_rams / (4 * math.pow(1.09, wall)))
-        return result if result >= 0 else 0
+        knocked = int(math.floor(num_rams / (4 * math.pow(1.09, wall)) + 0.5))
+        return max(wall // 2, wall - knocked, 0)
 
     def post_wall(
             self,
@@ -311,41 +338,38 @@ class Simulator:
 
     def simulate_against_wall(self, attacker_units, wall, moral=100, luck=0):
         """
-        Estimates average attacker losses from a wall's passive defense
-        when the target has zero defending troops (e.g. a stale-but-safe
-        farm report). Real TW combat still rolls a random luck factor per
-        attack, so treat this as an average-case estimate, not a guarantee.
+        Estimates attacker losses from a wall's passive defense when the
+        target has zero defending troops (e.g. a stale-but-safe farm report).
+        `wall` is the level the battle is fought at - after any ram
+        pre-damage. Even level 0 defends with the village's own 20. Losses are
+        fractional; the game rounds each unit type's count to whole troops.
         """
         wall = wall if wall else 0
         losses = {unit: 0.0 for unit in self.pool}
-        if wall <= 0:
-            return losses
 
         moral = (moral if moral else 100) / 100
         luck = 1 + (luck if luck else 0) / 100
 
         full_units = {unit: attacker_units.get(unit, 0) for unit in self.pool}
         attack_strength = self.attack_sum(full_units)
-        attack_food = self.attack_sum_food(full_units)
-        attack_food_sum = self.get_sum(attack_food)
-        if attack_food_sum == 0:
+        attack = sum(attack_strength.values()) * moral * luck
+        if attack <= 0:
             return losses
 
-        wall_defense = round(math.pow(1.25, wall) * 20)
-        for attack_type in attack_strength:
-            if attack_strength[attack_type] == 0 or attack_food[attack_type] == 0:
-                continue
-            ratio = attack_food[attack_type] / attack_food_sum
-            defense = wall_defense * ratio
-            a = attack_strength[attack_type] * moral * luck / defense
-            if a < 1:
-                # Defense outclasses this attack type entirely, all of it dies
-                for unit in self.attack_units[attack_type]:
-                    losses[unit] = full_units[unit]
-            else:
-                loss_fraction = math.sqrt(1 / a) / a
-                for unit in self.attack_units[attack_type]:
-                    losses[unit] = full_units[unit] * loss_fraction
+        # An empty village has no troops with infantry/cavalry/archer values,
+        # only the wall's base defense, so there is nothing to split by attack
+        # type: the whole attack fights it as one, and every unit type loses
+        # the same share. (Splitting it by type, as before, had the rams of a
+        # cavalry farm "lose" their own little fight and die to a man; the
+        # in-game simulator loses 3 of 6 rams alongside 5 of 10 light cavalry.)
+        defense = wall_base_defense(wall)
+        if attack <= defense:
+            fraction = 1.0
+        else:
+            fraction = math.pow(defense / attack, 1.5)
+        for unit, count in full_units.items():
+            if count:
+                losses[unit] = count * fraction
         return losses
 
     def simulate(self, attackerUnits, defenderUnits, wall, nightbonus, moral, luck):
@@ -380,10 +404,8 @@ class Simulator:
             )
 
         resultingWall = self.pre_wall(wall=wall, num_rams=attackerUnits["ram"])
-        wallBonus = 1 + resultingWall * 0.05
-        wallDefense = 0
-        if resultingWall != 0:
-            wallDefense = round(math.pow(1.25, resultingWall) * 20)
+        wallBonus = wall_bonus(resultingWall)
+        wallDefense = wall_base_defense(resultingWall)
         while self.get_sum(attackerUnits) >= 1 and self.get_sum(defenderUnits) >= 1:
             attack_strength = self.attack_sum(attackerUnits)
             def_strength = self.defense_sum(defenderUnits)
