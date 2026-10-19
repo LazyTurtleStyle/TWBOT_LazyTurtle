@@ -5006,7 +5006,8 @@ class FlagsOverview:
         preview = flagmodule.allocate(
             desired, inventory, readings, sizes=sizes,
             keep_manual=settings.get("keep_manual", True),
-            refused=refused) if flagmodule else {}
+            refused=refused,
+            upgrade_only=settings.get("upgrade_only", True)) if flagmodule else {}
         next_move = {m["village_id"]: ("move", m["level"])
                      for m in preview.get("moves") or []}
         next_move.update({m["village_id"]: ("waiting", m["level"])
@@ -5106,6 +5107,7 @@ class FlagsOverview:
             "auto_assign": bool(settings.get("auto_assign")),
             "auto_upgrade": bool(settings.get("auto_upgrade")),
             "keep_manual": bool(settings.get("keep_manual", True)),
+            "upgrade_only": bool(settings.get("upgrade_only", True)),
             "moves_planned": len(preview.get("moves") or []),
             "world_has_flags": (config.get("world") or {}).get("flags_enabled"),
             "rows": rows,

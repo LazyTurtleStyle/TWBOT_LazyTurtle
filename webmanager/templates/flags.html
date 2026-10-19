@@ -73,6 +73,7 @@
 			<span class="badge {{ 'badge-success' if fl.auto_assign else 'badge-secondary' }}">daily auto-assign {{ 'ON' if fl.auto_assign else 'OFF' }}</span>
 			<span class="badge {{ 'badge-success' if fl.auto_upgrade else 'badge-secondary' }}">auto-upgrade {{ 'ON' if fl.auto_upgrade else 'OFF' }}</span>
 			<span class="badge {{ 'badge-success' if fl.keep_manual else 'badge-secondary' }}">hand-hung flags {{ 'kept' if fl.keep_manual else 'replaced' }}</span>
+			<span class="badge {{ 'badge-success' if fl.upgrade_only else 'badge-secondary' }}">{{ 'only better flags placed' if fl.upgrade_only else 'levels re-sorted by size' }}</span>
 			<a href="/config#flags" class="ml-2">change</a>
 		</div>
 		{% if not fl.manage %}
@@ -84,7 +85,8 @@
 		{% endif %}
 		<div class="small text-muted mt-2">
 			Within one flag type the levels follow village size: the biggest village gets the highest
-			level. Apply would make <strong>{{ fl.moves_planned }}</strong> change(s) right now
+			level{% if fl.upgrade_only %}, but only by handing out free flags &mdash; a village keeps its flag
+			unless a better one lies free, and nothing is moved down{% endif %}. Apply would make <strong>{{ fl.moves_planned }}</strong> change(s) right now
 			&mdash; see the <em>Next</em> column below.
 		</div>
 		{% if fl.cooldown %}
