@@ -64,6 +64,8 @@ NO_MARKET_TTL = 4 * 3600
 # bot's own sends after the read are added from the ledger. See
 # ResourceBalancer.receiver_state.
 TRANSPORT_TTL = 5 * 60
+# The last overview read, kept for the dashboard's Market page.
+TRANSPORT_CACHE = "cache/transport_incoming.json"
 _TRANSPORT = {"ts": 0, "incoming": None}
 _RE_INFO_VILLAGE = re.compile(r'screen=info_village&(?:amp;)?id=(\d+)')
 _RE_TRANSPORT_RES = re.compile(
@@ -152,7 +154,7 @@ class ResourceBalancer:
         last = _load_state().get(self.village_id, {}).get("last_send", 0)
         return max(0, int(last + self.send_cooldown - time.time()))
 
-    def _mark_sent(self, target_id, amounts, arrival):
+    def _mark_sent(self, target_id, amounts, arrival, kind=None):
         state = _load_state()
         state[self.village_id] = {
             "last_send": int(time.time()),
@@ -173,11 +175,15 @@ class ResourceBalancer:
         flights = state.setdefault("_inflight", {})
         pending = [f for f in (flights.get(key) or [])
                    if int(f.get("arrival") or 0) >= now - 86400]
-        pending.append({
+        flight = {
             "sent": now,
             "arrival": int(arrival),
             "amounts": {r: int(v) for r, v in amounts.items() if r in RESOURCES},
-        })
+            "from": self.village_id,
+        }
+        if kind:
+            flight["kind"] = kind
+        pending.append(flight)
         flights[key] = pending
         _save_state(state)
 
@@ -474,6 +480,11 @@ class ResourceBalancer:
         if incoming is None:
             return None, 0
         _TRANSPORT.update(ts=now, incoming=incoming)
+        try:
+            FileManager.save_json_file_atomic(
+                {"ts": int(now), "incoming": incoming}, TRANSPORT_CACHE)
+        except Exception:
+            pass  # only the dashboard reads it
         return incoming, now
 
     def receiver_state(self, vid, village):
@@ -1252,14 +1263,14 @@ class ResourceBalancer:
             for res, amount in plan.items():
                 my_stock[res] = max(0, int(my_stock.get(res, 0)) - amount)
             merchants -= used
-            self._book_send(vid, target, plan, villages)
+            self._book_send(vid, target, plan, villages, "boost")
             sent += 1
 
         if self.ratio_balance and merchants >= 1:
             sent += self._ratio_pass(villages, my_stock, merchants)
         return sent
 
-    def _book_send(self, vid, target, plan, villages):
+    def _book_send(self, vid, target, plan, villages, kind=None):
         """Write a send down so nobody plans against the same warehouse room."""
         me = villages.get(self.village_id)
         here, there = self._location(me), self._location(target)
@@ -1273,7 +1284,7 @@ class ResourceBalancer:
             self._record_merchant_speed(self._distance(here, there), travel)
         elif not travel:
             travel = self.travel_seconds(me, target)
-        self._mark_sent(vid, plan, time.time() + travel)
+        self._mark_sent(vid, plan, time.time() + travel, kind)
 
     def _ratio_pass(self, villages, my_stock, merchants):
         """Swap this village's surpluses for other villages' shortfalls.
@@ -1322,6 +1333,6 @@ class ResourceBalancer:
             for res, amount in plan.items():
                 my_stock[res] = max(0, int(my_stock.get(res, 0)) - amount)
             merchants -= used
-            self._book_send(vid, target, plan, villages)
+            self._book_send(vid, target, plan, villages, "ratio")
             sent += 1
         return sent

@@ -116,6 +116,9 @@ def refresh_snapshot(village_id, row, now=None):
     snapshot["pop_used"] = row["pop_used"]
     snapshot["pop_max"] = row["pop_max"]
     snapshot["under_attack"] = row["under_attack"]
+    if "merchants_free" in row:
+        snapshot["merchants"] = {"free": row["merchants_free"],
+                                 "total": row.get("merchants_total"), "ts": now}
     public = dict(snapshot.get("public") or {})
     public["points"] = row["points"]
     if row.get("name"):

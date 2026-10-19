@@ -19,7 +19,8 @@ try:
                                   PlayerFarmOverview, PlanImport,
                                   AccountManagerOverview, EventOverview,
                                   MintingOverview, FlagsOverview,
-                                  BalancerOverview, ReportAnalysisOverview)
+                                  BalancerOverview, ReportAnalysisOverview,
+                                  MarketOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list,
@@ -27,7 +28,8 @@ except ImportError:
     from utils import (DataReader, BotManager, MapBuilder, BuildingTemplateManager,
                        UnitTemplateManager, OverviewBuilder, PlanImport,
                        AccountManagerOverview, EventOverview, MintingOverview,
-                       FlagsOverview, BalancerOverview, ReportAnalysisOverview)
+                       FlagsOverview, BalancerOverview, ReportAnalysisOverview,
+                       MarketOverview)
 
 import datetime
 from html import escape as html_escape
@@ -1040,6 +1042,12 @@ def balancer_page():
     data = sync()
     return render_template('balancer.html', data=data,
                            bal=BalancerOverview.build(data))
+
+
+@app.route('/market', methods=['GET'])
+def market_page():
+    data = sync()
+    return render_template('market.html', data=data, mk=MarketOverview.build(data))
 
 
 @app.route('/report_analysis', methods=['GET'])

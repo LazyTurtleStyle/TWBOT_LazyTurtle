@@ -1422,4 +1422,10 @@ class Village:
             # overview pages (game/lightpass.py); this one only on a visit.
             "last_visit": int(time.time()),
         }
+        # A visit does not see the production overview, so the merchant count
+        # the last overview pass wrote is carried over rather than dropped.
+        previous = FileManager.load_json_file(
+            f"cache/managed/{self.village_id}.json") or {}
+        if previous.get("merchants"):
+            village_entry["merchants"] = previous["merchants"]
         FileManager.save_json_file(village_entry, f"cache/managed/{self.village_id}.json")

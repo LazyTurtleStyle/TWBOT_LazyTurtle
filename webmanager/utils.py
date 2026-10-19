@@ -1589,6 +1589,19 @@ class DataReader:
         return {}
 
     @staticmethod
+    def transport_grab():
+        """The last transport overview the balancer read: what was heading to
+        each village, and when it was read (cache/transport_incoming.json)."""
+        try:
+            path = DataReader.data_path("cache", "transport_incoming.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    @staticmethod
     def report_analysis_request(job):
         """Queue one notes job for the bot: the page's selection, written on
         the bot's next cycle and then never again until asked."""
@@ -5425,3 +5438,126 @@ class BotManager:
             os.kill(target, signal.SIGTERM)
             self._pids.pop(key, None)
             print("Bot stopped successfully (%s)" % (key or "default"))
+
+
+class MarketOverview:
+    """What the Market page shows: where the wood, clay and iron are, which
+    villages hold too much or too little of one, and what has been moved.
+
+    Read from the bot's own files only - the village snapshots, the balancer's
+    ledger and the last transport overview it read. A resource counts as spare
+    or short the same way the balancer's evening-out judges it: against the
+    village's own average of the three, ratio_margin_pct either side.
+    """
+
+    RES = ("wood", "stone", "iron")
+
+    @classmethod
+    def _judge(cls, stock, margin):
+        mean = sum(stock.values()) / 3.0
+        out = {}
+        for res in cls.RES:
+            if mean <= 0:
+                out[res] = None
+            elif stock[res] > mean * (1 + margin / 100.0):
+                out[res] = "spare"
+            elif stock[res] < mean * (1 - margin / 100.0):
+                out[res] = "short"
+            else:
+                out[res] = None
+        return out
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        bal = config.get("balancer", {}) or {}
+        market = config.get("market", {}) or {}
+        margin = int(bal.get("ratio_margin_pct", 20) or 20)
+        managed = DataReader.cache_grab("managed") or {}
+        state = DataReader.balancer_state_grab()
+        transport = DataReader.transport_grab()
+        incoming = transport.get("incoming") or {}
+        now = time.time()
+
+        villages, totals, caps = [], {r: 0 for r in cls.RES}, 0
+        spare_n, short_n = {r: 0 for r in cls.RES}, {r: 0 for r in cls.RES}
+        for vid, snap in managed.items():
+            if not isinstance(snap, dict):
+                continue
+            res = snap.get("resources") or {}
+            stock = {r: int(res.get(r, 0) or 0) for r in cls.RES}
+            cap = int(snap.get("storage_max") or 0)
+            for r in cls.RES:
+                totals[r] += stock[r]
+            caps += cap
+            judged = cls._judge(stock, margin)
+            for r, verdict in judged.items():
+                if verdict == "spare":
+                    spare_n[r] += 1
+                elif verdict == "short":
+                    short_n[r] += 1
+            merchants = snap.get("merchants") or {}
+            coming = incoming.get(str(vid)) or {}
+            villages.append({
+                "id": str(vid),
+                "name": snap.get("name") or str(vid),
+                "points": int(((snap.get("public") or {}).get("points")) or 0),
+                "stock": stock,
+                "cap": cap,
+                "fill": {r: (stock[r] * 100 // cap if cap else 0) for r in cls.RES},
+                "judged": judged,
+                "merchants_free": merchants.get("free"),
+                "merchants_total": merchants.get("total"),
+                "incoming": {r: int(coming.get(r, 0) or 0) for r in cls.RES},
+                "incoming_total": sum(int(coming.get(r, 0) or 0) for r in cls.RES),
+                "age": int(now - int(snap.get("last_run") or 0)) if snap.get("last_run") else None,
+            })
+        villages.sort(key=lambda v: -v["points"])
+
+        mean_total = sum(totals.values()) / 3.0
+        account = [{"res": r, "total": totals[r],
+                    "dev": int(round((totals[r] - mean_total) * 100 / mean_total))
+                    if mean_total else 0,
+                    "spare": spare_n[r], "short": short_n[r]} for r in cls.RES]
+
+        # What the balancer moved in the last day, by kind. Sends from before the
+        # kind was recorded show up as "earlier sends".
+        moved = {}
+        day_ago = now - 86400
+        for flights in (state.get("_inflight") or {}).values():
+            for flight in flights or []:
+                if int(flight.get("sent") or 0) < day_ago:
+                    continue
+                kind = flight.get("kind") or "unknown"
+                row = moved.setdefault(kind, {"sends": 0, "wood": 0, "stone": 0, "iron": 0})
+                row["sends"] += 1
+                for r in cls.RES:
+                    row[r] += int((flight.get("amounts") or {}).get(r, 0) or 0)
+        labels = {"boost": "Boosting small villages", "ratio": "Evening out",
+                  "unknown": "Earlier sends"}
+        moved_rows = [dict(row, kind=kind, label=labels.get(kind, kind),
+                           total=row["wood"] + row["stone"] + row["iron"])
+                      for kind, row in sorted(moved.items())]
+
+        free = [v["merchants_free"] for v in villages if v["merchants_free"] is not None]
+        total_m = [v["merchants_total"] for v in villages if v["merchants_total"] is not None]
+        return {
+            "villages": villages,
+            "account": account,
+            "storage_total": caps,
+            "margin": margin,
+            "moved": moved_rows,
+            "moved_total": sum(r["total"] for r in moved_rows),
+            "moved_sends": sum(r["sends"] for r in moved_rows),
+            "merchants_free": sum(free) if free else None,
+            "merchants_total": sum(total_m) if total_m else None,
+            "incoming_total": sum(v["incoming_total"] for v in villages),
+            "transport_read": transport.get("ts"),
+            "settings": {
+                "enabled": bool(bal.get("enabled")),
+                "boost_small": bal.get("boost_small", True),
+                "ratio_balance": bool(bal.get("ratio_balance")),
+                "use_transport_overview": bool(bal.get("use_transport_overview")),
+                "auto_trade": bool(market.get("auto_trade")),
+            },
+        }
