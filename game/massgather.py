@@ -18,10 +18,12 @@ round in the main loop. On an account this size a full cycle is measured in
 hours, which is hours of every village's troops sitting at home between runs.
 This module runs on its own clock instead.
 
-It deliberately does NOT read per-village scavenge config. A village either
-belongs to the configured group and is scavenged with the group's settings, or
-it does not and its own village run keeps handling it. Two sets of rules aiming
-at the same four option slots is how you get one of them quietly doing nothing.
+It deliberately does NOT read per-village scavenge config. While it is on it is
+the only thing that scavenges: a village in the configured group is scavenged
+with the group's settings, and a village outside it does not scavenge at all -
+the per-village path stands down for every village (game/village.py
+_mass_scavenged). Leaving a village out of the group is how you keep its troops
+home.
 
 What it still honours, because these are safety rules rather than preferences:
 - villages with an incoming attack are skipped, subject to the same

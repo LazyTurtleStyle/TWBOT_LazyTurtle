@@ -998,20 +998,18 @@ class Village:
         return None
 
     def _mass_scavenged(self):
-        """Whether game/massgather.py has taken this village over.
+        """Whether game/massgather.py owns scavenging, which switches the
+        per-village path off for EVERY village, not only the group's members.
 
-        Mass scavenging is configured per group, not per village, so this is
-        the one place the two paths have to agree on who is sending. A group
-        that cannot be resolved means the mass module will not send either, so
-        the village keeps scavenging for itself rather than both of them
-        standing down.
+        The group is the answer to "who scavenges": a village left out of it -
+        say a nuke being kept home for tonight - must not quietly fall back to
+        scavenging through its own run. With the group unresolvable the mass
+        pass sends nothing and says so, and nothing else scavenges either:
+        troops at home is the safe side of a configuration mistake.
         """
         conf = (self.get_config(section="farms", parameter="mass_scavenge",
                                 default={}) or {})
-        if not conf.get("enabled"):
-            return False
-        members = massgather.group_villages(conf.get("group"))
-        return bool(members) and str(self.village_id) in members
+        return bool(conf.get("enabled"))
 
     def do_gather(self):
         """
@@ -1023,11 +1021,8 @@ class Village:
         """
         self.units.can_gather = self.scavenging_enabled()
         if self._mass_scavenged():
-            # Mass scavenging owns this village's four option slots. Running the
-            # per-village pass as well would cost two requests to rediscover
-            # that they are busy, and on the pass where they are not it would
-            # send a squad sized by rules the group settings deliberately
-            # replaced.
+            # Mass scavenging owns scavenging: a member is sent by the mass
+            # pass, and a village outside the group was left out on purpose.
             self.logger.debug("Scavenging handled by the mass pass")
             return
         policy = self._gather_group_policy()
