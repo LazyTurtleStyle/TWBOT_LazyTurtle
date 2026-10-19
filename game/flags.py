@@ -28,8 +28,11 @@ village that already had it.
 Within one type the levels follow village size: the biggest village gets the
 highest level, the smallest the lowest. A percentage flag is worth most where
 there is most to multiply - +18% on a fully built village's mines is far more
-than +18% on a fresh one's - so a high flag on a small village is moved up to a
-bigger one, and that village takes a lower flag from the pool in exchange.
+than +18% on a fresh one's. By default (flags.upgrade_only) that is only ever
+reached by handing out free flags: a village keeps what it carries unless a
+better one lies free, and nothing is taken off a village to move it down.
+With upgrade_only off, a high flag on a small village is also moved up to a
+bigger one, which costs both villages a 24-hour cooldown.
 
 A flag of another type than the plan asks for is taken to be one the player hung
 by hand (an attack flag for an op, a defence flag under fire, a coin flag for
@@ -392,7 +395,7 @@ def _flag_of(reading):
 
 
 def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
-             refused=None):
+             refused=None, upgrade_only=True):
     """Decide which flag every village should carry, and the moves to get there.
 
     `inventory` is the game's own count, which is the *free* pool - a flag
@@ -471,7 +474,9 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
         spare = sorted((lvl for lvl, count in (free.get(flag_type) or {}).items()
                         for _ in range(count)), reverse=True)
         standing = [v[2][1] for v in villages if v[2] and v[2][0] == flag_type]
-        if len(spare) + len(standing) >= len(villages):
+        if upgrade_only:
+            targets.extend(_upgrades(flag_type, villages, spare, unmet))
+        elif len(spare) + len(standing) >= len(villages):
             pool = sorted(spare + standing, reverse=True)
             for index, (vid, _want, current, on_cooldown) in enumerate(villages):
                 if on_cooldown:
@@ -497,6 +502,35 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
     moves, waiting, free = sequence_moves(planned, free)
     return {"moves": moves, "waiting": waiting, "unmet": unmet, "kept": kept,
             "held": held, "unread": unread, "refused": blocked, "free": free}
+
+
+def _upgrades(flag_type, villages, spare, unmet):
+    """Upgrade-only: hand out free flags, never take one off to move it down.
+
+    `villages` is in rank order, biggest first; `spare` the free levels of this
+    type, best first. A village keeps what it carries unless a better level of
+    the type it wants lies free; then it takes the best one, and the flag it
+    gave up goes back in the pool for the villages below it - so one free
+    level 7 can lift a whole chain, each village handing its old flag down.
+    A village on cooldown still claims its upgrade, so the level is kept for it
+    rather than going to a smaller village for a day.
+    """
+    pool = list(spare)
+    out = []
+    for vid, _want, current, on_cooldown in villages:
+        level = current[1] if current and current[0] == flag_type else 0
+        if not pool or pool[0] <= level:
+            if not pool and not level:
+                unmet.append({"village_id": vid, "flag_type": flag_type})
+            continue
+        best = pool.pop(0)
+        if on_cooldown:
+            continue
+        out.append((vid, flag_type, best, current))
+        if level:
+            pool.append(level)
+            pool.sort(reverse=True)
+    return out
 
 
 def sequence_moves(planned, free):
@@ -733,7 +767,8 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
     outcome = allocate(desired, _inventory(state), state.get("readings") or {},
                        sizes=_sizes(village_ids),
                        keep_manual=settings.get("keep_manual", True),
-                       refused=refused)
+                       refused=refused,
+                       upgrade_only=settings.get("upgrade_only", True))
 
     readings = dict(state.get("readings") or {})
     live = {t: dict(levels) for t, levels in _inventory(state).items()}

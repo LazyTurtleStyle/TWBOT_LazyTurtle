@@ -37,6 +37,11 @@ def read(**carrying):
     return {v: {"flag": list(f) if f else None, "ts": 1} for v, f in carrying.items()}
 
 
+def relevel(*args, **kwargs):
+    """The pass with upgrade_only off: levels re-sorted by size every time."""
+    return flags.allocate(*args, upgrade_only=False, **kwargs)
+
+
 def targets(outcome):
     return {m["village_id"]: m["level"] for m in outcome["moves"]}
 
@@ -65,7 +70,7 @@ def test_cooldown_is_read_from_the_cooldown_box():
 # -- who gets which level ---------------------------------------------------
 
 def test_the_biggest_village_gets_the_highest_free_level():
-    out = flags.allocate(want("a", "b", "c"), {RES: {1: 5, 2: 1, 5: 1}},
+    out = relevel(want("a", "b", "c"), {RES: {1: 5, 2: 1, 5: 1}},
                          read(a=None, b=None, c=None),
                          sizes={"a": 1000, "b": 9000, "c": 5000})
     assert targets(out) == {"b": 5, "c": 2, "a": 1}
@@ -73,7 +78,7 @@ def test_the_biggest_village_gets_the_highest_free_level():
 
 def test_a_high_flag_on_a_small_village_moves_up():
     # small carries the level 5, big a level 1; one level 2 lies free.
-    out = flags.allocate(want("small", "big"), {RES: {2: 1}},
+    out = relevel(want("small", "big"), {RES: {2: 1}},
                          read(small=(RES, 5), big=(RES, 1)),
                          sizes={"small": 500, "big": 9000})
     assert targets(out) == {"big": 5, "small": 2}
@@ -83,7 +88,7 @@ def test_a_high_flag_on_a_small_village_moves_up():
 
 
 def test_a_village_already_on_its_level_is_not_touched():
-    out = flags.allocate(want("a", "b"), {RES: {1: 3}},
+    out = relevel(want("a", "b"), {RES: {1: 3}},
                          read(a=(RES, 4), b=(RES, 2)),
                          sizes={"a": 9000, "b": 1000})
     assert out["moves"] == []
@@ -111,7 +116,7 @@ def test_an_unread_village_is_left_alone():
 def test_a_village_on_cooldown_is_left_alone():
     readings = read(a=(RES, 1), b=None)
     readings["a"]["cooldown"] = True
-    out = flags.allocate(want("a", "b"), {RES: {5: 1, 2: 1}}, readings,
+    out = relevel(want("a", "b"), {RES: {5: 1, 2: 1}}, readings,
                          sizes={"a": 9000, "b": 1})
     # a is on cooldown: it gets nothing now, but the level 5 it is due is not
     # handed to the smaller b in the meantime.
@@ -122,7 +127,7 @@ def test_a_village_on_cooldown_is_left_alone():
 def test_when_short_nobody_loses_a_flag():
     # Three villages, one standing flag and one free one: the holder keeps its
     # level 1 even though it is the smallest, the biggest gets the free one.
-    out = flags.allocate(want("a", "b", "c"), {RES: {4: 1}},
+    out = relevel(want("a", "b", "c"), {RES: {4: 1}},
                          read(a=(RES, 1), b=None, c=None),
                          sizes={"a": 10, "b": 9000, "c": 5000})
     assert targets(out) == {"b": 4}
@@ -132,7 +137,7 @@ def test_when_short_nobody_loses_a_flag():
 def test_a_more_specific_row_is_served_first():
     desired = want("a", priority=0)
     desired.update(want("b", priority=1))
-    out = flags.allocate(desired, {RES: {5: 1, 1: 1}}, read(a=None, b=None),
+    out = relevel(desired, {RES: {5: 1, 1: 1}}, read(a=None, b=None),
                          sizes={"a": 9000, "b": 10})
     assert targets(out) == {"b": 5, "a": 1}
 
@@ -140,7 +145,7 @@ def test_a_more_specific_row_is_served_first():
 def test_a_swap_cycle_waits_instead_of_failing():
     # Neither level is free: a needs b's 5 and b needs a's 4 and nothing
     # lies free, so neither move can be the first one.
-    out = flags.allocate(want("a", "b"), {}, read(a=(RES, 4), b=(RES, 5)),
+    out = relevel(want("a", "b"), {}, read(a=(RES, 4), b=(RES, 5)),
                          sizes={"a": 9000, "b": 10})
     assert out["moves"] == []
     assert sorted(m["village_id"] for m in out["waiting"]) == ["a", "b"]
@@ -149,7 +154,7 @@ def test_a_swap_cycle_waits_instead_of_failing():
 def test_the_free_pool_is_what_the_game_counts():
     # The inventory is free flags only: a standing flag must not be taken off
     # the count a second time.
-    out = flags.allocate(want("a", "b"), {RES: {2: 1}},
+    out = relevel(want("a", "b"), {RES: {2: 1}},
                          read(a=(RES, 2), b=None), sizes={"a": 9000, "b": 10})
     assert out["moves"] == [{"village_id": "b", "flag_type": RES, "level": 2,
                              "from": None}]
@@ -209,7 +214,8 @@ def test_apply_swaps_a_high_flag_up_and_keeps_a_hand_hung_one():
                     {RES: {2: 3}})
     state = run_pass(game, ["small", "big", "op"],
                      {"small": 100, "big": 9000, "op": 8000},
-                     [{"group_id": "0", "flag_type": RES}])
+                     [{"group_id": "0", "flag_type": RES}],
+                     {"upgrade_only": False})
     assert game.carrying == {"small": (RES, 2), "big": (RES, 5), "op": (ATTACK, 6)}
     assert [a[0] for a in game.assigned] == ["small", "big"]
     assert all(r["ok"] for r in state["last_result"])
@@ -252,6 +258,49 @@ def test_a_refusal_is_remembered_and_not_asked_again():
               "villages": {"pop": {}, "b": {}}}
     flags.apply_plan(game, "pop", config, ["pop", "b"], source="bot")
     assert "pop" not in asked
+
+
+# -- upgrade only (the default) ----------------------------------------------
+
+def test_upgrade_only_never_moves_a_flag_down():
+    # small sits on a level 5, big on a level 1, only a level 2 lies free.
+    out = flags.allocate(want("small", "big"), {RES: {2: 1}},
+                         read(small=(RES, 5), big=(RES, 1)),
+                         sizes={"small": 500, "big": 9000})
+    assert targets(out) == {"big": 2}
+
+
+def test_upgrade_only_hands_the_old_flag_down_the_chain():
+    # One free level 7: the biggest takes it, its level 4 goes to the next,
+    # whose level 2 goes to the one with nothing.
+    out = flags.allocate(want("a", "b", "c"), {RES: {7: 1}},
+                         read(a=(RES, 4), b=(RES, 2), c=None),
+                         sizes={"a": 9000, "b": 5000, "c": 100})
+    assert targets(out) == {"a": 7, "b": 4, "c": 2}
+    assert out["waiting"] == []
+    assert [m["village_id"] for m in out["moves"]] == ["a", "b", "c"]
+
+
+def test_upgrade_only_leaves_a_settled_account_alone():
+    out = flags.allocate(want("a", "b"), {RES: {1: 5, 2: 3}},
+                         read(a=(RES, 4), b=(RES, 3)), sizes={"a": 9000, "b": 10})
+    assert out["moves"] == []
+
+
+def test_upgrade_only_keeps_an_upgrade_for_a_village_on_cooldown():
+    readings = read(a=(RES, 1), b=(RES, 1))
+    readings["a"]["cooldown"] = True
+    out = flags.allocate(want("a", "b"), {RES: {5: 1, 3: 1}}, readings,
+                         sizes={"a": 9000, "b": 10})
+    assert targets(out) == {"b": 3}
+
+
+def test_upgrade_only_switches_type_when_the_plan_says_so():
+    # A village moved into a recruitment row swaps its resource flag for the
+    # best free recruitment flag; keep_manual off, as the plan decides.
+    out = flags.allocate(want("a", flag_type=2), {2: {6: 1, 2: 4}},
+                         read(a=(RES, 3)), keep_manual=False)
+    assert targets(out) == {"a": 6}
 
 
 if __name__ == "__main__":
