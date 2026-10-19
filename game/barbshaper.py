@@ -5,12 +5,13 @@ normal farm loop can farm them without bleeding light cavalry on the wall.
 
 Community-verified wall mechanics this is built on (see also game/simulator.py):
 - Rams do pre-battle damage: the fight happens at a reduced wall level, but
-  never below half the original level (rounded up).
+  never below half the original level (rounded down, so a wall 1 is fought at 0).
 - Winning the fight downgrades the wall afterwards by roughly
   rams / (2 * 1.09^wall) levels, so a clean full raze of level W needs about
   2 * W * 1.09^W rams (e.g. wall 10 -> ~48, wall 20 -> ~225).
 - An empty village still fights back through the wall's basic defense
-  (20 * 1.25^level during the battle), which is what kills unescorted troops.
+  (game/simulator.py WALL_BASE_DEFENSE: 97 at level 1, 402 at 5, 656 at 10),
+  which is what kills unescorted troops.
   The axe escort is sized so even a worst-case luck roll (-25%) keeps the
   expected losses under a configurable tolerance.
 """
@@ -81,10 +82,8 @@ class BarbShaper:
     @classmethod
     def wall_during_battle(cls, rams, wall):
         """Wall level the fight is actually fought at: rams' pre-battle damage,
-        capped at half the original level (the game never lets pre-damage go
-        further than that)."""
-        return max(cls.sim.pre_wall(num_rams=rams, wall=wall),
-                   int(math.ceil(wall / 2)))
+        which never takes the wall below half its level (rounded down)."""
+        return cls.sim.pre_wall(num_rams=rams, wall=wall)
 
     @classmethod
     def expected_losses(cls, axes, rams, wall):
