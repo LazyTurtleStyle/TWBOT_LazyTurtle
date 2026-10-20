@@ -20,7 +20,7 @@ try:
                                   AccountManagerOverview, EventOverview,
                                   MintingOverview, FlagsOverview,
                                   BalancerOverview, ReportAnalysisOverview,
-                                  MarketOverview)
+                                  MarketOverview, PremiumOverview)
 except ImportError:
     from helpfile import (help_file, buildings, section_labels, config_groups,
                           section_setup, unit_building, unit_list,
@@ -29,7 +29,7 @@ except ImportError:
                        UnitTemplateManager, OverviewBuilder, PlanImport,
                        AccountManagerOverview, EventOverview, MintingOverview,
                        FlagsOverview, BalancerOverview, ReportAnalysisOverview,
-                       MarketOverview)
+                       MarketOverview, PremiumOverview)
 
 import datetime
 from html import escape as html_escape
@@ -1054,7 +1054,8 @@ def balancer_page():
 @app.route('/market', methods=['GET'])
 def market_page():
     data = sync()
-    return render_template('market.html', data=data, mk=MarketOverview.build(data))
+    return render_template('market.html', data=data, mk=MarketOverview.build(data),
+                           pm=PremiumOverview.build(data))
 
 
 @app.route('/report_analysis', methods=['GET'])

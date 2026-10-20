@@ -13,7 +13,26 @@
 	.mk-tag { font-size: 10px; letter-spacing: .02em; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--ink-dim); }
 	.mk-tag.spare { border-color: var(--moss); color: var(--moss); }
 	.mk-tag.short { border-color: var(--blood); color: var(--blood); }
+	.pm-set label { margin-bottom: 0; }
+	.pm-set .row-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .55rem; }
+	.pm-set input[type=number] { width: 78px !important; display: inline-block; padding: 1px 6px; }
+	.pm-chart { width: 100%; height: 260px; position: relative; }
+	.pm-chart svg { width: 100%; height: 100%; display: block; }
+	.pm-tip { position: absolute; pointer-events: none; background: var(--surface-2, #2a251d); border: 1px solid var(--line);
+		border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--ink); display: none; white-space: nowrap; z-index: 5; }
+	.pm-legend { display: flex; gap: 1rem; font-size: 12px; color: var(--ink-dim); flex-wrap: wrap; }
+	.pm-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+	.pm-full { color: var(--ink-faint); }
+	.pm-open { color: var(--moss); font-weight: 600; }
 </style>
+
+<ul class="nav nav-tabs mb-3" id="mk-tabs">
+	<li class="nav-item"><a class="nav-link active" href="#resources" data-pane="resources">Resources</a></li>
+	<li class="nav-item"><a class="nav-link" href="#premium" data-pane="premium">Premium points
+		{% if pm.available and pm.conf.track_market %}<span class="badge badge-success">watching</span>{% endif %}</a></li>
+</ul>
+
+<div id="pane-resources">
 
 <p class="text-muted small mt-1">
 	Where your wood, clay and iron are. A resource is marked <span class="mk-spare">spare</span> or
@@ -115,6 +134,134 @@
 		<em>On its way</em> is the last transport overview the balancer read.
 	</div>
 </div>
+
+</div>
+
+<div id="pane-premium" style="display:none">
+{% if not pm.available %}
+<div class="alert alert-secondary py-2 small">The premium exchange module could not be loaded.</div>
+{% else %}
+<p class="text-muted small mt-1">
+	The premium exchange is one market for the whole world. You can only sell into it while its stock is under
+	the capacity, and the price is best right after someone has bought it out &mdash; windows that close within
+	minutes. The watcher reads the exchange every few minutes (one page, whatever the number of villages, only in
+	active hours) so you can see when those windows open on this world and what a good price is.
+	<strong>Koers</strong> is the game's number: resources per premium point. Lower is better for selling.
+</p>
+
+<div class="grid-2">
+	<div class="stack">
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>The exchange now</strong>
+				<small class="text-muted ml-2">{% if pm.last_read %}read {{ pm.last_read|ago }}{% if pm.conf.track_market and pm.next_read %} &middot; next read {{ pm.next_read|ts }}{% endif %}{% else %}never read{% endif %}</small></div>
+			{% if pm.current %}
+			<div class="table-responsive">
+				<table class="table table-sm mb-0 mk-table">
+					<thead><tr><th></th><th class="text-right">Stock</th><th class="text-right">Capacity</th>
+						<th class="text-right">Room to sell</th><th class="text-right" title="the game's Koers: resources one point buys">Koers</th>
+						<th class="text-right" title="what selling one more point costs right now">Sell 1 pt</th></tr></thead>
+					<tbody>
+					{% for c in pm.current %}
+					<tr><td><span class="mk-res"><img src="/static/images/{{ c.res }}.png" alt="{{ c.res }}">{{ {'wood':'Wood','stone':'Clay','iron':'Iron'}[c.res] }}</span></td>
+						<td class="text-right mono">{{ c.stock|comma }}</td><td class="text-right mono">{{ c.capacity|comma }}</td>
+						<td class="text-right mono">{% if c.room %}<span class="pm-open">{{ c.room|comma }}</span>{% else %}<span class="pm-full">full</span>{% endif %}</td>
+						<td class="text-right mono">{{ c.koers }}</td><td class="text-right mono">{{ c.sell_cost }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">No reading yet. Turn on <em>Watch the exchange</em> below; the
+				first read happens within a minute or two, in active hours.</div>
+			{% endif %}
+		</div>
+
+		<div class="card mb-3">
+			<div class="card-header py-2 d-flex align-items-center"><strong>Koers over time</strong>
+				<small class="text-muted ml-2">{{ pm.history|length }} reading(s) &middot; dots mark a reading with room to sell</small></div>
+			<div class="card-body py-2">
+				{% if pm.history|length > 1 %}
+				<div class="pm-legend mb-2" id="pm-legend"></div>
+				<div class="pm-chart" id="pm-chart"><div class="pm-tip" id="pm-tip"></div></div>
+				{% else %}
+				<div class="small text-muted">The chart fills in once the watcher has read the exchange a few times.</div>
+				{% endif %}
+			</div>
+		</div>
+
+		{% if pm.windows %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Sell windows</strong>
+				<small class="text-muted ml-2">readings that had room, newest first</small></div>
+			<div class="table-responsive">
+				<table class="table table-sm table-striped mb-0 mk-table">
+					<thead><tr><th>When</th><th>Room</th></tr></thead>
+					<tbody>
+					{% for w in pm.windows %}
+					<tr><td class="mono">{{ w.ts|ts }}</td>
+						<td>{% for r in w.res %}<span class="mk-res mr-2"><img src="/static/images/{{ r }}.png" alt="{{ r }}">{{ w.room[r]|kshort }} at {{ w.koers[r] }}</span>{% endfor %}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
+	</div>
+
+	<div class="stack">
+		<div class="card mb-3 pm-set">
+			<div class="card-header py-2"><strong>Settings</strong> <small class="text-muted ml-2">this world only &middot; saved as you change them</small></div>
+			<div class="card-body py-2 small">
+				<div class="row-line"><label><input type="checkbox" data-pm="track_market" {{ 'checked' if pm.conf.track_market }}>
+					<strong>Watch the exchange</strong></label></div>
+				<div class="row-line">Read it every
+					<input type="number" min="1" data-pm="track_min_minutes" value="{{ pm.conf.track_min_minutes }}"> to
+					<input type="number" min="1" data-pm="track_max_minutes" value="{{ pm.conf.track_max_minutes }}"> minutes
+					<span class="text-muted">(random in between, active hours only)</span></div>
+				<hr class="my-2">
+				<div class="row-line"><label><input type="checkbox" data-pm="sell" disabled {{ 'checked' if pm.conf.sell }}>
+					<strong>Sell</strong></label>
+					<span class="badge badge-secondary">not built yet</span></div>
+				<div class="text-muted mb-2">Selling comes after a few days of readings. The settings below already work for
+					the dry run underneath, so you can see what they would do.</div>
+				<div class="row-line">Sell while the Koers is at or below <span class="text-muted">(0 = never)</span></div>
+				<div class="row-line" style="white-space:nowrap">
+					<span class="mk-res"><img src="/static/images/wood.png" alt="wood"></span><input type="number" min="0" data-pm="max_rate.wood" value="{{ pm.conf.max_rate.wood }}">
+					<span class="mk-res"><img src="/static/images/stone.png" alt="clay"></span><input type="number" min="0" data-pm="max_rate.stone" value="{{ pm.conf.max_rate.stone }}">
+					<span class="mk-res"><img src="/static/images/iron.png" alt="iron"></span><input type="number" min="0" data-pm="max_rate.iron" value="{{ pm.conf.max_rate.iron }}"></div>
+				<div class="row-line">Villages keep at least <input type="number" min="0" max="100" data-pm="keep_pct" value="{{ pm.conf.keep_pct }}">% of their warehouse</div>
+				<div class="row-line">At most <input type="number" min="0" data-pm="max_pp_per_day" value="{{ pm.conf.max_pp_per_day }}"> points a day</div>
+				<div class="row-line"><label><input type="checkbox" data-pm="skip_short" {{ 'checked' if pm.conf.skip_short }}>
+					Never sell a resource a village is short of</label></div>
+			</div>
+		</div>
+
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Dry run</strong> <small class="text-muted ml-2">what these settings would sell against the last reading &mdash; nothing is sent</small></div>
+			{% if pm.preview %}
+			<div class="table-responsive">
+				<table class="table table-sm mb-0 mk-table">
+					<thead><tr><th></th><th class="text-right">Your limit</th><th class="text-right">Points the market takes</th>
+						<th class="text-right">Spare in villages</th><th class="text-right">Would sell</th></tr></thead>
+					<tbody>
+					{% for p in pm.preview %}
+					<tr><td><span class="mk-res"><img src="/static/images/{{ p.res }}.png" alt="{{ p.res }}">{{ {'wood':'Wood','stone':'Clay','iron':'Iron'}[p.res] }}</span></td>
+						<td class="text-right mono">{{ p.limit or 'never' }}</td>
+						<td class="text-right mono">{% if p.points %}{{ p.points }} pt for {{ p.cost|kshort }}{% else %}—{% endif %}</td>
+						<td class="text-right mono">{{ p.supply|kshort }}</td>
+						<td class="text-right mono">{{ p.would or '—' }}{% if p.would %} pt{% endif %}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% else %}
+			<div class="card-body py-2 small text-muted">Needs a reading of the exchange first.</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+{% endif %}
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -131,6 +278,141 @@
 	}
 	box.addEventListener('change', apply);
 	apply();
+})();
+</script>
+
+<script>
+(function () {
+	// Tabs, remembered in the URL hash.
+	function show(pane) {
+		$('#mk-tabs .nav-link').each(function () {
+			var me = $(this).data('pane') === pane;
+			$(this).toggleClass('active', me);
+			$('#pane-' + $(this).data('pane')).toggle(me);
+		});
+		if (pane === 'premium' && window.pmDraw) window.pmDraw();
+	}
+	$('#mk-tabs .nav-link').click(function (e) {
+		e.preventDefault();
+		var pane = $(this).data('pane');
+		history.replaceState(null, '', '#' + pane);
+		show(pane);
+	});
+	if (location.hash === '#premium') show('premium');
+
+	// Settings: each control saves its own premium.* key.
+	$('[data-pm]').on('change', function () {
+		var key = $(this).data('pm');
+		var value = this.type === 'checkbox' ? (this.checked ? 'true' : 'false') : (this.value === '' ? '0' : this.value);
+		$.getJSON('/app/config/set?parameter=premium.' + encodeURIComponent(key) + '&value=' + encodeURIComponent(value))
+			.fail(function () { alert('Not saved: the panel refused the value'); });
+	});
+})();
+
+(function () {
+	var HIST = {{ pm.history|tojson if pm.available else '[]' }};
+	var box = document.getElementById('pm-chart');
+	if (!box || HIST.length < 2) return;
+	var SERIES = [
+		{key: 'wood', name: 'Wood', color: '#3987e5'},
+		{key: 'stone', name: 'Clay', color: '#d95926'},
+		{key: 'iron', name: 'Iron', color: '#199e70'}
+	];
+	var legend = document.getElementById('pm-legend');
+	legend.innerHTML = SERIES.map(function (s) {
+		return '<span><i style="background:' + s.color + '"></i>' + s.name + '</span>';
+	}).join('') + '<span><i style="background:var(--ink-faint);height:8px;width:8px;border-radius:50%"></i>room to sell</span>';
+	var NS = 'http://www.w3.org/2000/svg';
+	function el(tag, attrs) {
+		var n = document.createElementNS(NS, tag);
+		for (var k in attrs) n.setAttribute(k, attrs[k]);
+		return n;
+	}
+	function fmtTime(ts) {
+		var d = new Date(ts * 1000);
+		return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + ' '
+			+ ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+	}
+	window.pmDraw = function () {
+		var old = box.querySelector('svg');
+		if (old) old.remove();
+		var W = box.clientWidth, H = box.clientHeight;
+		if (!W) return;
+		var m = {l: 46, r: 58, t: 8, b: 24};
+		var t0 = HIST[0].ts, t1 = HIST[HIST.length - 1].ts;
+		var vals = [];
+		HIST.forEach(function (h) { SERIES.forEach(function (s) { if (h.koers[s.key]) vals.push(h.koers[s.key]); }); });
+		var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+		var pad = Math.max(5, (hi - lo) * 0.08);
+		lo = Math.max(0, Math.floor((lo - pad) / 10) * 10); hi = Math.ceil((hi + pad) / 10) * 10;
+		function X(ts) { return m.l + (ts - t0) / Math.max(1, t1 - t0) * (W - m.l - m.r); }
+		function Y(v) { return m.t + (hi - v) / Math.max(1, hi - lo) * (H - m.t - m.b); }
+		var svg = el('svg', {viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+			'aria-label': 'Koers per resource over time'});
+		for (var i = 0; i <= 4; i++) {
+			var v = lo + (hi - lo) * i / 4, y = Y(v);
+			svg.appendChild(el('line', {x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: 'var(--line-soft)', 'stroke-width': 1}));
+			var tx = el('text', {x: m.l - 6, y: y + 4, 'text-anchor': 'end', fill: 'var(--ink-faint)', 'font-size': 11});
+			tx.textContent = Math.round(v); svg.appendChild(tx);
+		}
+		for (var j = 0; j <= 3; j++) {
+			var ts = t0 + (t1 - t0) * j / 3, x = X(ts);
+			var lb = el('text', {x: x, y: H - 6, 'text-anchor': j === 0 ? 'start' : (j === 3 ? 'end' : 'middle'),
+				fill: 'var(--ink-faint)', 'font-size': 11});
+			lb.textContent = fmtTime(ts); svg.appendChild(lb);
+		}
+		var ends = [];
+		SERIES.forEach(function (s) {
+			var d = '', last = null;
+			HIST.forEach(function (h) {
+				var v = h.koers[s.key]; if (!v) return;
+				d += (d ? 'L' : 'M') + X(h.ts).toFixed(1) + ',' + Y(v).toFixed(1);
+				last = h;
+			});
+			svg.appendChild(el('path', {d: d, fill: 'none', stroke: s.color, 'stroke-width': 2,
+				'stroke-linejoin': 'round', 'stroke-linecap': 'round'}));
+			HIST.forEach(function (h) {
+				if (h.room[s.key] > 0 && h.koers[s.key]) {
+					svg.appendChild(el('circle', {cx: X(h.ts), cy: Y(h.koers[s.key]), r: 4,
+						fill: s.color, stroke: 'var(--surface)', 'stroke-width': 2}));
+				}
+			});
+			if (last) ends.push({s: s, y: Y(last.koers[s.key]), v: last.koers[s.key]});
+		});
+		ends.sort(function (a, b) { return a.y - b.y; });
+		for (var k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 13) ends[k].y = ends[k - 1].y + 13;
+		ends.forEach(function (e) {
+			var t = el('text', {x: W - m.r + 6, y: e.y + 4, fill: 'var(--ink-dim)', 'font-size': 11});
+			t.textContent = e.s.name + ' ' + e.v; svg.appendChild(t);
+		});
+		var cross = el('line', {y1: m.t, y2: H - m.b, stroke: 'var(--ink-faint)', 'stroke-width': 1,
+			'stroke-dasharray': '3 3', visibility: 'hidden'});
+		svg.appendChild(cross);
+		var hit = el('rect', {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: 'transparent'});
+		svg.appendChild(hit);
+		var tip = document.getElementById('pm-tip');
+		hit.addEventListener('mousemove', function (ev) {
+			var r = svg.getBoundingClientRect(), mx = ev.clientX - r.left;
+			var best = HIST[0];
+			HIST.forEach(function (h) { if (Math.abs(X(h.ts) - mx) < Math.abs(X(best.ts) - mx)) best = h; });
+			var bx = X(best.ts);
+			cross.setAttribute('x1', bx); cross.setAttribute('x2', bx); cross.setAttribute('visibility', 'visible');
+			tip.innerHTML = '<div style="color:var(--ink-dim)">' + fmtTime(best.ts) + '</div>' + SERIES.map(function (s) {
+				var room = best.room[s.key];
+				return '<div><i style="display:inline-block;width:10px;height:3px;background:' + s.color
+					+ ';vertical-align:middle;margin-right:5px"></i>' + s.name + ' <b>' + best.koers[s.key] + '</b> '
+					+ (room > 0 ? '<span style="color:var(--moss)">' + Math.round(room / 1000) + 'k room</span>'
+						: '<span style="color:var(--ink-faint)">full</span>') + '</div>';
+			}).join('');
+			tip.style.display = 'block';
+			var left = bx + 12; if (left + tip.offsetWidth > W) left = bx - tip.offsetWidth - 12;
+			tip.style.left = left + 'px'; tip.style.top = (m.t + 4) + 'px';
+		});
+		hit.addEventListener('mouseleave', function () { cross.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
+		box.insertBefore(svg, tip);
+	};
+	window.addEventListener('resize', function () { if ($('#pane-premium').is(':visible')) window.pmDraw(); });
+	if ($('#pane-premium').is(':visible')) window.pmDraw();
 })();
 </script>
 {% endblock %}
