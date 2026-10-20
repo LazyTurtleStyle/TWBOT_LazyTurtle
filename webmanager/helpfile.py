@@ -170,6 +170,7 @@ help_file = {
     'flags.auto_upgrade': 'When ON, combine 3 spare flags of the same type and level into one of the next level. OFF by default so the bot never consumes your flags unless you ask, and a flag standing on a village is never one of the three.',
     'flags.keep_manual': 'When ON (default), a village carrying a flag of another type than the plan asks of it is left alone: that is taken to be a flag you hung by hand, like an attack flag for an op or a defence flag under fire. Take it off in the game and the next Apply gives the village its planned flag again. OFF replaces it with the planned flag.',
     'flags.upgrade_only': 'ON (default): a village only ever gets a BETTER flag - when a higher level of the type it wants lies free, the biggest village takes it and hands its old flag down to the next. Nothing is taken off a village to move it down, so a flag that is fine where it is stays there and no village is put on the 24-hour cooldown just to shuffle levels. OFF: the levels are re-sorted by village size every pass, so a high flag on a small village is moved to a bigger one.',
+    'flags.min_upgrade_levels': 'With upgrade_only on: how many levels better a flag must be before a village that already carries that type swaps for it. Every swap puts the village on the game\'s 24-hour flag cooldown, so a chain of one-level steps (+2% each) is mostly churn; 2 skips those. A village without a flag of the type always gets the best free one. The "Recheck all" button on the Overview page runs one pass that takes every upgrade anyway.',
     'flags.max_reads_per_run': 'How many village flag screens to read in one pass. Each is one request, and the reading is cached for half a day (a flag only moves when the bot moves it), so this only bites on the first run of a large account - which is then spread over a few cycles instead of going out as a burst.',
     'village.flag_type': 'Which flag this village keeps when NO row on the Flags page matches it: 1 Resource, 2 Recruitment, 3 Attack, 4 Defense, 5 Luck, 6 Population, 7 Coin cost, 8 Haul. Off = never assign a flag. A group row on the Flags page beats this.',
     'village_template': 'The default template for villages to use',
@@ -404,7 +405,7 @@ config_groups = {
         ('On/off', ['manage', 'auto_assign']),
         ('Upgrading', ['auto_upgrade']),
         ('Hand-hung flags', ['keep_manual']),
-        ('Moving flags', ['upgrade_only']),
+        ('Moving flags', ['upgrade_only', 'min_upgrade_levels']),
         ('Cost', ['max_reads_per_run']),
     ],
 }

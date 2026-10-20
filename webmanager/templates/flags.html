@@ -73,7 +73,7 @@
 			<span class="badge {{ 'badge-success' if fl.auto_assign else 'badge-secondary' }}">daily auto-assign {{ 'ON' if fl.auto_assign else 'OFF' }}</span>
 			<span class="badge {{ 'badge-success' if fl.auto_upgrade else 'badge-secondary' }}">auto-upgrade {{ 'ON' if fl.auto_upgrade else 'OFF' }}</span>
 			<span class="badge {{ 'badge-success' if fl.keep_manual else 'badge-secondary' }}">hand-hung flags {{ 'kept' if fl.keep_manual else 'replaced' }}</span>
-			<span class="badge {{ 'badge-success' if fl.upgrade_only else 'badge-secondary' }}">{{ 'only better flags placed' if fl.upgrade_only else 'levels re-sorted by size' }}</span>
+			<span class="badge {{ 'badge-success' if fl.upgrade_only else 'badge-secondary' }}">{{ ('only better flags placed, at least %d level(s) better' % fl.min_gain) if fl.upgrade_only else 'levels re-sorted by size' }}</span>
 			<a href="/config#flags" class="ml-2">change</a>
 		</div>
 		{% if not fl.manage %}
@@ -96,7 +96,7 @@
 		{% endif %}
 		{% if fl.pending_run or fl.pending_refresh %}
 		<div class="small mt-2" style="color:var(--ember)">
-			&#9201; {{ 'Apply' if fl.pending_run else 'Refresh' }} queued &mdash; it runs on the bot's next cycle.
+			&#9201; {{ ('Recheck (every upgrade)' if fl.pending_full else 'Apply') if fl.pending_run else 'Refresh' }} queued &mdash; it runs on the bot's next cycle.
 		</div>
 		{% endif %}
 	</div>

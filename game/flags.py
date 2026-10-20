@@ -130,6 +130,9 @@ def _normalize(raw):
             if isinstance(rows, list) else []}
     plan["run_now"] = bool(raw.get("run_now"))
     plan["refresh"] = bool(raw.get("refresh"))
+    # Set alongside run_now by the "recheck all" button: that one pass takes
+    # every upgrade, however small, instead of flags.min_upgrade_levels.
+    plan["full_recheck"] = bool(raw.get("full_recheck"))
     return plan
 
 
@@ -395,7 +398,7 @@ def _flag_of(reading):
 
 
 def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
-             refused=None, upgrade_only=True):
+             refused=None, upgrade_only=True, min_gain=1):
     """Decide which flag every village should carry, and the moves to get there.
 
     `inventory` is the game's own count, which is the *free* pool - a flag
@@ -475,7 +478,7 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
                         for _ in range(count)), reverse=True)
         standing = [v[2][1] for v in villages if v[2] and v[2][0] == flag_type]
         if upgrade_only:
-            targets.extend(_upgrades(flag_type, villages, spare, unmet))
+            targets.extend(_upgrades(flag_type, villages, spare, unmet, min_gain))
         elif len(spare) + len(standing) >= len(villages):
             pool = sorted(spare + standing, reverse=True)
             for index, (vid, _want, current, on_cooldown) in enumerate(villages):
@@ -504,7 +507,7 @@ def allocate(desired, inventory, readings, sizes=None, keep_manual=True,
             "held": held, "unread": unread, "refused": blocked, "free": free}
 
 
-def _upgrades(flag_type, villages, spare, unmet):
+def _upgrades(flag_type, villages, spare, unmet, min_gain=1):
     """Upgrade-only: hand out free flags, never take one off to move it down.
 
     `villages` is in rank order, biggest first; `spare` the free levels of this
@@ -514,12 +517,18 @@ def _upgrades(flag_type, villages, spare, unmet):
     level 7 can lift a whole chain, each village handing its old flag down.
     A village on cooldown still claims its upgrade, so the level is kept for it
     rather than going to a smaller village for a day.
+
+    `min_gain` is how many levels better a flag has to be before a village
+    that already carries the type swaps for it. Every swap costs the village
+    a 24-hour cooldown, so a chain of one-level steps (+2% each) is mostly
+    churn. A village with no flag of the type always takes the best one.
     """
     pool = list(spare)
     out = []
+    need = max(1, int(min_gain or 1))
     for vid, _want, current, on_cooldown in villages:
         level = current[1] if current and current[0] == flag_type else 0
-        if not pool or pool[0] <= level:
+        if not pool or (level and pool[0] < level + need):
             if not pool and not level:
                 unmet.append({"village_id": vid, "flag_type": flag_type})
             continue
@@ -713,6 +722,14 @@ RECHECK_AFTER = 10 * 60
 REFUSED_FOR = 3 * 24 * 3600
 
 
+def min_upgrade_levels(settings):
+    """flags.min_upgrade_levels, at least 1."""
+    try:
+        return max(1, int((settings or {}).get("min_upgrade_levels", 2)))
+    except (TypeError, ValueError):
+        return 2
+
+
 def _sizes(village_ids):
     """{village_id: points} from the bot's per-village cache, 0 when unknown."""
     sizes = {}
@@ -739,7 +756,8 @@ def _counts_from_response(result):
     return counts or None
 
 
-def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
+def apply_plan(wrapper, village_id, config, village_ids, source="bot",
+               full_recheck=False):
     """Read, decide, assign - and write down what happened for the dashboard.
 
     Returns the saved state. Every move is a value in `last_result`, error or
@@ -768,7 +786,8 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
                        sizes=_sizes(village_ids),
                        keep_manual=settings.get("keep_manual", True),
                        refused=refused,
-                       upgrade_only=settings.get("upgrade_only", True))
+                       upgrade_only=settings.get("upgrade_only", True),
+                       min_gain=1 if full_recheck else min_upgrade_levels(settings))
 
     readings = dict(state.get("readings") or {})
     live = {t: dict(levels) for t, levels in _inventory(state).items()}
@@ -838,7 +857,8 @@ def apply_plan(wrapper, village_id, config, village_ids, source="bot"):
             for t, levels in live.items()}
     state["last_result"] = results
     state["last_result_when"] = int(time.time())
-    state["last_result_source"] = "from the dashboard" if source == "dashboard" \
+    state["last_result_source"] = ("from the dashboard (all upgrades)" if full_recheck
+                                   else "from the dashboard") if source == "dashboard" \
         else "by the bot"
     state["unmet"] = outcome["unmet"]
     state["kept"] = outcome["kept"]
@@ -878,14 +898,16 @@ def run(wrapper, village_id, config, active_hours=True):
         refresh(wrapper, village_ids, settings.get("max_reads_per_run"))
 
     if plan.get("run_now"):
-        update_plan(lambda p: p.update({"run_now": False}))
+        full = bool(plan.get("full_recheck"))
+        update_plan(lambda p: p.update({"run_now": False, "full_recheck": False}))
         if not settings.get("manage", False):
             logger.info("Apply was asked for but flags.manage is off - nothing "
                         "was assigned")
         else:
-            logger.info("Applying the flag plan (asked from the dashboard)")
+            logger.info("Applying the flag plan (asked from the dashboard%s)",
+                        ", every upgrade" if full else "")
             apply_plan(wrapper, village_id, config, village_ids,
-                       source="dashboard")
+                       source="dashboard", full_recheck=full)
         return
 
     if not settings.get("manage", False) or not settings.get("auto_assign", False):

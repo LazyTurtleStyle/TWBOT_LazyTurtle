@@ -1557,12 +1557,34 @@ class DataReader:
         screen ("refresh") on its next cycle. The bot owns every game request:
         it is the process with the session, the pacing and the captcha
         handling."""
-        if kind not in ("run_now", "refresh") or flagmodule is None:
+        if kind not in ("run_now", "refresh", "full_recheck") or flagmodule is None:
             return False
         DataReader.ensure_data_dir("cache")
-        flagmodule.update_plan(lambda plan: plan.update({kind: True}),
+        # "full_recheck" is an Apply that takes every upgrade for one pass,
+        # ignoring flags.min_upgrade_levels.
+        change = {"run_now": True, "full_recheck": True} \
+            if kind == "full_recheck" else {kind: True}
+        flagmodule.update_plan(lambda plan: plan.update(change),
                                path=DataReader.flag_plan_path())
         return True
+
+    @staticmethod
+    def flags_status():
+        """The little the Overview page shows about flags: whether the bot
+        manages them, the last pass, and whether a pass is queued."""
+        settings = (DataReader.config_grab() or {}).get("flags", {}) or {}
+        plan = DataReader.flag_plan_grab()
+        state = DataReader.flag_state_grab()
+        results = state.get("last_result") or []
+        return {
+            "available": flagmodule is not None,
+            "manage": bool(settings.get("manage")),
+            "last_when": state.get("last_result_when"),
+            "last_moves": sum(1 for r in results if r.get("ok")),
+            "pending": bool(plan.get("run_now")),
+            "pending_full": bool(plan.get("full_recheck")),
+            "min_gain": settings.get("min_upgrade_levels", 2),
+        }
 
     @staticmethod
     def flag_state_grab():
@@ -5007,7 +5029,8 @@ class FlagsOverview:
             desired, inventory, readings, sizes=sizes,
             keep_manual=settings.get("keep_manual", True),
             refused=refused,
-            upgrade_only=settings.get("upgrade_only", True)) if flagmodule else {}
+            upgrade_only=settings.get("upgrade_only", True),
+            min_gain=flagmodule.min_upgrade_levels(settings)) if flagmodule else {}
         next_move = {m["village_id"]: ("move", m["level"])
                      for m in preview.get("moves") or []}
         next_move.update({m["village_id"]: ("waiting", m["level"])
@@ -5108,6 +5131,8 @@ class FlagsOverview:
             "auto_upgrade": bool(settings.get("auto_upgrade")),
             "keep_manual": bool(settings.get("keep_manual", True)),
             "upgrade_only": bool(settings.get("upgrade_only", True)),
+            "min_gain": flagmodule.min_upgrade_levels(settings) if flagmodule else 2,
+            "pending_full": bool(plan.get("full_recheck")),
             "moves_planned": len(preview.get("moves") or []),
             "world_has_flags": (config.get("world") or {}).get("flags_enabled"),
             "rows": rows,
