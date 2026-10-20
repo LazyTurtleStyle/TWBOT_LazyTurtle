@@ -57,6 +57,7 @@ from game import reportanalysis
 from game import snipe
 from game.noblebarb import NobleBarbManager, escort_reservations
 from game.massgather import MassGatherManager, settings as mass_settings
+from game import premium_market
 from game.playerfarm import PlayerFarmManager
 from manager import VillageManager
 from pages.overview import OverviewPage
@@ -1138,6 +1139,35 @@ class TWB:
             except Exception as exc:
                 logger.warning("Mass scavenge pass failed: %s", exc)
 
+    def premium_runner(self, config):
+        """Background loop: watch the premium exchange on its own clock.
+
+        One page read every track_min..track_max minutes (random), only while
+        premium.track_market is on and only in active hours - the windows worth
+        catching are when players are awake anyway. Disabled costs nothing.
+        """
+        logger = logging.getLogger("PremiumMarket")
+        poller = self._make_poller_wrapper(config)
+        while self.should_run:
+            time.sleep(60)
+            if not self.should_run:
+                break
+            try:
+                live = FileManager.load_json_file("config.json") or config
+                if not premium_market.settings(live)["track_market"]:
+                    continue
+                if not self.is_active_hours(config=live):
+                    continue
+                village_id = next(iter(live.get("villages") or {}), None)
+                if not village_id:
+                    continue
+                session = FileManager.load_json_file("cache/session.json")
+                if session and session.get("cookies"):
+                    poller.web.cookies.update(session["cookies"])
+                premium_market.watch(poller, village_id, live)
+            except Exception as exc:
+                logger.warning("Premium exchange read failed: %s", exc)
+
     def noble_runner(self, config):
         """Background loop: give armed noble jobs a real clock.
 
@@ -1450,6 +1480,13 @@ class TWB:
         )
         mass_thread.start()
         print("Mass scavenging runner started")
+        # The premium exchange, watched on a random 13-19 minute clock when
+        # premium.track_market is on.
+        premium_thread = threading.Thread(
+            target=self.premium_runner, args=(config,), daemon=True
+        )
+        premium_thread.start()
+        print("Premium exchange watcher started")
         while self.should_run:
             # Heartbeat: proof the main loop is still turning, independent of the
             # incoming-attack poller and scheduler threads, which run on their own

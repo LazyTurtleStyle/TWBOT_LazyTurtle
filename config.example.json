@@ -217,6 +217,20 @@
     "trade_round_to_1000": false,
     "trade_for_premium": false
   },
+  "premium": {
+    "track_market": false,
+    "track_min_minutes": 13,
+    "track_max_minutes": 19,
+    "sell": false,
+    "max_rate": {
+      "wood": 0,
+      "stone": 0,
+      "iron": 0
+    },
+    "keep_pct": 50,
+    "max_pp_per_day": 50,
+    "skip_short": true
+  },
   "balancer": {
     "enabled": false,
     "sender_min_points": 4000,

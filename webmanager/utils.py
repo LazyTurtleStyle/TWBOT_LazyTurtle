@@ -87,6 +87,11 @@ except Exception:  # pragma: no cover - dashboard still works without it
     flagmodule = None
 
 try:
+    from game import premium_market as premiummodule
+except Exception:  # pragma: no cover - dashboard still works without it
+    premiummodule = None
+
+try:
     from game.incomings import (
         load_world_speeds, travel_table, slowest_floor, rename_command_ingame,
         tag_check, exact_distance,
@@ -1609,6 +1614,27 @@ class DataReader:
         except (OSError, ValueError):
             pass
         return {}
+
+    @staticmethod
+    def _cache_json(name, default):
+        try:
+            path = DataReader.data_path("cache", name)
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f)
+        except (OSError, ValueError):
+            pass
+        return default
+
+    @staticmethod
+    def premium_state_grab():
+        """The premium exchange watcher's state: last reading, next read."""
+        return DataReader._cache_json("premium_market.json", {}) or {}
+
+    @staticmethod
+    def premium_history_grab():
+        rows = DataReader._cache_json("premium_market_history.json", [])
+        return rows if isinstance(rows, list) else []
 
     @staticmethod
     def transport_grab():
@@ -5587,4 +5613,87 @@ class MarketOverview:
                 "use_transport_overview": bool(bal.get("use_transport_overview")),
                 "auto_trade": bool(market.get("auto_trade")),
             },
+        }
+
+
+class PremiumOverview:
+    """The Market page's Premium points tab: the watcher's settings, the last
+    reading of the exchange, its history, and what selling would do right now
+    with the settings as they stand - worked out here, never sent."""
+
+    RES = ("wood", "stone", "iron")
+
+    @classmethod
+    def build(cls, data):
+        config = data.get("config", {}) or {}
+        if premiummodule is None:
+            return {"available": False}
+        conf = premiummodule.settings(config)
+        state = DataReader.premium_state_grab()
+        history = DataReader.premium_history_grab()
+        snap = state.get("last")
+        now = time.time()
+
+        current = []
+        if snap:
+            for r in cls.RES:
+                current.append({
+                    "res": r,
+                    "stock": snap["stock"][r], "capacity": snap["capacity"][r],
+                    "room": snap["room"][r], "koers": snap["koers"][r],
+                    "sell_cost": snap["sell_cost"][r],
+                    "fill": (snap["stock"][r] * 100 // snap["capacity"][r])
+                            if snap["capacity"][r] else 0,
+                })
+
+        # Sell windows: readings with room, newest first, per resource.
+        windows = []
+        for row in reversed(history):
+            open_ = [r for r in cls.RES
+                     if row["capacity"][r] - row["stock"][r] > 0]
+            if open_:
+                windows.append({"ts": row["ts"], "res": open_,
+                                "koers": {r: row["koers"][r] for r in open_},
+                                "room": {r: row["capacity"][r] - row["stock"][r]
+                                         for r in open_}})
+            if len(windows) >= 12:
+                break
+
+        # Dry run: what the settings would sell against the last reading.
+        preview = []
+        if snap:
+            managed = DataReader.cache_grab("managed") or {}
+            margin = int(((config.get("balancer") or {}).get("ratio_margin_pct", 20)) or 20)
+            for r in cls.RES:
+                limit = conf["max_rate"].get(r) or 0
+                points, cost = premiummodule.sellable_points(snap, r, limit)
+                supply = 0
+                for vid, v in managed.items():
+                    if not isinstance(v, dict):
+                        continue
+                    stock = {k: int((v.get("resources") or {}).get(k, 0) or 0) for k in cls.RES}
+                    cap = int(v.get("storage_max") or 0)
+                    if conf["skip_short"]:
+                        judged = MarketOverview._judge(stock, margin)
+                        if judged.get(r) == "short":
+                            continue
+                    supply += max(0, stock[r] - cap * conf["keep_pct"] // 100)
+                preview.append({"res": r, "limit": limit, "points": points,
+                                "cost": cost, "supply": supply,
+                                "would": min(points, int(supply / (cost / points)))
+                                if points and cost else 0})
+        return {
+            "available": True,
+            "conf": conf,
+            "current": current,
+            "last_read": state.get("last_read"),
+            "next_read": state.get("next_read"),
+            "last_error": state.get("last_error"),
+            "merchants": (snap or {}).get("merchants"),
+            "history": [{"ts": h["ts"], "koers": h["koers"],
+                         "room": {r: h["capacity"][r] - h["stock"][r] for r in cls.RES}}
+                        for h in history],
+            "windows": windows,
+            "preview": preview,
+            "now": int(now),
         }
