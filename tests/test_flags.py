@@ -303,6 +303,49 @@ def test_upgrade_only_switches_type_when_the_plan_says_so():
     assert targets(out) == {"a": 6}
 
 
+# -- minimum gain --------------------------------------------------------------
+
+def test_a_one_level_step_is_skipped_at_min_gain_two():
+    # Today's chain: a free 7 lifts 5 -> 7, and the freed 5 would lift a 4.
+    out = flags.allocate(want("big", "mid", "low"), {RES: {7: 1}},
+                         read(big=(RES, 5), mid=(RES, 4), low=(RES, 3)),
+                         sizes={"big": 9000, "mid": 6000, "low": 5000}, min_gain=2)
+    # big takes the 7 (+2); mid would only gain 1 from the 5, so it passes
+    # and the 5 goes to low, for whom it is +2.
+    assert targets(out) == {"big": 7, "low": 5}
+
+
+def test_a_village_without_the_type_always_gets_one():
+    out = flags.allocate(want("a"), {RES: {2: 1}}, read(a=None), min_gain=3)
+    assert targets(out) == {"a": 2}
+    out = flags.allocate(want("a", flag_type=2), {2: {1: 1}}, read(a=(RES, 4)),
+                         keep_manual=False, min_gain=3)
+    assert targets(out) == {"a": 1}
+
+
+def test_min_gain_one_is_the_full_chain():
+    out = flags.allocate(want("big", "mid", "low"), {RES: {7: 1}},
+                         read(big=(RES, 5), mid=(RES, 4), low=(RES, 3)),
+                         sizes={"big": 9000, "mid": 6000, "low": 5000}, min_gain=1)
+    assert targets(out) == {"big": 7, "mid": 5, "low": 4}
+
+
+def test_the_recheck_button_pass_takes_every_upgrade():
+    game = FakeGame({"big": (RES, 5), "mid": (RES, 4)}, {RES: {7: 1}})
+    sizes = {"big": 9000, "mid": 10}
+    rows = [{"group_id": "0", "flag_type": RES}]
+    saved = {}
+    flags.load_plan = lambda path=None: {"rows": rows}
+    flags.load_groups = lambda: []
+    flags.load_state = lambda path=None: {}
+    flags.save_state = lambda state: saved.update(state)
+    flags._sizes = lambda ids: sizes
+    config = {"flags": {"manage": True}, "villages": {"big": {}, "mid": {}}}
+    flags.apply_plan(game, "big", config, ["big", "mid"], source="dashboard",
+                     full_recheck=True)
+    assert game.carrying == {"big": (RES, 7), "mid": (RES, 5)}
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

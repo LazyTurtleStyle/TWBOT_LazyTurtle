@@ -286,6 +286,20 @@
 		</div>
 
 		<div class="panel">
+			<div class="panel-head"><h3>Flags</h3>
+				<div class="flex" style="gap:8px;align-items:center">
+					<span class="faint" style="font-size:12px" id="flags_status">{% if not flags.manage %}not managed by the bot{%
+						elif flags.pending %}{{ 'recheck (all upgrades)' if flags.pending_full else 'apply' }} queued for the next cycle{%
+						elif flags.last_when %}last pass {{ flags.last_when|ago }}, {{ flags.last_moves }} change(s){%
+						else %}no pass yet{% endif %}</span>
+					<a class="btn btn-sm" href="/flags">Flags</a>
+					<button class="btn btn-sm" id="flags_recheck_btn" onclick="recheck_flags()" {{ 'disabled' if (flags.pending or not flags.manage) }}
+						title="Run the flag plan once on the next cycle, taking every upgrade - even the one-level steps the daily pass skips (it needs at least {{ flags.min_gain }} levels).">Recheck all</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="panel">
 			<div class="panel-head"><h3>Session</h3>
 				<div class="flex" style="gap:8px;align-items:center">
 					<span class="coord">{{ active_world or 'default' }} &middot; {{ session.endpoint }}</span>
@@ -328,6 +342,17 @@
 
 {% block scripts %}
 <script>
+function recheck_flags() {
+	var btn = document.getElementById('flags_recheck_btn'), status = document.getElementById('flags_status');
+	btn.disabled = true;
+	fetch('/app/flags/recheck', {method: 'POST'})
+		.then(function (r) { return r.json(); })
+		.then(function (resp) {
+			if (!resp || !resp.ok) throw 0;
+			status.textContent = 'recheck (all upgrades) queued for the next cycle';
+		})
+		.catch(function () { btn.disabled = false; status.textContent = 'could not queue the recheck'; });
+}
 function refresh_groups() {
 	var btn = document.getElementById('groups_refresh_btn'), status = document.getElementById('groups_status');
 	btn.disabled = true;

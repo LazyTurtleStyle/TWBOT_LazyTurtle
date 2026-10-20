@@ -1030,6 +1030,13 @@ def flags_apply():
     return jsonify({"ok": DataReader.flag_request("run_now")})
 
 
+@app.route('/app/flags/recheck', methods=['POST'])
+def flags_recheck():
+    """Apply the flag plan once taking every upgrade, however small - the
+    Overview page's button for when flags.min_upgrade_levels held some back."""
+    return jsonify({"ok": DataReader.flag_request("full_recheck")})
+
+
 @app.route('/app/flags/refresh', methods=['GET', 'POST'])
 def flags_refresh():
     """Ask the bot to re-read the flag screen - the inventory, and which flag
@@ -2132,6 +2139,7 @@ def get_home():
                            overview=OverviewBuilder.build(data),
                            quick=quick_settings_state(),
                            groups=DataReader.groups_status(),
+                           flags=DataReader.flags_status(),
                            portal_domain=DataReader.portal_domain(),
                            portal_saved=bool(DataReader.portal_cookies_get()))
 

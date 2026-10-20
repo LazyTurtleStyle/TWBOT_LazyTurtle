@@ -251,6 +251,7 @@
     "auto_upgrade": false,
     "keep_manual": true,
     "upgrade_only": true,
+    "min_upgrade_levels": 2,
     "max_reads_per_run": 15
   },
   "villages": {}
