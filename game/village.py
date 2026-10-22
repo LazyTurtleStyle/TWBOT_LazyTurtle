@@ -341,9 +341,16 @@ class Village:
         except (KeyError, TypeError):
             return True
 
-    def run_builder(self):
+    def run_builder(self, build=True, refresh=True):
         """
-        Run building construction actions
+        Run building construction actions.
+
+        Called twice per village cycle: build=False early (manager setup plus a
+        level read with nothing queued - recruit templates key off building
+        levels) and build=True after recruiting so buildings spend what
+        recruiting left. refresh=False on the second call reuses that read:
+        recruiting cannot change the in-game build queue, so a re-fetch would
+        only burn a request.
         """
         if not self.builder:
             self.builder = BuildingManager(
@@ -419,12 +426,20 @@ class Village:
                 "Village %s: building, recruiting and research are account "
                 "managed - skipping the main screen", self.village_id)
             return
+        # Whatever spends resources queues nothing unless building is actually
+        # on for this village: the per-village off-switch, the account manager
+        # or manage_buildings=false each reduce the late pass to a no-op.
+        build = (
+            build
+            and not build_disabled
+            and not self.account_manager_handles("building")
+            and self.get_config(
+                section="building", parameter="manage_buildings", default=True
+            )
+        )
         self.builder.start_update(
-            build=(not build_disabled
-                   and not self.account_manager_handles("building")
-                   and self.get_config(
-                       section="building", parameter="manage_buildings", default=True
-                   )),
+            build=build,
+            refresh=refresh,
             set_village_name=self.village_set_name,
         )
 
@@ -477,6 +492,14 @@ class Village:
         """
         Fetches wanted units for the current buildings
         """
+        if not self.builder:
+            # Should not happen: run_builder(build=False) precedes this in
+            # run(). Guard anyway - this AttributeError used to take the whole
+            # bot down in a crash loop.
+            self.logger.warning(
+                "Village %s: no builder state, skipping unit wanted levels",
+                self.village_id)
+            return
         self.current_unit_entry = self.units.get_template_action(self.builder.levels)
 
         if self.current_unit_entry and self.units.wanted != self.current_unit_entry["build"]:
@@ -1241,7 +1264,9 @@ class Village:
         self.run_quest_actions(config=config)
 
         self.do_scavenge_unlock()
-        self.run_builder()
+        # Building levels must exist before the unit templates run, but the
+        # spend itself waits until after recruiting (priority spend order).
+        self.run_builder(build=False)
         self.units_get_template()
         self.set_unit_wanted_levels()
 
@@ -1256,9 +1281,15 @@ class Village:
                 "Village %s: skipping the rest of this pass, no game state",
                 self.village_id)
             return
-        self.run_unit_upgrades()
-        self.run_snob_recruit()
+        # Spend order is the priority order, and each step may hold the next:
+        # scavenge unlock (above) blocks recruiting; recruiting is bounded by
+        # the building queues; research funds from what recruiting leaves and
+        # holds the builder when an unlock is pending on resources; buildings
+        # spend last.
         self.do_recruit()
+        self.run_snob_recruit()
+        self.run_unit_upgrades()
+        self.run_builder(refresh=False)
         self.manage_local_resources()
         self.run_balancer()
 
