@@ -281,7 +281,11 @@ def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
             if not free:
                 continue
             spare = have[res] - storage * conf["keep_pct"] // 100
-            budget = min(spare, int(free) * 1000)
+            # The village's own visit publishes what its plan must keep
+            # (registered requests, the unpaid build queue, the regen
+            # reserve); selling stops at the keep share minus that reserve.
+            reserve = int((v.get("reserves") or {}).get(res) or 0)
+            budget = min(spare - reserve, int(free) * 1000)
             if budget > 0:
                 donors.append((budget, str(vid)))
         for budget, vid in sorted(donors, reverse=True):

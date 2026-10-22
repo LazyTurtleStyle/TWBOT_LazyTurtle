@@ -1116,7 +1116,56 @@ class Village:
         ):
             # Set the parameter correctly when the config says so.
             self.resman.do_premium_trade = True
-            self.resman.do_premium_stuff()
+            self.resman.planned_build_spend = self.builder_plan_costs()
+            if self.get_config(section="premium", parameter="sell", default=False):
+                # The exchange seller on the watcher thread owns selling; two
+                # sellers would double-sell the same surplus. This visit only
+                # publishes what the village must keep (requested resources,
+                # the unpaid build queue, the regen reserve) so plan_sales
+                # never sells into the plan.
+                self.publish_premium_reserves()
+            else:
+                self.resman.do_premium_stuff()
+
+    def publish_premium_reserves(self):
+        """Write what this village must keep out of premium sales to its
+        managed snapshot, for premium_market.plan_sales to subtract.
+
+        The reserve is the same one the local seller honoured: everything
+        registered requests and the unpaid build queue need from a resource,
+        minus what passive regen regrows before the plan's gate opens. A
+        resource whose budget cannot be computed (unknown income below the
+        cap line) reserves everything - never sell what cannot be sized.
+        """
+        reserves = {}
+        for res in ("wood", "stone", "iron"):
+            budget = self.resman.premium_budget(res)
+            actual = int(self.resman.actual.get(res, 0) or 0)
+            reserves[res] = actual - budget if budget is not None else actual
+        path = "cache/managed/%s.json" % self.village_id
+        snapshot = FileManager.load_json_file(path)
+        if snapshot:
+            snapshot["reserves"] = reserves
+            FileManager.save_json_file_atomic(snapshot, path)
+
+    def builder_plan_costs(self):
+        """Resource cost of the build queue that has not been paid yet.
+        In-game queue entries were paid when they were queued; the rest of the
+        bot's planned order is not. Costs come from the main screen's
+        per-building next-level data (builder.costs)."""
+        builder = self.builder
+        if not builder or not builder.queue:
+            return {}
+        paid = builder.queue_count_ingame or 0
+        planned = {}
+        for entry in builder.queue[paid:]:
+            name = entry.split(":")[0]
+            cost = (builder.costs or {}).get(name)
+            if not cost:
+                continue
+            for res in ("wood", "stone", "iron"):
+                planned[res] = planned.get(res, 0) + int(cost.get(res) or 0)
+        return planned
 
     def visit_reason(self, config, snapshot):
         """Why this village has to be opened this cycle, or None when the

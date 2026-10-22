@@ -160,6 +160,20 @@ def test_plan_respects_limit_daily_cap_and_short_resources():
     assert lopsided and all(x["res"] != "iron" for x in lopsided)
 
 
+def test_plan_subtracts_the_keep_reserve_a_visit_published():
+    snap = pm.snapshot(DATA)
+    v = village(60000, 60000, 60000)
+    # The plan needs almost all of the spare iron; only the rest may go.
+    v["reserves"] = {"wood": 0, "stone": 0, "iron": 9000}
+    sales = pm.plan_sales(snap, conf(), {"a": v})
+    assert sum(x["amount"] for x in sales if x["res"] == "iron") <= 1000
+    # Everything reserved: this village is not a donor at all.
+    v["reserves"] = {"wood": 30000, "stone": 30000, "iron": 30000}
+    assert pm.plan_sales(snap, conf(), {"a": v}) == []
+    # A village without a published reserve behaves as before.
+    assert pm.plan_sales(snap, conf(), {"a": village(60000, 60000, 60000)})
+
+
 def test_plan_never_sells_into_a_full_market_or_without_merchants():
     full = pm.snapshot(dict(DATA, stock=dict(DATA["capacity"])))
     assert pm.plan_sales(full, conf(), {"a": village(90000, 90000, 90000)}) == []

@@ -127,6 +127,15 @@ class ResourceManager:
     wrapper = None
     village_id = None
     do_premium_trade = False
+    # Resources/hour, captured from game_state (village.*_prod) by update().
+    production = {}
+    # At/above this fraction of storage a resource is about to overflow, so it
+    # can be sold straight down to the full planned need (see premium_budget).
+    premium_cap_pct = 0.9
+    # Cost of the not-yet-paid build queue, set by the village each visit
+    # (see Village.builder_plan_costs). Combined with self.requested this is
+    # the planned imminent spend premium trading must not eat into.
+    planned_build_spend = None
 
     def __init__(self, wrapper=None, village_id=None):
         """
@@ -143,6 +152,11 @@ class ResourceManager:
         self.actual["wood"] = game_state["village"]["wood"]
         self.actual["stone"] = game_state["village"]["stone"]
         self.actual["iron"] = game_state["village"]["iron"]
+        village = game_state.get("village", {})
+        self.production = {
+            res: float(village.get("%s_prod" % res) or 0)
+            for res in ("wood", "stone", "iron")
+        }
         self.actual["pop"] = (
                 game_state["village"]["pop_max"] - game_state["village"]["pop"]
         )
@@ -150,6 +164,62 @@ class ResourceManager:
         self.check_state()
         store_state = game_state["village"]["name"]
         self.logger = logging.getLogger(f"Resource Manager: {store_state}")
+
+    def premium_budget(self, gpl):
+        """
+        Sellable surplus of `gpl` in resources.
+
+        Near the storage cap the regen-window math is bypassed entirely: an
+        overflowing resource is pure waste, and selling down to the planned
+        need keeps every imminent spend affordable (each item costs at most
+        its share of `planned`, and a sale only happens when gpl is not
+        requested by anything - so no income assumption is needed).
+
+        Below the cap, keep what the plan needs that passive regen cannot
+        regrow before the plan's bottleneck resource is ready. Passive regen
+        is the income FLOOR (scavenging/farming only add), so this can only
+        ever over-reserve - it cannot stall a planned spend.
+
+        Planned = registered research/recruit costs (self.requested holds the
+        full remaining batch/research costs) plus the unpaid build queue
+        (planned_build_spend, set by the village each visit).
+
+        Returns None when income is unknown and the res is not near cap -
+        without a production rate the window math is impossible, so do not
+        sell (conservative default).
+
+        TODO ceiling: a recruit batch that fired this visit is not reserved
+        for its next cycle; selling out delays it by one village cycle, then
+        its request registers and trading pauses. Self-healing, bounded.
+        """
+        planned = {"wood": 0, "stone": 0, "iron": 0}
+        for source in self.requested:
+            for res in planned:
+                planned[res] += self.requested[source].get(res, 0) or 0
+        for res, amount in (self.planned_build_spend or {}).items():
+            planned[res] = planned.get(res, 0) + amount
+
+        cap_line = int(self.storage * self.premium_cap_pct)
+        if self.actual.get(gpl, 0) >= cap_line:
+            return max(0, int(self.actual[gpl] - planned.get(gpl, 0)))
+
+        # Hours until the most-starved planned resource becomes affordable.
+        # A res the plan needs only matters as a gate if we are short of it.
+        window = 0.0
+        for res, need in planned.items():
+            if need <= self.actual.get(res, 0):
+                continue
+            income = self.production.get(res, 0)
+            if income <= 0:
+                return None
+            window = max(window, (need - self.actual[res]) / income)
+
+        # Keep what the plan needs from gpl that regen will not cover before
+        # the gate opens; by then gpl has regrown income*window regardless.
+        reserve = max(
+            0, planned.get(gpl, 0) - self.production.get(gpl, 0) * window
+        )
+        return int(self.actual[gpl] - reserve)
 
     def do_premium_stuff(self):
         """
@@ -189,9 +259,18 @@ class ResourceManager:
 
             self.logger.info("Actual premium prices: %s",  prices)
 
-            if gpl in prices and prices[gpl] * 1.1 < self.actual[gpl]:
+            # Budget = the whole surplus stock of the plenty resource, so one
+            # visit can yield many points; the village toggle is the guard.
+            budget = self.premium_budget(gpl)
+            if budget is None:
                 self.logger.info(
-                    "Attempting trade of %d %s for premium point", prices[gpl], gpl
+                    "Not trading %s: unknown income, cannot size the reserve", gpl
+                )
+                return
+
+            if gpl in prices and prices[gpl] * 1.1 < budget:
+                self.logger.info(
+                    "Attempting trade of up to %d %s for premium points", budget, gpl
                 )
 
                 if data["merchants"] < 1:
@@ -200,10 +279,8 @@ class ResourceManager:
 
                 self.logger.debug(f"Trying to trade {gpl} - exchange_begin")
 
-                prices[gpl] = int(prices[gpl])
-
                 gpl_data = PremiumExchange.optimize_n(
-                    amount=prices[gpl],
+                    amount=budget,
                     sell_price=cost_per_point,
                     merchants=data["merchants"],
                     size=1000
@@ -211,7 +288,7 @@ class ResourceManager:
 
                 self.logger.debug(f"Optimized trade: {gpl} {gpl_data} {gpl_data['n_to_sell'] * cost_per_point}")
 
-                if gpl_data["ratio"] > 0.4:
+                if gpl_data["n_to_sell"] < 1:
                     self.logger.info("Not worth trading!")
                     return
 
@@ -239,7 +316,11 @@ class ResourceManager:
                     )
 
                     if result:
-                        self.logger.info("Trade successful!")
+                        sold = gpl_data["n_to_sell"] * cost_per_point
+                        self.actual[gpl] = max(0, self.actual[gpl] - sold)
+                        self.logger.info(
+                            "Trade successful! Sold %d %s", sold, gpl
+                        )
                     else:
                         self.logger.info("Trade failed!")
                 else:
