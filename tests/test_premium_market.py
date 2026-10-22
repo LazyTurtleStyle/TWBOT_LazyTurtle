@@ -167,6 +167,18 @@ def test_plan_never_sells_into_a_full_market_or_without_merchants():
     assert pm.plan_sales(snap, conf(), {"a": village(90000, 90000, 90000, free=0)}) == []
 
 
+def test_a_village_without_a_merchant_count_still_sells():
+    # One-village accounts never get a merchant count in their snapshot.
+    snap = pm.snapshot(DATA)   # the reading saw 7 free merchants
+    lone = village(90000, 90000, 90000)
+    lone["merchants"] = None
+    sales = pm.plan_sales(snap, conf(), {"1001": lone}, read_village="1001")
+    assert sales and sum(x["amount"] for x in sales) <= 7000
+    # Another village, count unknown: planned on what it has spare.
+    sales = pm.plan_sales(snap, conf(), {"other": lone}, read_village="1001")
+    assert sales
+
+
 class Exchange:
     """The two ajax steps, answering like the game."""
 

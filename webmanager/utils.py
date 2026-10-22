@@ -5668,7 +5668,8 @@ class PremiumOverview:
             managed = DataReader.cache_grab("managed") or {}
             managed = {k: v for k, v in managed.items() if isinstance(v, dict)}
             margin = int(((config.get("balancer") or {}).get("ratio_margin_pct", 20)) or 20)
-            for sale in premiummodule.plan_sales(snap, conf, managed, sold_today, margin):
+            for sale in premiummodule.plan_sales(snap, conf, managed, sold_today, margin,
+                                                 read_village=state.get("read_village")):
                 preview.append(dict(sale, name=(managed.get(sale["village"]) or {}).get("name")
                                     or sale["village"],
                                     per_point=sale["amount"] // max(1, sale["points"])))
