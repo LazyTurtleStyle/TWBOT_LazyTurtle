@@ -520,16 +520,35 @@ class Village:
     def run_unit_upgrades(self):
         """
         Uses smith to research or upgrade units
+
+        When the first pending unlock (in template order) is short on
+        resources that fit in storage, the builder is held so the unlock is
+        funded before any building spends them (prioritize_unlock, default
+        on). A shortfall that storage cannot ever cover, a missing building
+        requirement or a research already running all leave the builder free.
         """
+        self.builder.hold_for_unlock = False
         if self.account_manager_handles("research"):
             self.logger.debug("Village %s: research is account managed",
                               self.village_id)
+            return
+        if self.builder.hold_for_scavenge:
+            # A scavenge unlock outranks research (see do_scavenge_unlock).
+            self.logger.info("Not researching because scavenge unlock is pending")
             return
         if (
                 self.get_config(section="units", parameter="upgrade", default=False)
                 and self.units.wanted_levels != {}
         ):
-            self.units.attempt_upgrade()
+            status = self.units.attempt_upgrade() or {}
+            if (
+                    status.get("hold")
+                    and self.get_village_config(
+                        self.village_id, parameter="prioritize_unlock", default=True
+                    )
+            ):
+                self.logger.info("Holding buildings: unit unlock pending on resources")
+                self.builder.hold_for_unlock = True
 
     def do_recruit(self):
         """
@@ -538,6 +557,10 @@ class Village:
         if self.account_manager_handles("recruiting"):
             self.logger.debug("Village %s: recruiting is account managed",
                               self.village_id)
+            return
+        if self.builder.hold_for_scavenge:
+            # A scavenge unlock outranks recruiting (see do_scavenge_unlock).
+            self.logger.info("Not recruiting because scavenge unlock is pending")
             return
         if self.get_config(section="units", parameter="recruit", default=False):
             self.units.can_fix_queue = self.get_config(

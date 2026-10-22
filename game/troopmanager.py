@@ -302,9 +302,15 @@ class TroopManager:
     def get_template_action(self, levels):
         """
         Read data from templates and determine the troops based op building progression
+
+        Passed stages accumulate: every stage whose building requirement is met
+        keeps contributing its upgrades and build targets (highest value per
+        unit wins), so an earlier stage's quota survives advancing to the next
+        stage instead of being dropped the moment the next building lands.
         """
         last = None
         wanted_upgrades = {}
+        wanted_build = {}
         for x in self.template:
             if x["building"] not in levels:
                 return last
@@ -313,15 +319,21 @@ class TroopManager:
                 return last
 
             last = x
-            if "upgrades" in x:
-                for unit in x["upgrades"]:
-                    if (
-                            unit not in wanted_upgrades
-                            or x["upgrades"][unit] > wanted_upgrades[unit]
-                    ):
-                        wanted_upgrades[unit] = x["upgrades"][unit]
+            for unit, level in x.get("upgrades", {}).items():
+                if (
+                        unit not in wanted_upgrades
+                        or level > wanted_upgrades[unit]
+                ):
+                    wanted_upgrades[unit] = level
+            for building, targets in x.get("build", {}).items():
+                slot = wanted_build.setdefault(building, {})
+                for unit, amount in targets.items():
+                    if amount > slot.get(unit, 0):
+                        slot[unit] = amount
 
             self.wanted_levels = wanted_upgrades
+        if last is not None:
+            last = {**last, "build": wanted_build}
         return last
 
     def research_time(self, time_str):
@@ -333,79 +345,91 @@ class TroopManager:
 
     def attempt_upgrade(self):
         """
-        Attempts to upgrade or research a (new) unit type
+        Attempts to upgrade or research a (new) unit type.
+
+        Strictly template-ordered: the first passed-but-unmet unlock gets
+        funded, and a unit that cannot be researched yet stops the loop so a
+        cheaper later-stage unlock never jumps ahead of it (uk91: axe must not
+        be researched while light is still short on wood).
+
+        Returns a status dict: researched=True when a research was started,
+        hold=True when lower-priority spenders (buildings) should wait because
+        an unlock is pending on resources that fit in storage. hold stays
+        False when a building requirement is missing (the builder is the
+        fix), when the smith is busy, or when the cost can never fit storage.
         """
+        status = {"researched": False, "hold": False}
         self.logger.debug("Managing Upgrades")
         if self._research_wait > time.time():
             self.logger.debug(
                 "Smith still busy for %d seconds", int(self._research_wait - time.time())
             )
-            return
+            return status
         unit_levels = self.wanted_levels
         if not unit_levels:
             self.logger.debug("Not upgrading because nothing is requested")
-            return
+            return status
         result = self.wrapper.get_action(village_id=self.village_id, action="smith")
         smith_data = Extractor.smith_data(result)
         if not smith_data:
             self.logger.debug("Error reading smith data")
-            return False
+            return status
         for unit_type in unit_levels:
-            if not smith_data or unit_type not in smith_data["available"]:
+            if unit_type not in smith_data["available"]:
                 self.logger.warning(
                     "Unit %s does not appear to be available or smith not built yet", unit_type
                 )
-                continue
+                # Only building the smith can help: never hold for this.
+                return status
             wanted_level = unit_levels[unit_type]
-            current_level = int(smith_data["available"][unit_type]["level"])
             data = smith_data["available"][unit_type]
+            current_level = int(data["level"])
 
-            if (
-                    current_level < wanted_level
-                    and "can_research" in data
-                    and data["can_research"]
-            ):
-                if "research_error" in data and data["research_error"]:
-                    self.logger.debug(
-                        "Skipping research of %s because of research error", unit_type
-                    )
-                    # Add needed resources to res manager?
-                    r = True
-                    if data["wood"] > self.game_data["village"]["wood"]:
-                        req = data["wood"] - self.game_data["village"]["wood"]
-                        self.resman.request(source="research", resource="wood", amount=req)
-                        r = False
-                    if data["stone"] > self.game_data["village"]["stone"]:
-                        req = data["stone"] - self.game_data["village"]["stone"]
-                        self.resman.request(source="research", resource="stone", amount=req)
-                        r = False
-                    if data["iron"] > self.game_data["village"]["iron"]:
-                        req = data["iron"] - self.game_data["village"]["iron"]
-                        self.resman.request(source="research", resource="iron", amount=req)
-                        r = False
-                    if not r:
-                        self.logger.debug("Research needs resources")
-                    continue
-                if "error_buildings" in data and data["error_buildings"]:
-                    self.logger.debug(
-                        "Skipping research of %s because of building error", unit_type
-                    )
-                    continue
+            if current_level >= wanted_level:
+                # Stage quota already met (or exceeded).
+                continue
 
-                attempt = self.attempt_research(unit_type, smith_data=smith_data)
-                if attempt:
-                    self.logger.info(
-                        "Started smith upgrade of %s %d -> %d",
-                        unit_type, current_level, current_level + 1
-                    )
-                    self.wrapper.reporter.report(
-                        self.village_id,
-                        "TWB_UPGRADE",
-                        "Started smith upgrade of %s %d -> %d"
-                        % (unit_type, current_level, current_level + 1),
-                    )
-                    return True
-        return False
+            if "error_buildings" in data and data["error_buildings"]:
+                self.logger.debug(
+                    "Research of %s waits on building requirements", unit_type
+                )
+                # The builder is the fix, so buildings must stay free.
+                return status
+
+            if "research_error" in data and data["research_error"]:
+                self.logger.debug(
+                    "Research of %s waits on resources", unit_type
+                )
+                # Reserve what is missing and stop the loop: no fallthrough.
+                fits_storage = True
+                for res in ("wood", "stone", "iron"):
+                    if data[res] > self.game_data["village"][res]:
+                        req = data[res] - self.game_data["village"][res]
+                        self.resman.request(source="research", resource=res, amount=req)
+                        if data[res] > self.resman.storage:
+                            # Storage can never hold this cost: only a storage
+                            # upgrade (a building!) unblocks it, so no hold.
+                            fits_storage = False
+                status["hold"] = fits_storage
+                return status
+
+            attempt = self.attempt_research(unit_type, smith_data=smith_data)
+            if attempt:
+                self.logger.info(
+                    "Started smith upgrade of %s %d -> %d",
+                    unit_type, current_level, current_level + 1
+                )
+                self.wrapper.reporter.report(
+                    self.village_id,
+                    "TWB_UPGRADE",
+                    "Started smith upgrade of %s %d -> %d"
+                    % (unit_type, current_level, current_level + 1),
+                )
+                status["researched"] = True
+            # Whether it started or hit a late guard inside attempt_research,
+            # this unit decides the outcome for the whole pass.
+            return status
+        return status
 
     def attempt_research(self, unit_type, smith_data=None):
         if not smith_data:
