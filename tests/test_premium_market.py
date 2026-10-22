@@ -218,6 +218,44 @@ def test_a_quote_past_the_village_budget_is_not_confirmed():
     assert points == 0 and "more than" in error and len(ex.calls) == 1
 
 
+# -- start and stop ---------------------------------------------------------
+
+def test_no_sale_starts_above_the_start_even_with_a_high_stop():
+    snap = pm.snapshot(DATA)   # iron Koers 243
+    sales = pm.plan_sales(snap, conf(max_rate={"wood": 0, "stone": 0, "iron": 200},
+                                     stop_rate={"iron": 400}),
+                          {"a": village(90000, 90000, 90000)})
+    assert sales == []
+
+
+def test_a_started_sale_runs_on_to_the_stop():
+    snap = pm.snapshot(DATA)
+    villages = {"a": village(400000, 400000, 400000, storage=500000, free=200)}
+    only_start = pm.plan_sales(snap, conf(max_rate={"wood": 0, "stone": 0, "iron": 250},
+                                          max_pp_per_day=10000), villages)
+    with_stop = pm.plan_sales(snap, conf(max_rate={"wood": 0, "stone": 0, "iron": 250},
+                                         stop_rate={"iron": 300}, max_pp_per_day=10000), villages)
+    assert sum(x["points"] for x in with_stop) > sum(x["points"] for x in only_start) > 0
+
+
+def test_a_stop_of_zero_is_the_start_and_never_below_it():
+    c = pm.settings({"premium": {"max_rate": {"iron": 250}, "stop_rate": {"iron": 0, "wood": 500}}})
+    assert c["stop_rate"]["iron"] == 250
+    assert c["stop_rate"]["wood"] == 0     # wood never starts, so no stop either
+    c = pm.settings({"premium": {"max_rate": {"iron": 250}, "stop_rate": {"iron": 100}}})
+    assert c["stop_rate"]["iron"] == 250
+
+
+def test_until_full_sells_the_whole_room():
+    snap = pm.snapshot(DATA)
+    room = snap["room"]["iron"]
+    villages = {"a": village(900000, 900000, 900000, storage=1000000, free=1000)}
+    sales = pm.plan_sales(snap, conf(max_rate={"wood": 0, "stone": 0, "iron": 300},
+                                     stop_rate={"iron": 99999}, max_pp_per_day=100000), villages)
+    sold = sum(x["amount"] for x in sales)
+    assert room - 2000 < sold <= room
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

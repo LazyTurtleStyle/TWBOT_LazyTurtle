@@ -227,6 +227,11 @@
       "stone": 0,
       "iron": 0
     },
+    "stop_rate": {
+      "wood": 0,
+      "stone": 0,
+      "iron": 0
+    },
     "keep_pct": 50,
     "max_pp_per_day": 50,
     "skip_short": true

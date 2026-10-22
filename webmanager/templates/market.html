@@ -223,15 +223,20 @@
 					<strong>Sell</strong></label>
 					<span class="badge badge-warning">alpha</span>
 					<span class="text-muted">{{ pm.sold_today }} / {{ pm.conf.max_pp_per_day }} points today</span></div>
-				<div class="text-muted mb-2">Right after each reading the bot sells into the market while the Koers is at or
-					below your limit: cheapest resource first, out of what villages have above the share they keep, at most
+				<div class="text-muted mb-2">Right after each reading the bot starts selling a resource whose Koers is at or
+					below its start, and keeps going until the Koers would pass its stop: cheapest resource first, out of what villages have above the share they keep, at most
 					4 villages per reading. Every sale is quoted by the game first and only confirmed if the price still
 					holds. It never buys. Check the dry run before you switch it on.</div>
-				<div class="row-line">Sell while the Koers is at or below <span class="text-muted">(0 = never)</span></div>
+				<div class="row-line">Start selling when the Koers is at or below <span class="text-muted">(0 = never)</span></div>
 				<div class="row-line" style="white-space:nowrap">
 					<span class="mk-res"><img src="/static/images/wood.png" alt="wood"></span><input type="number" min="0" data-pm="max_rate.wood" value="{{ pm.conf.max_rate.wood }}">
 					<span class="mk-res"><img src="/static/images/stone.png" alt="clay"></span><input type="number" min="0" data-pm="max_rate.stone" value="{{ pm.conf.max_rate.stone }}">
 					<span class="mk-res"><img src="/static/images/iron.png" alt="iron"></span><input type="number" min="0" data-pm="max_rate.iron" value="{{ pm.conf.max_rate.iron }}"></div>
+				<div class="row-line">&hellip; and keep selling until it is above <span class="text-muted">(0 = same as start, 99999 = until full)</span></div>
+				<div class="row-line" style="white-space:nowrap">
+					<span class="mk-res"><img src="/static/images/wood.png" alt="wood"></span><input type="number" min="0" data-pm="stop_rate.wood" value="{{ pm.conf.stop_rate.wood if pm.conf.stop_rate.wood != pm.conf.max_rate.wood else 0 }}">
+					<span class="mk-res"><img src="/static/images/stone.png" alt="clay"></span><input type="number" min="0" data-pm="stop_rate.stone" value="{{ pm.conf.stop_rate.stone if pm.conf.stop_rate.stone != pm.conf.max_rate.stone else 0 }}">
+					<span class="mk-res"><img src="/static/images/iron.png" alt="iron"></span><input type="number" min="0" data-pm="stop_rate.iron" value="{{ pm.conf.stop_rate.iron if pm.conf.stop_rate.iron != pm.conf.max_rate.iron else 0 }}"></div>
 				<div class="row-line">Villages keep at least <input type="number" min="0" max="100" data-pm="keep_pct" value="{{ pm.conf.keep_pct }}">% of their warehouse</div>
 				<div class="row-line">At most <input type="number" min="0" data-pm="max_pp_per_day" value="{{ pm.conf.max_pp_per_day }}"> points a day</div>
 				<div class="row-line"><label><input type="checkbox" data-pm="skip_short" {{ 'checked' if pm.conf.skip_short }}>
