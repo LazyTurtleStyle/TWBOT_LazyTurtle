@@ -161,7 +161,8 @@ help_file = {
     'premium.track_min_minutes': 'Shortest gap between two reads of the exchange, in minutes.',
     'premium.track_max_minutes': 'Longest gap between two reads of the exchange, in minutes. Each gap is picked at random between the two, so the reads never fall into a fixed rhythm.',
     'premium.sell': 'ALPHA. Right after each reading, sell into the premium exchange while its Koers is at or below max_rate: cheapest resource first, out of what villages have above keep_pct, at most 4 villages and max_pp_per_day points a day. Every sale is quoted by the game first and only confirmed while the quote still holds. Never buys. The Market page dry run shows what it would do.',
-    'premium.max_rate': 'Per resource: sell only while the exchange Koers (resources per premium point, the number the game shows) is at or below this. 0 never sells that resource. Depends entirely on the world - a new world can be 250, an old one 2000+.',
+    'premium.max_rate': 'Per resource, the START: a resource is only sold when the exchange Koers (resources per premium point, the number the game shows) is at or below this. 0 never sells that resource. Depends entirely on the world - a new world can be 250, an old one 2000+.',
+    'premium.stop_rate': 'Per resource, the STOP: once a sale has started, keep selling until the Koers would pass this (every sale fills the market and pushes the Koers up). 0 = the same as the start. Enter a high number (e.g. 99999) to sell until the market is full.',
     'premium.keep_pct': 'Every village keeps at least this percent of its warehouse of a resource; only what is above it can be sold.',
     'premium.max_pp_per_day': 'Most premium points sold in one day.',
     'premium.skip_short': 'Never sell a resource a village is short of next to its own other two (the same judgement as the balancer evening-out and the Market page).',
@@ -381,7 +382,7 @@ config_groups = {
     ],
     'premium': [
         ('Watching', ['track_market', 'track_min_minutes', 'track_max_minutes']),
-        ('Selling (alpha)', ['sell', 'max_rate', 'keep_pct', 'max_pp_per_day', 'skip_short']),
+        ('Selling (alpha)', ['sell', 'max_rate', 'stop_rate', 'keep_pct', 'max_pp_per_day', 'skip_short']),
     ],
     'balancer': [
         ('On/off', ['enabled', 'boost_small', 'ratio_balance']),

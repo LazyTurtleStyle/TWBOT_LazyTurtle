@@ -25,8 +25,9 @@ Prices, as the game computes them (PremiumExchange.receiveData):
   costs about 1 / rate (no sell tax on the worlds seen so far), and each sale
   pushes the stock up and the price down.
 
-Selling (premium.sell, ALPHA) rides on the same reading: right after it, the
-market is offered whatever it will take at or below the Koers limits, out of
+Selling (premium.sell, ALPHA) rides on the same reading: right after it, a
+resource whose Koers is at or below its start (max_rate) is sold until the
+Koers would pass its stop (stop_rate), out of
 villages' resources above premium.keep_pct, cheapest resource first, capped at
 premium.max_pp_per_day. Every sale is quoted by the game first and only
 confirmed when the quote still holds. It never buys.
@@ -66,9 +67,12 @@ DEFAULTS = {
     "track_min_minutes": 13,
     "track_max_minutes": 19,
     "sell": False,
-    # Sell only while the exchange's Koers is at or below this many resources
-    # per point; 0 never sells that resource.
+    # Start selling a resource only while the exchange's Koers is at or below
+    # this many resources per point; 0 never sells that resource.
     "max_rate": {"wood": 0, "stone": 0, "iron": 0},
+    # Once started, keep selling until the Koers would pass this; 0 = the same
+    # as the start. A high number sells until the market is full.
+    "stop_rate": {"wood": 0, "stone": 0, "iron": 0},
     # A village keeps at least this percent of its warehouse of a resource.
     "keep_pct": 50,
     "max_pp_per_day": 50,
@@ -85,6 +89,11 @@ def settings(config):
     rates = dict(DEFAULTS["max_rate"])
     rates.update({r: v for r, v in (raw.get("max_rate") or {}).items() if r in RESOURCES})
     conf["max_rate"] = {r: max(0, int(_num(rates.get(r), 0))) for r in RESOURCES}
+    stops = dict(DEFAULTS["stop_rate"])
+    stops.update({r: v for r, v in (raw.get("stop_rate") or {}).items() if r in RESOURCES})
+    # Never below the start: a stop under it would end every sale before it began.
+    conf["stop_rate"] = {r: max(conf["max_rate"][r], int(_num(stops.get(r), 0)))
+                         if conf["max_rate"][r] else 0 for r in RESOURCES}
     low = max(1, int(_num(conf["track_min_minutes"], 13)))
     high = max(low, int(_num(conf["track_max_minutes"], 19)))
     conf["track_min_minutes"], conf["track_max_minutes"] = low, high
@@ -235,8 +244,9 @@ def short_resources(stock, margin_pct):
 def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
     """What to sell against this reading: [{village, res, amount, points}].
 
-    Cheapest resource first (fewest resources per point). For each, the market
-    takes points while its Koers stays at or below the limit; villages with the
+    Cheapest resource first (fewest resources per point). A resource is only
+    sold when its Koers is at or below its start (max_rate); the market then
+    takes points while the Koers stays at or below its stop (stop_rate); villages with the
     most to spare supply them, each only what is above keep_pct of its
     warehouse and what its free merchants carry. The simulated stock rises with
     every planned sale, so the next one is priced on the market it leaves.
@@ -248,8 +258,13 @@ def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
     sales = []
     order = sorted(RESOURCES, key=lambda r: snap["koers"].get(r) or 10 ** 9)
     for res in order:
-        limit = conf["max_rate"].get(res) or 0
-        if not limit or remaining <= 0 or len(sales) >= MAX_SALES_PER_READ:
+        start = conf["max_rate"].get(res) or 0
+        limit = conf["stop_rate"].get(res) or start
+        if not start or remaining <= 0 or len(sales) >= MAX_SALES_PER_READ:
+            continue
+        # Only a Koers at or below the start opens a sale; once open it runs
+        # on until the price would pass the stop.
+        if (snap["koers"].get(res) or 10 ** 9) > start:
             continue
         cap = snap["capacity"][res]
         sim = dict(snap, stock=dict(stock, **{res: stock[res]}),
@@ -351,7 +366,7 @@ def sell(wrapper, snap, conf, config, state, now):
     plan = plan_sales(snap, conf, _managed_villages(), daily.get(today, 0), margin)
     sales = state.setdefault("sales", [])
     for sale in plan:
-        points, error = execute_sale(wrapper, sale, conf["max_rate"].get(sale["res"]))
+        points, error = execute_sale(wrapper, sale, conf["stop_rate"].get(sale["res"]))
         entry = dict(sale, ts=int(time.time()), ok=bool(points), points=points or 0,
                      planned=sale["points"], error=error)
         sales.append(entry)
