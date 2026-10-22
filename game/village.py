@@ -17,7 +17,6 @@ from game.defence_manager import DefenceManager
 from game.incomings import load_groups
 from game import lightpass
 from game.map import Map, MapCache
-from game import massgather
 from game.reports import ReportManager
 from game.resources import ResourceManager
 from game.snobber import SnobManager
@@ -342,9 +341,16 @@ class Village:
         except (KeyError, TypeError):
             return True
 
-    def run_builder(self):
+    def run_builder(self, build=True, refresh=True):
         """
-        Run building construction actions
+        Run building construction actions.
+
+        Called twice per village cycle: build=False early (manager setup plus a
+        level read with nothing queued - recruit templates key off building
+        levels) and build=True after recruiting so buildings spend what
+        recruiting left. refresh=False on the second call reuses that read:
+        recruiting cannot change the in-game build queue, so a re-fetch would
+        only burn a request.
         """
         if not self.builder:
             self.builder = BuildingManager(
@@ -420,12 +426,20 @@ class Village:
                 "Village %s: building, recruiting and research are account "
                 "managed - skipping the main screen", self.village_id)
             return
+        # Whatever spends resources queues nothing unless building is actually
+        # on for this village: the per-village off-switch, the account manager
+        # or manage_buildings=false each reduce the late pass to a no-op.
+        build = (
+            build
+            and not build_disabled
+            and not self.account_manager_handles("building")
+            and self.get_config(
+                section="building", parameter="manage_buildings", default=True
+            )
+        )
         self.builder.start_update(
-            build=(not build_disabled
-                   and not self.account_manager_handles("building")
-                   and self.get_config(
-                       section="building", parameter="manage_buildings", default=True
-                   )),
+            build=build,
+            refresh=refresh,
             set_village_name=self.village_set_name,
         )
 
@@ -478,6 +492,14 @@ class Village:
         """
         Fetches wanted units for the current buildings
         """
+        if not self.builder:
+            # Should not happen: run_builder(build=False) precedes this in
+            # run(). Guard anyway - this AttributeError used to take the whole
+            # bot down in a crash loop.
+            self.logger.warning(
+                "Village %s: no builder state, skipping unit wanted levels",
+                self.village_id)
+            return
         self.current_unit_entry = self.units.get_template_action(self.builder.levels)
 
         if self.current_unit_entry and self.units.wanted != self.current_unit_entry["build"]:
@@ -498,16 +520,35 @@ class Village:
     def run_unit_upgrades(self):
         """
         Uses smith to research or upgrade units
+
+        When the first pending unlock (in template order) is short on
+        resources that fit in storage, the builder is held so the unlock is
+        funded before any building spends them (prioritize_unlock, default
+        on). A shortfall that storage cannot ever cover, a missing building
+        requirement or a research already running all leave the builder free.
         """
+        self.builder.hold_for_unlock = False
         if self.account_manager_handles("research"):
             self.logger.debug("Village %s: research is account managed",
                               self.village_id)
+            return
+        if self.builder.hold_for_scavenge:
+            # A scavenge unlock outranks research (see do_scavenge_unlock).
+            self.logger.info("Not researching because scavenge unlock is pending")
             return
         if (
                 self.get_config(section="units", parameter="upgrade", default=False)
                 and self.units.wanted_levels != {}
         ):
-            self.units.attempt_upgrade()
+            status = self.units.attempt_upgrade() or {}
+            if (
+                    status.get("hold")
+                    and self.get_village_config(
+                        self.village_id, parameter="prioritize_unlock", default=True
+                    )
+            ):
+                self.logger.info("Holding buildings: unit unlock pending on resources")
+                self.builder.hold_for_unlock = True
 
     def do_recruit(self):
         """
@@ -516,6 +557,10 @@ class Village:
         if self.account_manager_handles("recruiting"):
             self.logger.debug("Village %s: recruiting is account managed",
                               self.village_id)
+            return
+        if self.builder.hold_for_scavenge:
+            # A scavenge unlock outranks recruiting (see do_scavenge_unlock).
+            self.logger.info("Not recruiting because scavenge unlock is pending")
             return
         if self.get_config(section="units", parameter="recruit", default=False):
             self.units.can_fix_queue = self.get_config(
@@ -1242,7 +1287,9 @@ class Village:
         self.run_quest_actions(config=config)
 
         self.do_scavenge_unlock()
-        self.run_builder()
+        # Building levels must exist before the unit templates run, but the
+        # spend itself waits until after recruiting (priority spend order).
+        self.run_builder(build=False)
         self.units_get_template()
         self.set_unit_wanted_levels()
 
@@ -1257,9 +1304,15 @@ class Village:
                 "Village %s: skipping the rest of this pass, no game state",
                 self.village_id)
             return
-        self.run_unit_upgrades()
-        self.run_snob_recruit()
+        # Spend order is the priority order, and each step may hold the next:
+        # scavenge unlock (above) blocks recruiting; recruiting is bounded by
+        # the building queues; research funds from what recruiting leaves and
+        # holds the builder when an unlock is pending on resources; buildings
+        # spend last.
         self.do_recruit()
+        self.run_snob_recruit()
+        self.run_unit_upgrades()
+        self.run_builder(refresh=False)
         self.manage_local_resources()
         self.run_balancer()
 

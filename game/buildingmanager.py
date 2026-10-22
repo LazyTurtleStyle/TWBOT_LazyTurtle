@@ -33,6 +33,7 @@ class BuildingManager:
     queue_ingame = []
 
     costs = {}
+    queue_count_ingame = 0
 
     wrapper = None
     village_id = None
@@ -49,6 +50,7 @@ class BuildingManager:
     # the village prioritises unlocking over building: holds building this cycle
     # so resources accumulate for the unlock.
     hold_for_scavenge = False
+    hold_for_unlock = False
 
     def __init__(self, wrapper, village_id):
         """
@@ -71,9 +73,12 @@ class BuildingManager:
 
         return extracted_buildings
 
-    def start_update(self, build=False, set_village_name=None):
+    def refresh_state(self, set_village_name=None):
         """
-        Start a building manager run
+        Fetch and parse the main screen: building levels, costs, queues.
+        No build decisions are made here, so this can run before the recruit
+        stage (whose templates key off building levels) while the actual
+        spending waits until after recruiting.
         """
         main_data = self.wrapper.get_action(village_id=self.village_id, action="main")
         self.game_state = Extractor.game_state(main_data) if main_data else None
@@ -91,7 +96,7 @@ class BuildingManager:
             self.logger = logging.getLogger(fr"Builder: {vname}")
 
         if self.complete_actions(main_data.text):
-            return self.start_update(build=build, set_village_name=set_village_name)
+            return self.refresh_state(set_village_name=set_village_name)
         self.costs = Extractor.building_data(main_data)
         self.costs = self.create_update_links(self.costs)
 
@@ -121,12 +126,27 @@ class BuildingManager:
         if existing_queue == 0:
             self.waits = []
             self.waits_building = []
+        return True
+
+    def start_update(self, build=False, set_village_name=None, refresh=True):
+        """
+        Start a building manager run.
+
+        refresh=False reuses the state read earlier in the same village cycle
+        (see refresh_state): the in-game queue cannot have changed through our
+        own recruiting, so re-fetching would only burn a request.
+        """
+        if refresh and not self.refresh_state(set_village_name=set_village_name):
+            return False
+        if not build:
+            return False
+
+        existing_queue = self.queue_count_ingame
+
         if self.is_queued():
             self.logger.info(
                 "No build operation was executed: queue full, %d left", len(self.queue)
             )
-            return False
-        if not build:
             return False
 
         if existing_queue != 0 and existing_queue != len(self.waits):
@@ -280,6 +300,10 @@ class BuildingManager:
             self.logger.info("Holding building: prioritising a pending scavenge unlock")
             return False
 
+        if self.hold_for_unlock:
+            self.logger.info("Holding building: prioritising a pending unit unlock")
+            return False
+
         if index >= len(self.queue) or index >= self.max_lookahead:
             self.logger.debug("Not building anything because insufficient resources or index out of range")
             return False
@@ -319,7 +343,8 @@ class BuildingManager:
             entry = self.queue[index]
             entry, min_lvl = entry.split(":")
             min_lvl = int(min_lvl)
-            if min_lvl <= self.levels[entry]:
+            cur_lvl = self.levels.get(entry, 0)
+            if min_lvl <= cur_lvl:
                 self.queue.pop(index)
                 return self.get_next_building_action(index)
             if entry not in self.costs:
@@ -338,8 +363,8 @@ class BuildingManager:
                     "Building %s %d -> %d (finishes: %s)"
                     % (
                         entry,
-                        self.levels[entry],
-                        self.levels[entry] + 1,
+                        cur_lvl,
+                        cur_lvl + 1,
                         self.readable_ts(queue),
                     )
                 )
@@ -349,12 +374,12 @@ class BuildingManager:
                     "Building %s %d -> %d (finishes: %s)"
                     % (
                         entry,
-                        self.levels[entry],
-                        self.levels[entry] + 1,
+                        cur_lvl,
+                        cur_lvl + 1,
                         self.readable_ts(queue),
                     ),
                 )
-                self.levels[entry] += 1
+                self.levels[entry] = cur_lvl + 1
                 response = self.wrapper.get_url(check["build_link"].replace("amp;", ""))
                 if self.can_build_three_min:
                     # Wait some random time
