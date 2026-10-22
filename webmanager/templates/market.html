@@ -219,11 +219,14 @@
 					<input type="number" min="1" data-pm="track_max_minutes" value="{{ pm.conf.track_max_minutes }}"> minutes
 					<span class="text-muted">(random in between, active hours only)</span></div>
 				<hr class="my-2">
-				<div class="row-line"><label><input type="checkbox" data-pm="sell" disabled {{ 'checked' if pm.conf.sell }}>
+				<div class="row-line"><label><input type="checkbox" data-pm="sell" {{ 'checked' if pm.conf.sell }}>
 					<strong>Sell</strong></label>
-					<span class="badge badge-secondary">not built yet</span></div>
-				<div class="text-muted mb-2">Selling comes after a few days of readings. The settings below already work for
-					the dry run underneath, so you can see what they would do.</div>
+					<span class="badge badge-warning">alpha</span>
+					<span class="text-muted">{{ pm.sold_today }} / {{ pm.conf.max_pp_per_day }} points today</span></div>
+				<div class="text-muted mb-2">Right after each reading the bot sells into the market while the Koers is at or
+					below your limit: cheapest resource first, out of what villages have above the share they keep, at most
+					4 villages per reading. Every sale is quoted by the game first and only confirmed if the price still
+					holds. It never buys. Check the dry run before you switch it on.</div>
 				<div class="row-line">Sell while the Koers is at or below <span class="text-muted">(0 = never)</span></div>
 				<div class="row-line" style="white-space:nowrap">
 					<span class="mk-res"><img src="/static/images/wood.png" alt="wood"></span><input type="number" min="0" data-pm="max_rate.wood" value="{{ pm.conf.max_rate.wood }}">
@@ -237,27 +240,48 @@
 		</div>
 
 		<div class="card mb-3">
-			<div class="card-header py-2"><strong>Dry run</strong> <small class="text-muted ml-2">what these settings would sell against the last reading &mdash; nothing is sent</small></div>
+			<div class="card-header py-2"><strong>Dry run</strong> <small class="text-muted ml-2">what the bot would sell against the last reading &mdash; nothing is sent from here</small></div>
 			{% if pm.preview %}
 			<div class="table-responsive">
 				<table class="table table-sm mb-0 mk-table">
-					<thead><tr><th></th><th class="text-right">Your limit</th><th class="text-right">Points the market takes</th>
-						<th class="text-right">Spare in villages</th><th class="text-right">Would sell</th></tr></thead>
+					<thead><tr><th>From</th><th>Sells</th><th class="text-right">Points</th><th class="text-right">Per point</th></tr></thead>
 					<tbody>
 					{% for p in pm.preview %}
-					<tr><td><span class="mk-res"><img src="/static/images/{{ p.res }}.png" alt="{{ p.res }}">{{ {'wood':'Wood','stone':'Clay','iron':'Iron'}[p.res] }}</span></td>
-						<td class="text-right mono">{{ p.limit or 'never' }}</td>
-						<td class="text-right mono">{% if p.points %}{{ p.points }} pt for {{ p.cost|kshort }}{% else %}—{% endif %}</td>
-						<td class="text-right mono">{{ p.supply|kshort }}</td>
-						<td class="text-right mono">{{ p.would or '—' }}{% if p.would %} pt{% endif %}</td></tr>
+					<tr><td><a class="vlink" href="village?id={{ p.village }}">{{ p.name }}</a></td>
+						<td><span class="mk-res"><img src="/static/images/{{ p.res }}.png" alt="{{ p.res }}">{{ p.amount|comma }}</span></td>
+						<td class="text-right mono">{{ p.points }}</td><td class="text-right mono">{{ p.per_point }}</td></tr>
 					{% endfor %}
 					</tbody>
 				</table>
 			</div>
+			<div class="card-body py-2 small text-muted">{{ pm.preview_points }} point(s) in all{% if not pm.conf.sell %} &mdash; selling is off{% endif %}.</div>
+			{% elif pm.current %}
+			<div class="card-body py-2 small text-muted">Nothing to sell right now: the market is full, the Koers is above your
+				limits (0 = never), or no village has enough above the share it keeps.</div>
 			{% else %}
 			<div class="card-body py-2 small text-muted">Needs a reading of the exchange first.</div>
 			{% endif %}
 		</div>
+
+		{% if pm.sales %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Sales</strong> <small class="text-muted ml-2">newest first</small></div>
+			<div class="table-responsive">
+				<table class="table table-sm table-striped mb-0 mk-table">
+					<thead><tr><th>When</th><th>From</th><th>Sold</th><th class="text-right">Points</th><th></th></tr></thead>
+					<tbody>
+					{% for x in pm.sales %}
+					<tr><td class="mono">{{ x.ts|ts }}</td>
+						<td><a class="vlink" href="village?id={{ x.village }}">{{ x.name }}</a></td>
+						<td><span class="mk-res"><img src="/static/images/{{ x.res }}.png" alt="{{ x.res }}">{{ x.amount|comma }}</span></td>
+						<td class="text-right mono">{{ x.points if x.ok else '—' }}</td>
+						<td>{% if x.ok %}<span class="badge badge-success">sold</span>{% else %}<span class="badge badge-secondary" title="{{ x.error }}">skipped</span>{% endif %}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
 	</div>
 </div>
 {% endif %}

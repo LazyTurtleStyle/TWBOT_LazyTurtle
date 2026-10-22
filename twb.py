@@ -1154,7 +1154,8 @@ class TWB:
                 break
             try:
                 live = FileManager.load_json_file("config.json") or config
-                if not premium_market.settings(live)["track_market"]:
+                conf = premium_market.settings(live)
+                if not (conf["track_market"] or conf["sell"]):
                     continue
                 if not self.is_active_hours(config=live):
                     continue

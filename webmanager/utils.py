@@ -5659,29 +5659,26 @@ class PremiumOverview:
             if len(windows) >= 12:
                 break
 
-        # Dry run: what the settings would sell against the last reading.
+        # Dry run: exactly what the bot would sell against the last reading,
+        # planned by the same code that sells.
         preview = []
+        today = time.strftime("%Y-%m-%d", time.localtime(now))
+        sold_today = int((state.get("daily") or {}).get(today, 0))
         if snap:
             managed = DataReader.cache_grab("managed") or {}
+            managed = {k: v for k, v in managed.items() if isinstance(v, dict)}
             margin = int(((config.get("balancer") or {}).get("ratio_margin_pct", 20)) or 20)
-            for r in cls.RES:
-                limit = conf["max_rate"].get(r) or 0
-                points, cost = premiummodule.sellable_points(snap, r, limit)
-                supply = 0
-                for vid, v in managed.items():
-                    if not isinstance(v, dict):
-                        continue
-                    stock = {k: int((v.get("resources") or {}).get(k, 0) or 0) for k in cls.RES}
-                    cap = int(v.get("storage_max") or 0)
-                    if conf["skip_short"]:
-                        judged = MarketOverview._judge(stock, margin)
-                        if judged.get(r) == "short":
-                            continue
-                    supply += max(0, stock[r] - cap * conf["keep_pct"] // 100)
-                preview.append({"res": r, "limit": limit, "points": points,
-                                "cost": cost, "supply": supply,
-                                "would": min(points, int(supply / (cost / points)))
-                                if points and cost else 0})
+            for sale in premiummodule.plan_sales(snap, conf, managed, sold_today, margin):
+                preview.append(dict(sale, name=(managed.get(sale["village"]) or {}).get("name")
+                                    or sale["village"],
+                                    per_point=sale["amount"] // max(1, sale["points"])))
+        sales = []
+        managed_names = DataReader.cache_grab("managed") or {}
+        for entry in reversed(state.get("sales") or []):
+            sales.append(dict(entry, name=(managed_names.get(str(entry.get("village"))) or {}).get("name")
+                              or entry.get("village")))
+            if len(sales) >= 15:
+                break
         return {
             "available": True,
             "conf": conf,
@@ -5695,5 +5692,8 @@ class PremiumOverview:
                         for h in history],
             "windows": windows,
             "preview": preview,
+            "preview_points": sum(p["points"] for p in preview),
+            "sales": sales,
+            "sold_today": sold_today,
             "now": int(now),
         }

@@ -160,7 +160,7 @@ help_file = {
     'premium.track_market': 'Read the premium exchange every track_min..track_max minutes (random in between), only in active hours. One page read per check for the whole world - the exchange is the same from every village. Keeps two weeks of readings for the Market page.',
     'premium.track_min_minutes': 'Shortest gap between two reads of the exchange, in minutes.',
     'premium.track_max_minutes': 'Longest gap between two reads of the exchange, in minutes. Each gap is picked at random between the two, so the reads never fall into a fixed rhythm.',
-    'premium.sell': 'Not built yet: selling comes after a few days of readings. The settings below already drive the dry run on the Market page.',
+    'premium.sell': 'ALPHA. Right after each reading, sell into the premium exchange while its Koers is at or below max_rate: cheapest resource first, out of what villages have above keep_pct, at most 4 villages and max_pp_per_day points a day. Every sale is quoted by the game first and only confirmed while the quote still holds. Never buys. The Market page dry run shows what it would do.',
     'premium.max_rate': 'Per resource: sell only while the exchange Koers (resources per premium point, the number the game shows) is at or below this. 0 never sells that resource. Depends entirely on the world - a new world can be 250, an old one 2000+.',
     'premium.keep_pct': 'Every village keeps at least this percent of its warehouse of a resource; only what is above it can be sold.',
     'premium.max_pp_per_day': 'Most premium points sold in one day.',
@@ -381,7 +381,7 @@ config_groups = {
     ],
     'premium': [
         ('Watching', ['track_market', 'track_min_minutes', 'track_max_minutes']),
-        ('Selling (not built yet)', ['sell', 'max_rate', 'keep_pct', 'max_pp_per_day', 'skip_short']),
+        ('Selling (alpha)', ['sell', 'max_rate', 'keep_pct', 'max_pp_per_day', 'skip_short']),
     ],
     'balancer': [
         ('On/off', ['enabled', 'boost_small', 'ratio_balance']),
