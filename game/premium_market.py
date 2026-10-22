@@ -241,7 +241,7 @@ def short_resources(stock, margin_pct):
     return {r for r in RESOURCES if stock.get(r, 0) < mean * (1 - margin_pct / 100.0)}
 
 
-def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
+def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20, read_village=None):
     """What to sell against this reading: [{village, res, amount, points}].
 
     Cheapest resource first (fewest resources per point). A resource is only
@@ -256,6 +256,9 @@ def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
     sell_tax = (snap.get("tax") or {}).get("sell", 0)
     stock = dict(snap["stock"])
     sales = []
+    # Merchants a village has left in this plan: one merchant carries 1000 of
+    # one resource, and a village selling iron has that many fewer for wood.
+    merchants_left = {}
     order = sorted(RESOURCES, key=lambda r: snap["koers"].get(r) or 10 ** 9)
     for res in order:
         start = conf["max_rate"].get(res) or 0
@@ -278,10 +281,23 @@ def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
             if conf["skip_short"] and res in short_resources(have, margin_pct):
                 continue
             free = (v.get("merchants") or {}).get("free")
-            if not free:
-                continue
+            if str(vid) == str(read_village) and snap.get("merchants") is not None:
+                # The exchange page was read from this village: its merchant
+                # count is live, and fresher than any snapshot.
+                free = snap["merchants"]
             spare = have[res] - storage * conf["keep_pct"] // 100
-            budget = min(spare, int(free) * 1000)
+            if free is not None:
+                free = merchants_left.setdefault(str(vid), int(free))
+            if free is None:
+                # Not known (a snapshot only carries it once the overview pass
+                # has refreshed it - never, on a one-village account). Plan on
+                # what is spare; the game's quote refuses a sale its merchants
+                # cannot carry.
+                budget = spare
+            elif free <= 0:
+                continue
+            else:
+                budget = min(spare, free * 1000)
             if budget > 0:
                 donors.append((budget, str(vid)))
         for budget, vid in sorted(donors, reverse=True):
@@ -298,6 +314,8 @@ def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
                 continue
             sales.append({"village": vid, "res": res, "amount": amount, "points": points,
                           "budget": budget})
+            if vid in merchants_left:
+                merchants_left[vid] -= -(-amount // 1000)
             stock[res] += amount
             left -= points
             remaining -= points
@@ -363,7 +381,8 @@ def sell(wrapper, snap, conf, config, state, now):
         if day != today:
             daily.pop(day, None)
     margin = int(((config or {}).get("balancer") or {}).get("ratio_margin_pct", 20) or 20)
-    plan = plan_sales(snap, conf, _managed_villages(), daily.get(today, 0), margin)
+    plan = plan_sales(snap, conf, _managed_villages(), daily.get(today, 0), margin,
+                      read_village=state.get("read_village"))
     sales = state.setdefault("sales", [])
     for sale in plan:
         points, error = execute_sale(wrapper, sale, conf["stop_rate"].get(sale["res"]))
@@ -443,6 +462,7 @@ def watch(wrapper, village_id, config, now=None):
     snap = snapshot(data, now)
     state["last"] = snap
     state["last_read"] = int(now)
+    state["read_village"] = str(village_id)
     state.pop("last_error", None)
     save_state(state)
     _append_history(snap)
