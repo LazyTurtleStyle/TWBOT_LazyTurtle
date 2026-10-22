@@ -25,6 +25,12 @@ Prices, as the game computes them (PremiumExchange.receiveData):
   costs about 1 / rate (no sell tax on the worlds seen so far), and each sale
   pushes the stock up and the price down.
 
+Selling (premium.sell, ALPHA) rides on the same reading: right after it, the
+market is offered whatever it will take at or below the Koers limits, out of
+villages' resources above premium.keep_pct, cheapest resource first, capped at
+premium.max_pp_per_day. Every sale is quoted by the game first and only
+confirmed when the quote still holds. It never buys.
+
 Settings live in config.json under "premium". Tracking and selling ship off.
 """
 
@@ -36,6 +42,7 @@ import time
 
 from core.extractors import Extractor
 from core.filemanager import FileManager
+from core.notification import Notification
 
 logger = logging.getLogger("PremiumMarket")
 
@@ -46,6 +53,13 @@ HISTORY_FILE = "cache/premium_market_history.json"
 # more so a slower clock still shows a fortnight.
 HISTORY_DAYS = 14
 HISTORY_MAX_ROWS = 2500
+# A reading sells from at most this many villages, so a wide window never turns
+# into a burst of requests.
+MAX_SALES_PER_READ = 4
+SALES_KEPT = 200
+# A sold point may cost this much more than the Koers limit before the quote
+# is refused: the Koers is a buy price (3% tax), and each sale moves the price.
+QUOTE_SLACK = 1.06
 
 DEFAULTS = {
     "track_market": False,
@@ -173,6 +187,190 @@ def sellable_points(snap, res, max_koers):
     return points, spent
 
 
+# -- selling -------------------------------------------------------------------
+
+def points_for(stock, capacity, constants, sell_tax, amount):
+    """Points the game pays for selling `amount` now (its calculateCost with a
+    negative amount: the price falls as the stock rises over the sale)."""
+    now = marginal_rate(stock, capacity, constants)
+    after = marginal_rate(stock + amount, capacity, constants)
+    return (1 + (sell_tax or 0)) * (now + after) * amount / 2
+
+
+def amount_for_points(stock, capacity, constants, sell_tax, points, budget):
+    """What to ask the exchange for so that it sells exactly `points` points,
+    or None when that would take more than `budget` (or the room left).
+
+    The game sells whole points only: it rounds the points a request is worth
+    UP and resizes the amount to match (asked for 300 iron worth 1.26 points,
+    it quoted 475 iron for 2). So the request aims a quarter point short; the
+    game's rounding lands it on `points`, and the quote is checked anyway."""
+    limit = min(int(budget), capacity - stock)
+    if limit <= 0:
+        return None
+    goal = points - 0.25
+    if points_for(stock, capacity, constants, sell_tax, limit) < points:
+        # Even the whole budget does not pay for `points`: the game's rounding
+        # up would ask for more than the village may give.
+        return None
+    lo, hi = 1, limit
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if points_for(stock, capacity, constants, sell_tax, mid) >= goal:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def short_resources(stock, margin_pct):
+    """Resources a village holds too little of next to its own other two - the
+    balancer's evening-out judgement."""
+    mean = sum(stock.get(r, 0) for r in RESOURCES) / 3.0
+    if mean <= 0:
+        return set()
+    return {r for r in RESOURCES if stock.get(r, 0) < mean * (1 - margin_pct / 100.0)}
+
+
+def plan_sales(snap, conf, villages, sold_today=0, margin_pct=20):
+    """What to sell against this reading: [{village, res, amount, points}].
+
+    Cheapest resource first (fewest resources per point). For each, the market
+    takes points while its Koers stays at or below the limit; villages with the
+    most to spare supply them, each only what is above keep_pct of its
+    warehouse and what its free merchants carry. The simulated stock rises with
+    every planned sale, so the next one is priced on the market it leaves.
+    """
+    remaining = max(0, conf["max_pp_per_day"] - int(sold_today or 0))
+    consts = snap.get("constants") or {}
+    sell_tax = (snap.get("tax") or {}).get("sell", 0)
+    stock = dict(snap["stock"])
+    sales = []
+    order = sorted(RESOURCES, key=lambda r: snap["koers"].get(r) or 10 ** 9)
+    for res in order:
+        limit = conf["max_rate"].get(res) or 0
+        if not limit or remaining <= 0 or len(sales) >= MAX_SALES_PER_READ:
+            continue
+        cap = snap["capacity"][res]
+        sim = dict(snap, stock=dict(stock, **{res: stock[res]}),
+                   room=dict(snap["room"], **{res: max(0, cap - stock[res])}))
+        left, _ = sellable_points(sim, res, limit)
+        left = min(left, remaining)
+        donors = []
+        for vid, v in (villages or {}).items():
+            have = {r: int((v.get("resources") or {}).get(r, 0) or 0) for r in RESOURCES}
+            storage = int(v.get("storage_max") or 0)
+            if conf["skip_short"] and res in short_resources(have, margin_pct):
+                continue
+            free = (v.get("merchants") or {}).get("free")
+            if not free:
+                continue
+            spare = have[res] - storage * conf["keep_pct"] // 100
+            budget = min(spare, int(free) * 1000)
+            if budget > 0:
+                donors.append((budget, str(vid)))
+        for budget, vid in sorted(donors, reverse=True):
+            if left <= 0 or len(sales) >= MAX_SALES_PER_READ:
+                break
+            points = left
+            amount = None
+            while points > 0:
+                amount = amount_for_points(stock[res], cap, consts, sell_tax, points, budget)
+                if amount is not None:
+                    break
+                points -= 1
+            if points <= 0 or amount is None:
+                continue
+            sales.append({"village": vid, "res": res, "amount": amount, "points": points,
+                          "budget": budget})
+            stock[res] += amount
+            left -= points
+            remaining -= points
+    return sales
+
+
+def _body(result):
+    """The payload of an ajax answer, whichever way it is wrapped."""
+    if isinstance(result, dict) and "response" in result:
+        return result["response"]
+    return result
+
+
+def execute_sale(wrapper, sale, limit):
+    """Quote, check, confirm - the game's own two steps. Returns (points, error)."""
+    res, amount = sale["res"], int(sale["amount"])
+    quote = _body(wrapper.get_api_action(
+        sale["village"], action="exchange_begin", params={"screen": "market"},
+        data={"sell_%s" % res: amount}))
+    rows = quote if isinstance(quote, list) else []
+    row = next((q for q in rows if isinstance(q, dict) and q.get("resource") == res), None)
+    if not row:
+        return 0, "no quote from the exchange"
+    if row.get("error"):
+        return 0, str(row.get("error"))
+    points = abs(float(row.get("cost") or 0))
+    sold = abs(int(row.get("amount") or 0))
+    if points < 1 or not sold:
+        return 0, "the quote earns no points"
+    if sale.get("budget") and sold > sale["budget"]:
+        # The game rounded the sale up to whole points past what this village
+        # may give (its keep share, its merchants).
+        return 0, "the game wants %d, more than the %d this village may give" % (
+            sold, sale["budget"])
+    if limit and sold / points > limit * QUOTE_SLACK:
+        return 0, "price moved: %d per point" % (sold / points)
+    answer = _body(wrapper.get_api_action(
+        sale["village"], action="exchange_confirm", params={"screen": "market"},
+        data={"rate_%s" % res: row.get("rate_hash"), "sell_%s" % res: sold, "mb": "1"}))
+    if isinstance(answer, dict) and answer.get("success") is True:
+        return int(points), None
+    return 0, "not confirmed: %s" % str(answer)[:160]
+
+
+def _today(now):
+    return time.strftime("%Y-%m-%d", time.localtime(now))
+
+
+def _managed_villages():
+    out = {}
+    for name in FileManager.list_directory("cache/managed", ends_with=".json") or []:
+        data = FileManager.load_json_file("cache/managed/%s" % name)
+        if data:
+            out[name.replace(".json", "")] = data
+    return out
+
+
+def sell(wrapper, snap, conf, config, state, now):
+    """Sell into this reading if the settings allow; records every sale."""
+    daily = state.setdefault("daily", {})
+    today = _today(now)
+    for day in list(daily):
+        if day != today:
+            daily.pop(day, None)
+    margin = int(((config or {}).get("balancer") or {}).get("ratio_margin_pct", 20) or 20)
+    plan = plan_sales(snap, conf, _managed_villages(), daily.get(today, 0), margin)
+    sales = state.setdefault("sales", [])
+    for sale in plan:
+        points, error = execute_sale(wrapper, sale, conf["max_rate"].get(sale["res"]))
+        entry = dict(sale, ts=int(time.time()), ok=bool(points), points=points or 0,
+                     planned=sale["points"], error=error)
+        sales.append(entry)
+        if points:
+            daily[today] = daily.get(today, 0) + points
+            logger.info("Sold %d %s for %d premium points from village %s",
+                        sale["amount"], sale["res"], points, sale["village"])
+            Notification.send("TWB premium: sold %d %s for %d points (%d per point)" % (
+                sale["amount"], sale["res"], points, sale["amount"] // max(1, points)))
+        else:
+            logger.warning("Premium sale of %d %s from %s not done: %s",
+                           sale["amount"], sale["res"], sale["village"], error)
+            # The market moved or refused: the rest of this plan was priced on
+            # the same reading, so leave it for the next one.
+            break
+    del sales[:-SALES_KEPT]
+    return plan
+
+
 # -- state and history -------------------------------------------------------
 
 def load_state():
@@ -203,14 +401,15 @@ def due(state, conf, now=None):
 
 
 def watch(wrapper, village_id, config, now=None):
-    """Read the exchange if tracking is on and the clock says so.
+    """Read the exchange if tracking or selling is on and the clock says so,
+    and sell into the reading when selling is on.
 
     Returns the new snapshot, or None when nothing was read. The next read is
     scheduled a random track_min..track_max minutes out, so the reads never
     fall into a fixed rhythm.
     """
     conf = settings(config)
-    if not conf["track_market"] or not village_id:
+    if not (conf["track_market"] or conf["sell"]) or not village_id:
         return None
     state = load_state()
     now = now or time.time()
@@ -232,6 +431,11 @@ def watch(wrapper, village_id, config, now=None):
     state.pop("last_error", None)
     save_state(state)
     _append_history(snap)
+    if conf["sell"] and any(snap["room"].values()):
+        try:
+            sell(wrapper, snap, conf, config, state, now)
+        finally:
+            save_state(state)
     logger.info("Premium exchange: %s", ", ".join(
         "%s %s per point (%s)" % (r, snap["koers"][r],
                                   "full" if not snap["room"][r]

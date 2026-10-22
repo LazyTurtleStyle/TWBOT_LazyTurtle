@@ -1,5 +1,6 @@
 """Plain-assert checks for the premium exchange watcher:
 python3 tests/test_premium_market.py"""
+import math
 import os
 import sys
 
@@ -102,6 +103,119 @@ def test_koers_on_a_full_old_world_matches_the_screen():
             "rates": {"wood": 0.000473, "stone": 0.000472, "iron": 0.000489},
             "tax": {"buy": 0.03, "sell": 0}, "constants": DATA["constants"]}
     assert pm.snapshot(full)["koers"] == {"wood": 2061, "stone": 2065, "iron": 1994}
+
+
+# -- selling --------------------------------------------------------------------
+
+def conf(**kw):
+    base = {"premium": {"sell": True, "max_rate": {"wood": 300, "stone": 300, "iron": 300},
+                        "keep_pct": 50, "max_pp_per_day": 50, "skip_short": True}}
+    base["premium"].update(kw)
+    return pm.settings(base)
+
+
+def village(wood, stone, iron, storage=100000, free=10):
+    return {"resources": {"wood": wood, "stone": stone, "iron": iron},
+            "storage_max": storage, "merchants": {"free": free, "total": 10}}
+
+
+def test_the_request_rounds_up_to_exactly_the_planned_points():
+    # The game sells whole points, rounding a request up.
+    snap = pm.snapshot(DATA)
+    st, cap, c = snap["stock"]["iron"], snap["capacity"]["iron"], DATA["constants"]
+    for want in (1, 2, 10, 37):
+        a = pm.amount_for_points(st, cap, c, 0, want, 100000)
+        assert math.ceil(pm.points_for(st, cap, c, 0, a)) == want, want
+
+
+def test_a_budget_too_small_for_the_rounded_points_is_refused():
+    snap = pm.snapshot(DATA)
+    st, cap, c = snap["stock"]["iron"], snap["capacity"]["iron"], DATA["constants"]
+    exact = pm.amount_for_points(st, cap, c, 0, 2, 100000)
+    full_two = 0
+    while pm.points_for(st, cap, c, 0, full_two) < 2:
+        full_two += 1
+    assert pm.amount_for_points(st, cap, c, 0, 2, full_two - 1) is None
+    assert pm.amount_for_points(st, cap, c, 0, 2, full_two) == exact
+
+
+def test_plan_sells_the_cheapest_resource_first_from_what_is_spare():
+    snap = pm.snapshot(DATA)  # iron 243 is cheapest, wood/clay 273
+    sales = pm.plan_sales(snap, conf(), {"a": village(60000, 60000, 60000)})
+    assert sales and sales[0]["res"] == "iron"
+    # Keeps 50% of a 100k warehouse: at most 10k iron spare, and 10 merchants.
+    assert sum(x["amount"] for x in sales if x["res"] == "iron") <= 10000
+
+
+def test_plan_respects_limit_daily_cap_and_short_resources():
+    snap = pm.snapshot(DATA)
+    assert pm.plan_sales(snap, conf(max_rate={"wood": 0, "stone": 0, "iron": 0}),
+                         {"a": village(90000, 90000, 90000)}) == []
+    capped = pm.plan_sales(snap, conf(max_pp_per_day=5), {"a": village(90000, 90000, 90000)})
+    assert sum(x["points"] for x in capped) == 5
+    assert pm.plan_sales(snap, conf(max_pp_per_day=5), {"a": village(90000, 90000, 90000)},
+                         sold_today=5) == []
+    # Iron is short in this village: it is not sold, wood/clay are.
+    lopsided = pm.plan_sales(snap, conf(), {"a": village(90000, 90000, 10000)})
+    assert lopsided and all(x["res"] != "iron" for x in lopsided)
+
+
+def test_plan_never_sells_into_a_full_market_or_without_merchants():
+    full = pm.snapshot(dict(DATA, stock=dict(DATA["capacity"])))
+    assert pm.plan_sales(full, conf(), {"a": village(90000, 90000, 90000)}) == []
+    snap = pm.snapshot(DATA)
+    assert pm.plan_sales(snap, conf(), {"a": village(90000, 90000, 90000, free=0)}) == []
+
+
+class Exchange:
+    """The two ajax steps, answering like the game."""
+
+    def __init__(self, cost=-10.0, error=None, confirm=True):
+        self.cost, self.error, self.confirm = cost, error, confirm
+        self.calls = []
+
+    def get_api_action(self, village_id, action, params=None, data=None):
+        self.calls.append((action, dict(data)))
+        if action == "exchange_begin":
+            res = [k[5:] for k in data if k.startswith("sell_")][0]
+            amount = data["sell_" + res]
+            row = {"resource": res, "amount": -amount, "cost": self.cost,
+                   "rate_hash": "abc", "merchants_required": -(-amount // 1000)}
+            if self.error:
+                row["error"] = self.error
+            return {"response": [row]}
+        return {"response": {"success": self.confirm}}
+
+
+def test_a_sale_is_quoted_then_confirmed_with_the_games_fields():
+    ex = Exchange(cost=-10.0)
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "iron", "amount": 2500,
+                                         "points": 10}, 300)
+    assert (points, error) == (10, None)
+    assert ex.calls[1] == ("exchange_confirm", {"rate_iron": "abc", "sell_iron": 2500, "mb": "1"})
+
+
+def test_a_sale_whose_price_moved_is_not_confirmed():
+    ex = Exchange(cost=-5.0)   # 2500 for 5 points = 500 per point, limit 300
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "iron", "amount": 2500,
+                                         "points": 10}, 300)
+    assert points == 0 and "price moved" in error
+    assert [c[0] for c in ex.calls] == ["exchange_begin"]
+
+
+def test_a_refused_quote_is_not_confirmed():
+    ex = Exchange(error="Not enough merchants")
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "iron", "amount": 2500,
+                                         "points": 10}, 300)
+    assert points == 0 and error == "Not enough merchants"
+    assert len(ex.calls) == 1
+
+
+def test_a_quote_past_the_village_budget_is_not_confirmed():
+    ex = Exchange(cost=-2.0)
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "iron", "amount": 475,
+                                         "points": 2, "budget": 300}, 300)
+    assert points == 0 and "more than" in error and len(ex.calls) == 1
 
 
 if __name__ == "__main__":
