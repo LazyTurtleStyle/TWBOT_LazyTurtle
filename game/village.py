@@ -77,6 +77,10 @@ class Village:
                 "Configuration parameter %s:%s does not exist", section, parameter
             )
             return default
+        if self.config[section][parameter] is None:
+            # null = "not set / auto-detect hasn't run yet". Callers always
+            # supply a default, so honour it instead of returning falsy None.
+            return default
         return self.config[section][parameter]
 
     def get_village_config(self, village_id, parameter, default=None):

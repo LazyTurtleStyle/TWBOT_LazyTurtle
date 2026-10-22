@@ -636,26 +636,40 @@ class TWB:
     @staticmethod
     def get_world_options(overview_page: OverviewPage, config):
         """
-        Detects world options like flags and knight enabled from the overview page
+        Detects world options from the public /page/settings page. Only fills
+        keys that are null in the config (auto-detect); manually set values
+        are never overwritten.
         """
 
-        def check_and_set(option_key, setting, check_string=None):
+        def check_and_set(option_key, setting):
             nonlocal changed
-            if world_config[option_key] is None:
+            if setting is None:
+                return
+            if world_config.get(option_key) is None:
                 world_config[option_key] = setting
-                if check_string:
-                    world_config[option_key] = check_string in overview_page.result_get.text
-
                 changed = True
 
         changed = False
-        world_settings = overview_page.world_settings
         world_config = config["world"]
 
-        check_and_set("flags_enabled", world_settings.flags)
-        check_and_set("knight_enabled", world_settings.knight)
-        check_and_set("boosters_enabled", world_settings.boosters)
-        check_and_set("quests_enabled", world_settings.quests, "Quests.setQuestData")
+        settings = overview_page.fetch_world_settings()
+        if settings:
+            check_and_set("flags_enabled", settings.get("flags"))
+            check_and_set("knight_enabled", settings.get("knight"))
+            check_and_set("quests_enabled", settings.get("quests"))
+            check_and_set("archers_enabled", settings.get("archers"))
+            check_and_set("building_destruction_enabled", settings.get("building_destruction"))
+        else:
+            # Settings page unavailable: fall back to menu-link sniffing on the
+            # overview page (covers flags/knight/boosters/quests only)
+            world_settings = overview_page.world_settings
+            check_and_set("flags_enabled", world_settings.flags)
+            check_and_set("knight_enabled", world_settings.knight)
+            check_and_set("boosters_enabled", world_settings.boosters)
+            check_and_set("quests_enabled", world_settings.quests)
+
+        # Boosters is not on /page/settings; menu-link sniff is the only source
+        check_and_set("boosters_enabled", overview_page.world_settings.boosters)
 
         return changed, config
 
