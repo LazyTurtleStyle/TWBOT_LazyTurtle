@@ -17,7 +17,6 @@ from game.defence_manager import DefenceManager
 from game.incomings import load_groups
 from game import lightpass
 from game.map import Map, MapCache
-from game import massgather
 from game.reports import ReportManager
 from game.resources import ResourceManager
 from game.snobber import SnobManager
