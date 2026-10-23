@@ -4857,6 +4857,8 @@ class EventOverview:
             # The anvil: stock, targets and the next craft. Empty elsewhere,
             # which is what the page keys the anvil panels off.
             "craft": snapshot.get("craft") or {},
+            # The gift vault: Openers in stock, gifts opened, what is revealed.
+            "gift": snapshot.get("gift") or {},
             "ranks_event": snapshot.get("ranks_event") or [],
             "totals": {"actions": int(totals.get("actions") or 0),
                        "discovered": int(totals.get("discovered") or 0),
