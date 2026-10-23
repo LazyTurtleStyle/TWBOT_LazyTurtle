@@ -49,6 +49,9 @@ logger = logging.getLogger("PremiumMarket")
 
 RESOURCES = ("wood", "stone", "iron")
 STATE_FILE = "cache/premium_market.json"
+# Written by the dashboard's "Check now" button, removed once served: read the
+# exchange on the next tick instead of waiting for the clock.
+CHECK_REQUEST = "cache/premium_check.json"
 HISTORY_FILE = "cache/premium_market_history.json"
 # Two weeks of reads at the fastest sane interval is ~1500 rows; keep a little
 # more so a slower clock still shows a fortnight.
@@ -329,35 +332,67 @@ def _body(result):
     return result
 
 
-def execute_sale(wrapper, sale, limit):
-    """Quote, check, confirm - the game's own two steps. Returns (points, error)."""
-    res, amount = sale["res"], int(sale["amount"])
-    quote = _body(wrapper.get_api_action(
-        sale["village"], action="exchange_begin", params={"screen": "market"},
-        data={"sell_%s" % res: amount}))
-    rows = quote if isinstance(quote, list) else []
-    row = next((q for q in rows if isinstance(q, dict) and q.get("resource") == res), None)
+def _check_quote(row, sale, limit):
+    """(points, sold, error) for one quoted transaction row."""
     if not row:
-        return 0, "no quote from the exchange"
+        return 0, 0, "no quote from the exchange"
     if row.get("error"):
-        return 0, str(row.get("error"))
+        return 0, 0, str(row.get("error"))
     points = abs(float(row.get("cost") or 0))
     sold = abs(int(row.get("amount") or 0))
     if points < 1 or not sold:
-        return 0, "the quote earns no points"
+        return 0, 0, "the quote earns no points"
     if sale.get("budget") and sold > sale["budget"]:
         # The game rounded the sale up to whole points past what this village
         # may give (its keep share, its merchants).
-        return 0, "the game wants %d, more than the %d this village may give" % (
+        return 0, 0, "the game wants %d, more than the %d this village may give" % (
             sold, sale["budget"])
     if limit and sold / points > limit * QUOTE_SLACK:
-        return 0, "price moved: %d per point" % (sold / points)
-    answer = _body(wrapper.get_api_action(
-        sale["village"], action="exchange_confirm", params={"screen": "market"},
-        data={"rate_%s" % res: row.get("rate_hash"), "sell_%s" % res: sold, "mb": "1"}))
-    if isinstance(answer, dict) and answer.get("success") is True:
-        return int(points), None
-    return 0, "not confirmed: %s" % str(answer)[:160]
+        return 0, 0, "price moved: %d per point" % (sold / points)
+    return points, sold, None
+
+
+def _row_for(rows, res):
+    rows = rows if isinstance(rows, list) else []
+    return next((q for q in rows if isinstance(q, dict) and q.get("resource") == res), None)
+
+
+def execute_sale(wrapper, sale, limit):
+    """Quote, check, confirm - the game's own two steps. Returns (points, error).
+
+    When the market moves between the quote and the confirmation (someone else
+    sold in the meantime) the game does not sell: it answers with a fresh
+    quote, the way its own screen asks you again. A fresh quote that still
+    passes every check is confirmed once more; one that does not ends the
+    sale with the game's own reason.
+    """
+    res, amount = sale["res"], int(sale["amount"])
+    raw = wrapper.get_api_action(
+        sale["village"], action="exchange_begin", params={"screen": "market"},
+        data={"sell_%s" % res: amount})
+    row = _row_for(_body(raw), res)
+    if row is None:
+        return 0, "no quote from the exchange: %s" % str(raw)[:300]
+    points, sold, error = _check_quote(row, sale, limit)
+    if error:
+        return 0, error
+    for attempt in range(2):
+        answer = _body(wrapper.get_api_action(
+            sale["village"], action="exchange_confirm", params={"screen": "market"},
+            data={"rate_%s" % res: row.get("rate_hash"), "sell_%s" % res: sold, "mb": "1"}))
+        if isinstance(answer, dict) and answer.get("success") is True:
+            return int(points), None
+        requote = _row_for((answer or {}).get("transactions")
+                           if isinstance(answer, dict) else None, res)
+        if requote is None:
+            return 0, "not confirmed: %s" % str(answer)[:400]
+        if attempt:
+            break
+        row = requote
+        points, sold, error = _check_quote(row, sale, limit)
+        if error:
+            return 0, "market moved before the confirmation: %s" % error
+    return 0, "market kept moving: %s" % str(answer)[:400]
 
 
 def _today(now):
@@ -428,10 +463,15 @@ def _append_history(snap):
     FileManager.save_json_file_atomic(rows[-HISTORY_MAX_ROWS:], HISTORY_FILE)
 
 
+def check_requested():
+    return bool(FileManager.load_json_file(CHECK_REQUEST))
+
+
 def due(state, conf, now=None):
-    """Whether the watcher should read the exchange now."""
+    """Whether the watcher should read the exchange now: the clock says so, or
+    someone pressed Check now."""
     now = now or time.time()
-    return now >= int(state.get("next_read") or 0)
+    return now >= int(state.get("next_read") or 0) or check_requested()
 
 
 def watch(wrapper, village_id, config, now=None):
@@ -450,6 +490,8 @@ def watch(wrapper, village_id, config, now=None):
     if not due(state, conf, now):
         return None
     gap = random.uniform(conf["track_min_minutes"], conf["track_max_minutes"]) * 60
+    if check_requested():
+        FileManager.remove_file(CHECK_REQUEST)
     page = wrapper.get_url("game.php?village=%s&screen=market&mode=exchange" % village_id)
     data = Extractor.premium_data(getattr(page, "text", "") or "")
     state["next_read"] = int(now + gap)

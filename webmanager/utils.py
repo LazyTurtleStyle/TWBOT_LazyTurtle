@@ -1632,6 +1632,18 @@ class DataReader:
         return DataReader._cache_json("premium_market.json", {}) or {}
 
     @staticmethod
+    def premium_check_request():
+        """Ask the bot to read the exchange now ("Check now"), selling into it
+        if selling is on. The bot serves it on its next tick and removes it."""
+        try:
+            DataReader.ensure_data_dir("cache")
+            with open(DataReader.data_path("cache", "premium_check.json"), "w") as f:
+                json.dump({"requested": int(time.time())}, f)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
     def premium_history_grab():
         rows = DataReader._cache_json("premium_market_history.json", [])
         return rows if isinstance(rows, list) else []
@@ -5687,6 +5699,7 @@ class PremiumOverview:
             "last_read": state.get("last_read"),
             "next_read": state.get("next_read"),
             "last_error": state.get("last_error"),
+            "check_pending": os.path.exists(DataReader.data_path("cache", "premium_check.json")),
             "merchants": (snap or {}).get("merchants"),
             "history": [{"ts": h["ts"], "koers": h["koers"],
                          "room": {r: h["capacity"][r] - h["stock"][r] for r in cls.RES}}
