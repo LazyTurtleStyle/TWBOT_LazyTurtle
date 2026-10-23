@@ -268,6 +268,71 @@ def test_until_full_sells_the_whole_room():
     assert room - 2000 < sold <= room
 
 
+# -- the market moving between quote and confirmation ----------------------
+
+class MovingExchange(Exchange):
+    """Answers the first confirmation with a fresh quote, as the game does
+    when somebody else sold in the meantime."""
+
+    def __init__(self, requote_cost, requote_error=None, **kw):
+        super().__init__(**kw)
+        self.requote_cost, self.requote_error, self.confirms = requote_cost, requote_error, 0
+
+    def get_api_action(self, village_id, action, params=None, data=None):
+        if action != "exchange_confirm":
+            return super().get_api_action(village_id, action, params, data)
+        self.calls.append((action, dict(data)))
+        self.confirms += 1
+        if self.confirms == 1:
+            res = [k[5:] for k in data if k.startswith("sell_")][0]
+            return {"response": {"transactions": [{
+                "resource": res, "amount": -(data["sell_" + res] + 85),
+                "cost": self.requote_cost, "rate_hash": "fresh",
+                "error": self.requote_error}]}}
+        return {"response": {"success": True}}
+
+
+def test_a_fresh_quote_that_still_holds_is_confirmed():
+    ex = MovingExchange(requote_cost=-10.0, cost=-10.0)
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "wood", "amount": 2500,
+                                         "points": 10, "budget": 5000}, 300)
+    assert (points, error) == (10, None)
+    assert ex.calls[-1] == ("exchange_confirm", {"rate_wood": "fresh", "sell_wood": 2585, "mb": "1"})
+
+
+def test_a_fresh_quote_with_the_games_refusal_ends_the_sale():
+    ex = MovingExchange(requote_cost=-9.0, requote_error="De beurs heeft niet genoeg ruimte", cost=-10.0)
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "wood", "amount": 2500,
+                                         "points": 10}, 300)
+    assert points == 0 and "niet genoeg ruimte" in error
+    assert ex.confirms == 1
+
+
+def test_a_fresh_quote_past_the_price_limit_is_not_confirmed():
+    ex = MovingExchange(requote_cost=-5.0, cost=-10.0)   # 2585 / 5 = 517 per point
+    points, error = pm.execute_sale(ex, {"village": "1", "res": "wood", "amount": 2500,
+                                         "points": 10}, 300)
+    assert points == 0 and "price moved" in error and ex.confirms == 1
+
+
+def test_check_now_makes_the_watcher_read_at_once():
+    store = {"state": {"next_read": 10 ** 10}}
+    pm.load_state = lambda: dict(store.get("state") or {})
+    pm.save_state = lambda s: store.__setitem__("state", s)
+    pm.load_history = lambda: []
+    pm.FileManager.save_json_file_atomic = staticmethod(lambda data, path: None)
+    requested = {"on": True}
+    pm.FileManager.load_json_file = staticmethod(
+        lambda path: {"requested": 1} if path == pm.CHECK_REQUEST and requested["on"] else None)
+    pm.FileManager.remove_file = staticmethod(lambda path: requested.__setitem__("on", False))
+    w = Wrapper()
+    on = {"premium": {"track_market": True}}
+    assert pm.watch(w, "1", on, now=1000) is not None and w.reads == 1
+    assert requested["on"] is False
+    # Served: the clock rules again.
+    assert pm.watch(w, "1", on, now=1001) is None and w.reads == 1
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

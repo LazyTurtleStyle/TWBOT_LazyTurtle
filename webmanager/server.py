@@ -1058,6 +1058,12 @@ def market_page():
                            pm=PremiumOverview.build(data))
 
 
+@app.route('/app/premium/check', methods=['POST'])
+def premium_check():
+    """The Premium points tab's Check now: read the exchange within a minute."""
+    return jsonify({"ok": DataReader.premium_check_request()})
+
+
 @app.route('/report_analysis', methods=['GET'])
 def report_analysis_page():
     data = sync()

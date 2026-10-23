@@ -152,8 +152,13 @@
 <div class="grid-2">
 	<div class="stack">
 		<div class="card mb-3">
-			<div class="card-header py-2"><strong>The exchange now</strong>
-				<small class="text-muted ml-2">{% if pm.last_read %}read {{ pm.last_read|ago }}{% if pm.conf.track_market and pm.next_read %} &middot; next read {{ pm.next_read|ts }}{% endif %}{% else %}never read{% endif %}</small></div>
+			<div class="card-header py-2 d-flex align-items-center"><span><strong>The exchange now</strong>
+				<small class="text-muted ml-2">{% if pm.last_read %}read {{ pm.last_read|ago }}{% if (pm.conf.track_market or pm.conf.sell) and pm.next_read %} &middot; next read {{ pm.next_read|ts }}{% endif %}{% else %}never read{% endif %}</small></span>
+				<span class="ml-auto d-flex align-items-center" style="gap:.5rem">
+					<small class="text-muted" id="pm_check_status">{% if pm.check_pending %}check asked for, the bot reads within a minute{% endif %}</small>
+					<button class="btn btn-sm" id="pm_check_btn" onclick="pmCheckNow()" {{ 'disabled' if (pm.check_pending or not (pm.conf.track_market or pm.conf.sell)) }}
+						title="Read the exchange within a minute instead of waiting for the next read - and sell into it if Sell is on, with your settings. Active hours only.">Check now</button>
+				</span></div>
 			{% if pm.current %}
 			<div class="table-responsive">
 				<table class="table table-sm mb-0 mk-table">
@@ -311,6 +316,17 @@
 </script>
 
 <script>
+function pmCheckNow() {
+	var btn = document.getElementById('pm_check_btn'), status = document.getElementById('pm_check_status');
+	btn.disabled = true;
+	fetch('/app/premium/check', {method: 'POST'})
+		.then(function (r) { return r.json(); })
+		.then(function (resp) {
+			if (!resp || !resp.ok) throw 0;
+			status.textContent = 'check asked for, the bot reads within a minute';
+		})
+		.catch(function () { btn.disabled = false; status.textContent = 'could not ask for a check'; });
+}
 (function () {
 	// Tabs, remembered in the URL hash.
 	function show(pane) {
