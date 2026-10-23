@@ -1063,6 +1063,145 @@ def _anvil_record(state, actions):
         state["log"] = (actions + state.get("log", []))[:MAX_LOG]
 
 
+# -- the gift vault (event_gift, e.g. Halloween) ----------------------------
+#
+# A row of closed gifts. An Opener (item 4003) opens one for free; without one
+# the game asks 50 premium points, a fresh set costs 100. A Revealer (4002)
+# shows what one closed gift holds and is spent by the game itself; a Doubler
+# (4004) doubles the next gift. "Begin" (ajaxaction=start) deals a new round
+# when the game offers it, and costs nothing.
+#
+# The bot only ever does the two free things: start a round when the game says
+# it may, and open gifts with Openers already in stock - never free=0, never a
+# reset. Everything is read off the page's own EventScreen init call.
+
+GIFT_OPENER, GIFT_REVEALER, GIFT_DOUBLER = "4003", "4002", "4004"
+
+
+def _gift_page(wrapper, village_id, screen):
+    res = wrapper.get_url(f"game.php?village={village_id}&screen={screen}")
+    text = getattr(res, "text", "") if res is not None else ""
+    marker = "new EventScreen("
+    if not text or marker not in text:
+        return None
+    start = text.find("{", text.index(marker))
+    try:
+        data, _ = json.JSONDecoder().raw_decode(text[start:])
+    except ValueError:
+        return None
+    timer = re.search(r'class="gift-cycle-time".*?<span class="timer"[^>]*>([^<]+)<', text, re.S)
+    data["renews_in"] = timer.group(1).strip() if timer else ""
+    return data
+
+
+def _gift_read_page(wrapper, village_id, screen):
+    page = _gift_page(wrapper, village_id, screen)
+    if not page:
+        return None
+    return {"gift_read": True, "ends_text": ""}
+
+
+def _gift_poll(wrapper, village_id, screen):
+    page = _gift_page(wrapper, village_id, screen)
+    if not page:
+        return None
+    page["player_energies"] = {}
+    return page
+
+
+def _gift_slots(poll):
+    return ((poll.get("collection") or {}).get("items")) or []
+
+
+def _gift_count(poll, item):
+    try:
+        return int((poll.get("item_counts") or {}).get(item) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def gift_pick(slots):
+    """The slot to open: a gift whose content a Revealer showed first (it is a
+    known prize, and a revealed gift left closed is wasted information), else
+    the first closed one. None when everything is open."""
+    closed = [i for i, s in enumerate(slots or []) if (s or {}).get("state") == "available"]
+    if not closed:
+        return None
+    revealed = [i for i in closed if (slots[i] or {}).get("item")]
+    return (revealed or closed)[0]
+
+
+def _gift_snapshot(state, poll, settings=None):
+    slots = _gift_slots(poll)
+    return {"gift": {
+        "openers": _gift_count(poll, GIFT_OPENER),
+        "revealers": _gift_count(poll, GIFT_REVEALER),
+        "doublers": _gift_count(poll, GIFT_DOUBLER),
+        "slots": len(slots),
+        "opened": sum(1 for s in slots if (s or {}).get("state") == "collected"),
+        "revealed": [((s or {}).get("item") or {}).get("name") for s in slots
+                     if (s or {}).get("state") == "available" and (s or {}).get("item")],
+        "can_start": bool(poll.get("can_shuffle")),
+        "renews_in": poll.get("renews_in") or "",
+        "open_cost_pp": ((poll.get("costs") or {}).get("open") or {}).get("cost"),
+    }}
+
+
+def _gift_play(wrapper, village_id, screen, state, poll, settings=None):
+    """Start a round if the game offers one, then open gifts while Openers last."""
+    done = []
+    if poll.get("can_shuffle"):
+        result = wrapper.get_api_action(village_id=village_id, action="start",
+                                        params={"screen": screen}, data={})
+        if not isinstance(result, dict):
+            logger.warning("Gift event: starting a round did not go through")
+            return done
+        logger.info("Gift event: started a new round")
+        fresh = _gift_poll(wrapper, village_id, screen)
+        if not fresh:
+            return done
+        poll.update(fresh)
+    while len(done) < MAX_ACTIONS_PER_CYCLE and _gift_count(poll, GIFT_OPENER) > 0:
+        slot = gift_pick(_gift_slots(poll))
+        if slot is None:
+            break
+        doubled = _gift_count(poll, GIFT_DOUBLER) > 0
+        result = wrapper.get_api_action(village_id=village_id, action="open",
+                                        params={"screen": screen},
+                                        data={"slot": slot, "free": 1})
+        response = (result.get("response") or result) if isinstance(result, dict) else None
+        item = (((response or {}).get("result") or {}).get("item") or {}) \
+            if isinstance(response, dict) else {}
+        name = item.get("name") if isinstance(item, dict) else None
+        if not name:
+            logger.warning("Gift event: opening slot %s answered without a gift: %s",
+                           slot, str(result)[:200])
+            break
+        entry = {"ts": int(time.time()), "slot": slot, "item": name,
+                 "item_id": item.get("item_id"), "doubled": doubled,
+                 "reward": 0, "currency": None}
+        done.append(entry)
+        logger.info("Gift event: opened slot %s -> %s%s", slot, name,
+                    " (doubled)" if doubled else "")
+        fresh = _gift_poll(wrapper, village_id, screen)
+        if not fresh:
+            break
+        poll.update(fresh)
+    return done
+
+
+def _gift_record(state, actions):
+    totals = state.setdefault("totals", {"actions": 0, "reward": 0, "items": 0})
+    won = state.setdefault("items_won", {})
+    for opened in actions:
+        totals["actions"] = totals.get("actions", 0) + 1
+        totals["items"] = totals.get("items", 0) + 1
+        name = opened.get("item") or "?"
+        won[name] = won.get(name, 0) + 1
+    if actions:
+        state["log"] = (actions + state.get("log", []))[:MAX_LOG]
+
+
 DRIVERS = {
     "event_horse_race": {
         "label": "Horse race",
@@ -1085,6 +1224,18 @@ DRIVERS = {
         "record": _dragons_record,
         "static_key": "ends_text",
         "currency": "scales",
+    },
+    "event_gift": {
+        "label": "Gift vault",
+        # No bar: Openers are the limit, and they are in the snapshot.
+        "energy_key": None,
+        "read": _gift_read_page,
+        "poll": _gift_poll,
+        "play": _gift_play,
+        "snapshot": _gift_snapshot,
+        "record": _gift_record,
+        "static_key": "gift_read",
+        "currency": "",
     },
     "event_crafting": {
         "label": "The anvil",

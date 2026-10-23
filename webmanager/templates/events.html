@@ -78,6 +78,15 @@
 				<div class="sub">{% if c.craft.trust == 'trusted' %}recipe order confirmed — the bot aims straight at a target
 					{% elif c.craft.trust == 'guess' %}recipe order not yet confirmed — search in the right block
 					{% else %}recipe order does not hold — searching blind{% endif %}</div></div>
+			{% elif c.gift %}
+			<div class="stat"><div class="v gold">{{ c.gift.openers }}</div>
+				<div class="k">Openers</div><div class="sub">each opens one gift for free &mdash; the bot never pays the {{ c.gift.open_cost_pp or 50 }} premium points</div></div>
+			<div class="stat"><div class="v">{{ c.gift.opened }}<span class="faint" style="font-size:16px">/{{ c.gift.slots }}</span></div>
+				<div class="k">Gifts opened</div><div class="sub">{% if c.gift.can_start %}a new round can be started{% elif c.gift.renews_in %}new selection in {{ c.gift.renews_in }}{% else %}this round{% endif %}</div></div>
+			<div class="stat"><div class="v">{{ c.gift.revealers }} / {{ c.gift.doublers }}</div>
+				<div class="k">Revealers / doublers</div><div class="sub">{% if c.gift.revealed %}revealed: {{ c.gift.revealed|join(', ') }}{% else %}used by the game itself{% endif %}</div></div>
+			<div class="stat"><div class="v">{{ c.totals['items'] }}</div>
+				<div class="k">Opened by the bot</div><div class="sub">only with Openers you have</div></div>
 			{% else %}
 			<div class="stat"><div class="v gold">{{ c.currency|comma if c.currency is not none else '?' }}</div>
 				<div class="k">Currency</div><div class="sub">to spend in the event shop</div></div>
@@ -154,7 +163,9 @@
 			{% if c.log %}
 			<div class="table-responsive ev-scroll">
 				<table class="table table-sm table-striped mb-0 ev-log">
-					{% if c.craft %}
+					{% if c.gift %}
+					<thead><tr><th>When</th><th>Gift</th><th></th></tr></thead>
+					{% elif c.craft %}
 					<thead><tr><th>When</th><th>Metals</th><th>Item</th><th></th></tr></thead>
 					{% else %}
 					<thead><tr><th>When</th><th>{{ 'Threw' if c.board else 'Option' }}</th>
@@ -164,7 +175,10 @@
 					{% for a in c.log %}
 					<tr>
 						<td class="faint">{{ a.ts|ago }}</td>
-						{% if c.craft %}
+						{% if c.gift %}
+						<td>{{ a.item }}</td>
+						<td>{% if a.doubled %}<span class="badge gold">doubled</span>{% endif %}</td>
+						{% elif c.craft %}
 						<td>{{ (a.materials or [])|join(' + ') }}</td>
 						<td>{{ a.item }}</td>
 						<td>{% if a.new %}<span class="badge gold">new recipe</span> {% endif %}<span
@@ -196,6 +210,15 @@
 		</div>
 	</div>
 	<div class="col-lg-6">
+		{% if c.gift %}
+		<div class="card mb-3">
+			<div class="card-header py-2"><strong>Gifts won</strong></div>
+			<div class="card-body py-2 small">
+				{% if c.items_won %}{% for name, n in c.items_won|dictsort(by='value', reverse=true) %}<span class="badge">{{ name }}{% if n > 1 %} &times;{{ n }}{% endif %}</span> {% endfor %}
+				{% else %}<span class="text-muted">None yet. The bot opens a gift whenever you have an Opener.</span>{% endif %}
+			</div>
+		</div>
+		{% endif %}
 		{% if c.craft %}
 		<div class="card mb-3">
 			<div class="card-header py-2 d-flex align-items-center flex-wrap" style="gap:.5rem">
