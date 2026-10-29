@@ -195,10 +195,20 @@ class Village:
 class WorldSettings:
     """Represents the world settings."""
 
-    flags: bool = Optional[bool]
-    knight: bool = Optional[bool]
-    boosters: bool = Optional[bool]
-    quests: bool = Optional[bool]
+    flags: Optional[bool] = None
+    knight: Optional[bool] = None
+    boosters: Optional[bool] = None
+    quests: Optional[bool] = None
+
+
+# /page/settings row label -> world settings key
+WORLD_SETTINGS_LABELS = {
+    "Paladin": "knight",
+    "Flags": "flags",
+    "Quest System": "quests",
+    "Archers": "archers",
+    "Ability to demolish buildings": "building_destruction",
+}
 
 
 class OverviewPage:
@@ -317,6 +327,28 @@ class OverviewPage:
                 logging.getLogger("twb").debug(
                     "Skipped an overview production row: %s", exc
                 )
+
+    def fetch_world_settings(self):
+        """
+        Fetch the public /page/settings page and extract world feature flags.
+
+        This is the authoritative source for world options. Menu-link sniffing
+        (parse_header_info) is only a fallback. Returns a dict of booleans,
+        empty if the page can't be read.
+        """
+        res = self.wrapper.get_url("page/settings")
+        if not res:
+            return {}
+        soup = BeautifulSoup(res.text, "html.parser")
+        out = {}
+        for row in soup.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            label = cells[0].get_text(strip=True)
+            if label in WORLD_SETTINGS_LABELS and WORLD_SETTINGS_LABELS[label] not in out:
+                out[WORLD_SETTINGS_LABELS[label]] = cells[1].get_text(strip=True).lower().startswith("active")
+        return out
 
     def parse_header_info(self) -> None:
         """Parse header information to get world options."""

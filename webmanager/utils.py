@@ -221,11 +221,10 @@ class DataReader:
     def create_world(url, user_agent="", cookie=""):
         """Bootstrap a new world from the dashboard (no interactive prompt).
 
-        Parses the in-game URL, writes worlds/<name>/config.json from
-        config.example.json with the server endpoint/name and user agent set, and
-        optionally seeds a session cookie so the bot can run unattended. Returns
-        {"ok": True, "world": name} or {"ok": False, "error": msg}. Never
-        overwrites an existing world.
+        Parses the in-game URL, writes worlds/<name>/config.json with the server
+        endpoint/name and user agent set, and optionally seeds a session cookie
+        so the bot can run unattended. Returns {"ok": True, "world": name} or
+        {"ok": False, "error": msg}. Never overwrites an existing world.
         """
         url = (url or "").strip()
         if "://" not in url:
@@ -242,12 +241,17 @@ class DataReader:
         if os.path.exists(config_path):
             return {"ok": False, "error": "World '%s' already exists." % name}
 
-        example_path = os.path.join(DataReader.project_root(), "config.example.json")
+        # Seed from the user's own root config.json when one exists: that is
+        # where a tuned single-world setup keeps its defaults, and new worlds
+        # should inherit them instead of pristine example values.
+        base_path = os.path.join(DataReader.project_root(), "config.json")
+        if not os.path.isfile(base_path):
+            base_path = os.path.join(DataReader.project_root(), "config.example.json")
         try:
-            with open(example_path) as f:
+            with open(base_path) as f:
                 template = json.load(f, object_pairs_hook=collections.OrderedDict)
         except (OSError, ValueError):
-            return {"ok": False, "error": "config.example.json is missing or invalid."}
+            return {"ok": False, "error": "config.json / config.example.json missing or invalid."}
 
         template.setdefault("server", {})
         template["server"]["endpoint"] = endpoint
