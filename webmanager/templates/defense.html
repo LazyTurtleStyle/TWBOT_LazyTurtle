@@ -495,7 +495,9 @@
 					hit's offset minus a margin: the bot aims the middle of that window and,
 					when a send would miss it, cancels and re-fires on a later 2-second slot
 					until one lands inside. Needs a few minutes of lead, ~10&ndash;15&nbsp;s
-					per retry, 8 tries. Leave empty otherwise.</dd>
+					per retry; it keeps trying until about 45&nbsp;s before the hit (8 tries
+					when another snipe is waiting behind it). Sends jitter about &plusmn;10&nbsp;ms,
+					so a window under ~10&nbsp;ms is mostly luck. Leave empty otherwise.</dd>
 				<dt>Engage (min before)</dt>
 				<dd>When the bot starts. It must be able to send and still be under way at
 					the halfway moment, which is where the cancel goes.</dd>

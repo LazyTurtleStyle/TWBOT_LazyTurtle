@@ -141,9 +141,16 @@ PROBED_BUFFER_ONE_SAMPLE_MS = 75
 # Two-sided window mode (alpha): with a window_ms on the snipe the return may
 # land at most that far past R, so a send whose measured ms falls outside it
 # is cancelled right away and re-fired on a later 2s slot - repeat-until-in-
-# band instead of one-shot jitter luck. Retries stop past this budget or when
-# R is closer than this lead (the last attempt still needs locate + the
-# halfway cancel); a kept miss is late-safe, never early.
+# band instead of one-shot jitter luck. Retries go on until R is closer than
+# RETRY_MIN_LEAD_MS (the last attempt still needs locate + the halfway
+# cancel); a kept miss is late-safe, never early.
+#
+# MAX_SEND_ATTEMPTS only applies while another snipe is waiting on this
+# runner. Snipes run one after another, so one that keeps re-firing holds up
+# everything behind it - that is what the budget was for. Alone it only threw
+# time away: a live snipe stopped after 8 attempts with 16 minutes to go, kept
+# a send that came home 2s late, and the village fell to the nobles it was
+# meant to wall. Two of those 8 attempts had landed inside the gap.
 MAX_SEND_ATTEMPTS = 8
 RETRY_MIN_LEAD_MS = 45_000
 # A snipe stuck in 'running' this long has lost its runner (crash/restart);
@@ -244,6 +251,33 @@ def claim_due(path=None, now=None):
                 c["result"] = "runner died mid-snipe (bot restarted?)"
     _update(mut, path)
     return claimed
+
+
+def _others_waiting(snipe_id, path=None, now=None):
+    """True when another snipe is queued behind this one on the runner: claimed
+    in the same batch (running, not stale) or armed and already due."""
+    now = time.time() if now is None else now
+    for c in load_snipes(path):
+        if c.get("id") == snipe_id:
+            continue
+        status = c.get("status")
+        if status == "running" \
+                and now - int(c.get("claimed_at", 0)) <= STALE_RUNNING_SECONDS:
+            return True
+        if status == "armed" and float(c.get("start_ts", 0)) <= now:
+            return True
+    return False
+
+
+def _stop_retrying(attempt, time_left_ms, others_waiting):
+    """Why the window retries end now, or None to fire again. Time is the only
+    limit for a snipe on its own; the attempt budget only when another snipe
+    is waiting for the runner."""
+    if time_left_ms < RETRY_MIN_LEAD_MS:
+        return "out of time"
+    if others_waiting and attempt >= MAX_SEND_ATTEMPTS:
+        return "another snipe is waiting"
+    return None
 
 
 def _patch(snipe_id, path=None, **fields):
@@ -503,7 +537,8 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
     With window_ms set (two-sided window, alpha) the send is instead aimed at
     the window's middle and re-fired - cancel the miss, wait the troops home,
     try a later 2s slot - until a measured send lands the return inside
-    [R, R + window_ms] or the retry budget/lead runs out."""
+    [R, R + window_ms] or time runs out (or, with another snipe
+    waiting on the runner, after MAX_SEND_ATTEMPTS)."""
     sid = snipe.get("id")
     village_id = snipe.get("village_id")
     return_ms = int(snipe.get("return_ms", 0))
@@ -713,8 +748,11 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
             _event(sid, "send inside the window - return lands +%dms of the "
                    "allowed +%d" % (past, window_ms), path=path)
             break
-        if attempt >= MAX_SEND_ATTEMPTS \
-                or return_ms - clock.server_now_ms() < RETRY_MIN_LEAD_MS:
+        time_left = return_ms - clock.server_now_ms()
+        stop = _stop_retrying(
+            attempt, time_left,
+            attempt >= MAX_SEND_ATTEMPTS and _others_waiting(sid, path))
+        if stop:
             if before_hit:
                 if wrapper.get_url(cancel_url) is None:
                     return _finish(sid, "failed", "no send landed inside the "
@@ -722,14 +760,13 @@ def execute(wrapper, snipe, path=None, network_lead=0.0):
                                    "last one failed - it may come home AFTER "
                                    "the hit; recall it by hand", path=path)
                 return _finish(sid, "missed", "no send landed inside the window "
-                               "before the hit (attempt %d/%d) - cancelled at "
+                               "before the hit (attempt %d, %s) - cancelled at "
                                "once, so the troops are home early, well before "
-                               "the hit" % (attempt, MAX_SEND_ATTEMPTS),
+                               "the hit" % (attempt, stop),
                                path=path)
-            _event(sid, "out of retry budget (attempt %d/%d, %ds left) - "
+            _event(sid, "stopping retries (attempt %d, %s, %ds left) - "
                    "keeping this send, late-safe"
-                   % (attempt, MAX_SEND_ATTEMPTS,
-                      int((return_ms - clock.server_now_ms()) / 1000)),
+                   % (attempt, stop, int(time_left / 1000)),
                    path=path)
             break
         # Missed: pull the troops home right away and try a later slot. A
