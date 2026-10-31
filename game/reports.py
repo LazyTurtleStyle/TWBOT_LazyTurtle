@@ -313,9 +313,30 @@ class ReportManager:
 
         losses = {}
 
-        attacked = re.search(r'(\d{2}\.\d{2}\.\d{2} \d{2}\:\d{2}\:\d{2})<span class=\"small grey\">', report)
-        if attacked:
-            extra["when"] = int(datetime.strptime(attacked.group(1), "%d.%m.%y %H:%M:%S").timestamp())
+        # Ondersteun zowel Nederlandse als Engelse rapportdatums.
+        date_patterns = [
+            (
+                r'(\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})<span class="small grey">',
+                "%d.%m.%y %H:%M:%S",
+            ),
+            (
+                r'\b([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}\s+\d{2}:\d{2}:\d{2})(?:\.\d+)?',
+                "%b %d, %Y %H:%M:%S",
+            ),
+        ]
+
+        for pattern, date_format in date_patterns:
+            match = re.search(pattern, report)
+            if not match:
+                continue
+
+            try:
+                extra["when"] = int(
+                    datetime.strptime(match.group(1), date_format).timestamp()
+                )
+                break
+            except ValueError:
+                continue
 
         attacker = re.search(r'(?s)(<table id="attack_info_att".+?</table>)', report)
         if attacker:
